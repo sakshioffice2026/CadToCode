@@ -2,6 +2,8 @@
 using System.Text;
 using System.Text.Json;
 using CadToCode.LLM.Interfaces;
+using CadToCode.LLM.Prompts;
+using CadToCode.LLM.Validation;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using CadToCode.Models.Options;
@@ -17,6 +19,10 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
 {
     private const int MaxResponseChars = 4000;
     private const decimal MaxDimension = 10_000_000m;
+    private const int AnalysisMaxResponseChars = 6000;
+    private const int CodeMaxResponseChars = 12000;
+    private const int CodeMaxTokens = 1024;
+    private const int CodeTimeoutMultiplier = 3;
 
     private static readonly string[] StopMarkers = { "<|end|>", "<|endoftext|>", "<|user|>" };
 
@@ -124,6 +130,129 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
         }
     }
 
+    public Task<AssemblyAnalysisResult> AnalyzeAssemblyAsync(
+        AssemblyAnalysisRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var maxTokens = Math.Max(768, _options.MaxTokens);
+
+        return RunAsync(
+            "assembly analysis",
+            maxChars => AssemblyPromptTemplates.BuildAnalysisPrompt(request, maxChars),
+            maxTokens,
+            AnalysisMaxResponseChars,
+            Math.Max(5, _options.InferenceTimeoutSeconds),
+            raw => AssemblyOutputValidator.ParseAnalysis(raw, request.Tree, (decimal)_options.MinConfidence),
+            error => new AssemblyAnalysisResult { Success = false, Error = error },
+            result => result.Success,
+            cancellationToken);
+    }
+
+    public Task<CodeSynthesisResult> SynthesizeCodeAsync(
+        CodeSynthesisRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var maxTokens = Math.Min(CodeMaxTokens, (int)Math.Max(256u, _options.ContextSize / 2));
+
+        return RunAsync(
+            "code synthesis",
+            maxChars => AssemblyPromptTemplates.BuildCodePrompt(request, maxChars),
+            maxTokens,
+            CodeMaxResponseChars,
+            Math.Max(5, _options.InferenceTimeoutSeconds) * CodeTimeoutMultiplier,
+            raw => AssemblyOutputValidator.ValidateCode(raw, request),
+            error => new CodeSynthesisResult { Success = false, Error = error },
+            result => result.Success,
+            cancellationToken);
+    }
+
+    private async Task<T> RunAsync<T>(
+        string operation,
+        Func<int, string> buildPrompt,
+        int maxTokens,
+        int maxResponseChars,
+        int timeoutSeconds,
+        Func<string, (T Result, bool Retryable)> validate,
+        Func<string, T> fail,
+        Func<T, bool> isSuccess,
+        CancellationToken cancellationToken)
+    {
+        if (_disposed)
+        {
+            return fail("The AI service has been shut down.");
+        }
+
+        if (!_options.Enabled)
+        {
+            return fail("The local AI model is disabled in the configuration.");
+        }
+
+        var modelPath = ResolvePath(_options.ModelPath);
+        if (!File.Exists(modelPath))
+        {
+            return fail("The AI model file was not found at " + modelPath + ".");
+        }
+
+        if (_loadFailure != null)
+        {
+            return fail(_loadFailure);
+        }
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(timeoutSeconds));
+
+        try
+        {
+            await _gate.WaitAsync(timeout.Token);
+
+            try
+            {
+                await Task.Run(() => EnsureModelLoaded(modelPath), CancellationToken.None);
+
+                var promptChars = (int)Math.Max(1500, ((long)_options.ContextSize - maxTokens - 64) * 3);
+                var attempts = 1 + Math.Max(0, _options.MaxRetries);
+                var last = fail("The AI model returned no usable answer.");
+
+                for (var attempt = 1; attempt <= attempts; attempt++)
+                {
+                    timeout.Token.ThrowIfCancellationRequested();
+
+                    var prompt = buildPrompt(promptChars);
+                    var raw = await GenerateAsync(prompt, timeout.Token, maxTokens, maxResponseChars);
+                    var (result, retryable) = validate(raw);
+                    last = result;
+
+                    if (isSuccess(result) || !retryable)
+                    {
+                        return result;
+                    }
+
+                    _logger.LogWarning("AI {Operation} answer rejected on attempt {Attempt}.", operation, attempt);
+                }
+
+                return last;
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("AI {Operation} timed out after {Seconds} seconds.", operation, timeoutSeconds);
+            return fail("The AI model took too long to answer.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "AI {Operation} failed.", operation);
+            return fail("The AI model failed: " + ex.Message);
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -173,7 +302,11 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
         }
     }
 
-    private async Task<string> GenerateAsync(string prompt, CancellationToken cancellationToken)
+    private async Task<string> GenerateAsync(
+        string prompt,
+        CancellationToken cancellationToken,
+        int? maxTokens = null,
+        int? maxChars = null)
     {
         var executor = _executor ?? throw new InvalidOperationException("The AI model is not loaded.");
 
@@ -185,7 +318,7 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
 
         var inference = new InferenceParams
         {
-            MaxTokens = Math.Max(16, _options.MaxTokens),
+            MaxTokens = Math.Max(16, maxTokens ?? _options.MaxTokens),
             AntiPrompts = StopMarkers,
             SamplingPipeline = sampler
         };
@@ -195,7 +328,7 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
         await foreach (var piece in executor.InferAsync(prompt, inference, cancellationToken))
         {
             builder.Append(piece);
-            if (builder.Length > MaxResponseChars)
+            if (builder.Length > (maxChars ?? MaxResponseChars))
             {
                 break;
             }

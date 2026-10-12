@@ -227,7 +227,7 @@ public class DxfGeometryExtractor : IGeometryExtractor
 
     private static string? HandleOf(DxfEntity entity)
     {
-        return entity.Handle != 0 ? entity.Handle.ToString("X") : null;
+        return null;
     }
 
     private static void ProcessEntities(

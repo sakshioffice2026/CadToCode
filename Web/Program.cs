@@ -1,6 +1,9 @@
 using CadToCode.Business.Interfaces;
 using CadToCode.Business.Services;
 using CadToCode.Database;
+using CadToCode.LLM.Interfaces;
+using CadToCode.LLM.Memory;
+using CadToCode.LLM.Services;
 using CadToCode.Models.Options;
 using CadToCode.Repositories.Interfaces;
 using CadToCode.Repositories.Repository;
@@ -25,6 +28,7 @@ builder.Services.PostConfigure<UploadOptions>(options =>
     }
 });
 builder.Services.Configure<ExtractionOptions>(builder.Configuration.GetSection(ExtractionOptions.SectionName));
+builder.Services.Configure<LlmOptions>(builder.Configuration.GetSection(LlmOptions.SectionName));
 
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
@@ -33,6 +37,12 @@ builder.Services.AddSingleton<IDxfCompatibilityService, DxfCompatibilityService>
 builder.Services.AddSingleton<IGeometryExtractor, DxfGeometryExtractor>();
 builder.Services.AddSingleton<IGeometryExtractor, ImageGeometryExtractor>();
 builder.Services.AddScoped<IGeometryNormalizer, GeometryNormalizer>();
+builder.Services.AddSingleton<IComponentDecomposer, ComponentDecomposer>();
+builder.Services.AddSingleton<IAssemblyTopologyMapper, AssemblyTopologyMapper>();
+builder.Services.AddSingleton<GeometryEmbedder>();
+builder.Services.AddSingleton<IPatternMemoryService, PatternMemoryService>();
+builder.Services.AddSingleton<ILLMGenerationService, LLamaGenerationService>();
+builder.Services.AddScoped<IAiComponentClassifier, AiComponentClassifier>();
 builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
 builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();
 
