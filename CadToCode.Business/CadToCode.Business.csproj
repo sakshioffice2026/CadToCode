@@ -6,4 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\CadToCode.Database\CadToCode.Database.csproj" />
+  </ItemGroup>
+
 </Project>
