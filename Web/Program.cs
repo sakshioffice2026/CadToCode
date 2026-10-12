@@ -29,6 +29,7 @@ builder.Services.Configure<ExtractionOptions>(builder.Configuration.GetSection(E
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
+builder.Services.AddSingleton<IDxfCompatibilityService, DxfCompatibilityService>();
 builder.Services.AddSingleton<IGeometryExtractor, DxfGeometryExtractor>();
 builder.Services.AddSingleton<IGeometryExtractor, ImageGeometryExtractor>();
 builder.Services.AddScoped<IGeometryNormalizer, GeometryNormalizer>();

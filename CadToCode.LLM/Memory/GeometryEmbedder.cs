@@ -1,4 +1,6 @@
-﻿using CadToCode.Models.Dtos;
+﻿using System.Text;
+using System.Text.RegularExpressions;
+using CadToCode.Models.Dtos;
 using CadToCode.Models.Options;
 using Microsoft.Extensions.Options;
 
@@ -6,15 +8,26 @@ namespace CadToCode.LLM.Memory;
 
 public class GeometryEmbedder
 {
-    private const int FeatureCount = 64;
+    public const int StructuralCount = 61;
+    public const int MinDimensions = 96;
+
     private const int OrientationBins = 12;
     private const int GridSize = 4;
     private const double AxisToleranceDegrees = 3.0;
+    private const double StructuralWeight = 0.9;
+    private const int MaxParallelLines = 4000;
+    private const double ParallelClusterTolerance = 1.5;
+    private const double ParallelClusterSpan = 3.0;
 
-    private static readonly string[] Keywords =
+    private static readonly double TokenWeight = Math.Sqrt(1.0 - StructuralWeight * StructuralWeight);
+
+    private static readonly Regex WordToken = new(@"[A-Za-z][A-Za-z0-9]*", RegexOptions.Compiled);
+
+    private static readonly HashSet<string> StopTokens = new(StringComparer.OrdinalIgnoreCase)
     {
-        "cyclone", "fan", "axial", "duct", "door",
-        "window", "cone", "cylinder", "dia", "blade"
+        "dia", "mm", "cm", "scale", "typ", "sheet", "drawing", "dwg", "rev", "title",
+        "all", "dim", "note", "notes", "size", "qty", "nts", "ref", "unit", "units",
+        "by", "of", "the", "and", "for", "to", "in", "on", "at", "or", "as", "is"
     };
 
     private readonly int _dimensions;
@@ -22,20 +35,58 @@ public class GeometryEmbedder
     public GeometryEmbedder(IOptions<LlmOptions> options)
     {
         var configured = options.Value.EmbeddingDimensions;
-        _dimensions = configured > 0 ? configured : FeatureCount;
+        _dimensions = configured >= MinDimensions ? configured : MinDimensions;
     }
 
     public int Dimensions => _dimensions;
 
     public float[] Embed(ExtractedGeometry geometry)
     {
-        var features = BuildFeatures(geometry);
+        var structural = BuildStructuralFeatures(geometry);
         var vector = new float[_dimensions];
 
-        for (var i = 0; i < features.Count; i++)
+        double structuralNorm = 0;
+        for (var i = 0; i < StructuralCount; i++)
         {
-            var value = (float)(2.0 * Clamp01(features[i]) - 1.0);
-            vector[i % _dimensions] += value;
+            var value = 2.0 * Clamp01(i < structural.Count ? structural[i] : 0) - 1.0;
+            vector[i] = (float)value;
+            structuralNorm += value * value;
+        }
+
+        if (structuralNorm > 0)
+        {
+            var scale = (float)(StructuralWeight / Math.Sqrt(structuralNorm));
+            for (var i = 0; i < StructuralCount; i++)
+            {
+                vector[i] *= scale;
+            }
+        }
+
+        var bucketCount = _dimensions - StructuralCount;
+        var buckets = new double[bucketCount];
+        var tokens = CollectTokens(geometry);
+
+        foreach (var token in tokens)
+        {
+            var hash = Fnv1a(token);
+            var bucket = (int)(hash % (uint)bucketCount);
+            var sign = ((hash >> 31) & 1u) == 0 ? 1.0 : -1.0;
+            buckets[bucket] += sign;
+        }
+
+        double tokenNorm = 0;
+        for (var i = 0; i < bucketCount; i++)
+        {
+            tokenNorm += buckets[i] * buckets[i];
+        }
+
+        if (tokenNorm > 0)
+        {
+            var scale = TokenWeight / Math.Sqrt(tokenNorm);
+            for (var i = 0; i < bucketCount; i++)
+            {
+                vector[StructuralCount + i] = (float)(buckets[i] * scale);
+            }
         }
 
         Normalize(vector);
@@ -68,13 +119,17 @@ public class GeometryEmbedder
         return dot / (Math.Sqrt(normA) * Math.Sqrt(normB));
     }
 
-    private static List<double> BuildFeatures(ExtractedGeometry geometry)
+    private static List<double> BuildStructuralFeatures(ExtractedGeometry geometry)
     {
-        var features = new List<double>(FeatureCount);
+        var features = new List<double>(StructuralCount);
 
         var lines = geometry.Lines.Where(IsValidLine).ToList();
-        var arcs = geometry.Arcs.Where(a => IsFinite(a.Center.X) && IsFinite(a.Center.Y) && IsFinite(a.Radius) && a.Radius > 0).ToList();
-        var circles = geometry.Circles.Where(c => IsFinite(c.Center.X) && IsFinite(c.Center.Y) && IsFinite(c.Radius) && c.Radius > 0).ToList();
+        var arcs = geometry.Arcs
+            .Where(a => IsFinite(a.Center.X) && IsFinite(a.Center.Y) && IsFinite(a.Radius) && a.Radius > 0)
+            .ToList();
+        var circles = geometry.Circles
+            .Where(c => IsFinite(c.Center.X) && IsFinite(c.Center.Y) && IsFinite(c.Radius) && c.Radius > 0)
+            .ToList();
 
         var bounds = ComputeBounds(geometry, lines, arcs, circles);
         var width = Math.Max(bounds.MaxX - bounds.MinX, 0);
@@ -88,13 +143,14 @@ public class GeometryEmbedder
         var centerX = (bounds.MinX + bounds.MaxX) / 2.0;
         var centerY = (bounds.MinY + bounds.MaxY) / 2.0;
 
-        // 1. Entity counts (6)
+        // 1. Entity counts (7)
         features.Add(LogCount(lines.Count));
         features.Add(LogCount(arcs.Count));
         features.Add(LogCount(circles.Count));
         features.Add(LogCount(geometry.Hatches.Count));
         features.Add(LogCount(geometry.Dimensions.Count));
         features.Add(LogCount(geometry.Texts.Count));
+        features.Add(LogCount(geometry.Polylines.Count(p => p.IsClosed)));
 
         // 2. Bounding box shape (2)
         var longSide = Math.Max(width, height);
@@ -236,7 +292,22 @@ public class GeometryEmbedder
         features.Add(MirrorScore(midpoints, centerX, centerY, symmetryCell, mirrorX: true));
         features.Add(MirrorScore(midpoints, centerX, centerY, symmetryCell, mirrorX: false));
 
-        // 9. Spatial occupancy grid (16)
+        // 9. Rotational symmetry (2)
+        var rotationPoints = midpoints
+            .Concat(circles.Select(c => (c.Center.X, c.Center.Y)))
+            .Concat(arcs.Select(a => (a.Center.X, a.Center.Y)))
+            .ToList();
+        features.Add(RotationScore(rotationPoints, centerX, centerY, symmetryCell, Math.PI));
+        features.Add(RotationScore(rotationPoints, centerX, centerY, symmetryCell, Math.PI / 2.0));
+
+        // 10. Parallel line groups (4)
+        var parallel = AnalyzeParallelGroups(lines, diagonal, totalLength);
+        features.Add(parallel.LengthFraction);
+        features.Add(LogCount(parallel.MaxTracks));
+        features.Add(LogCount(parallel.GroupCount));
+        features.Add(parallel.EvenFraction);
+
+        // 11. Spatial occupancy grid (16)
         var grid = new double[GridSize * GridSize];
         var gridPoints = midpoints
             .Concat(circles.Select(c => (c.Center.X, c.Center.Y)))
@@ -256,17 +327,245 @@ public class GeometryEmbedder
             features.Add(gridPoints.Count > 0 ? Math.Min(1.0, grid[i] / gridPoints.Count * 4.0) : 0);
         }
 
-        // 10. Text keywords (10)
-        var allText = string.Join(" ", geometry.Texts.Select(t => t.Text)
-                .Concat(geometry.Dimensions.Select(d => d.Text ?? string.Empty)))
-            .ToLowerInvariant();
+        return features;
+    }
 
-        foreach (var keyword in Keywords)
+    private static (double LengthFraction, int MaxTracks, int GroupCount, double EvenFraction) AnalyzeParallelGroups(
+        List<GeometryLine> lines,
+        double diagonal,
+        double totalLength)
+    {
+        var minLength = diagonal * 0.02;
+        var trackTolerance = Math.Max(diagonal * 0.004, 1e-9);
+
+        var candidates = new List<LineInfo>();
+        foreach (var line in lines)
         {
-            features.Add(allText.Contains(keyword, StringComparison.Ordinal) ? 1.0 : 0.0);
+            var dx = line.End.X - line.Start.X;
+            var dy = line.End.Y - line.Start.Y;
+            var length = Math.Sqrt(dx * dx + dy * dy);
+            if (length < minLength)
+            {
+                continue;
+            }
+
+            var angle = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+            angle %= 180.0;
+            if (angle < 0)
+            {
+                angle += 180.0;
+            }
+
+            candidates.Add(new LineInfo(
+                angle,
+                length,
+                (line.Start.X + line.End.X) / 2.0,
+                (line.Start.Y + line.End.Y) / 2.0));
         }
 
-        return features;
+        if (candidates.Count < 2)
+        {
+            return (0, 0, 0, 0);
+        }
+
+        var sorted = candidates
+            .OrderByDescending(c => c.Length)
+            .Take(MaxParallelLines)
+            .OrderBy(c => c.Angle)
+            .ToList();
+
+        var clusters = new List<List<LineInfo>>();
+        var current = new List<LineInfo>();
+        var clusterStart = 0.0;
+        var previous = 0.0;
+
+        foreach (var item in sorted)
+        {
+            if (current.Count == 0)
+            {
+                clusterStart = item.Angle;
+            }
+            else if (item.Angle - previous > ParallelClusterTolerance || item.Angle - clusterStart > ParallelClusterSpan)
+            {
+                clusters.Add(current);
+                current = new List<LineInfo>();
+                clusterStart = item.Angle;
+            }
+
+            current.Add(item);
+            previous = item.Angle;
+        }
+
+        if (current.Count > 0)
+        {
+            clusters.Add(current);
+        }
+
+        if (clusters.Count > 1)
+        {
+            var first = clusters[0];
+            var last = clusters[^1];
+            if (first[0].Angle + 180.0 - last[^1].Angle <= ParallelClusterTolerance)
+            {
+                first.AddRange(last);
+                clusters.RemoveAt(clusters.Count - 1);
+            }
+        }
+
+        var parallelLength = 0.0;
+        var maxTracks = 0;
+        var groupCount = 0;
+        var evenCandidates = 0;
+        var evenCount = 0;
+
+        foreach (var cluster in clusters)
+        {
+            if (cluster.Count < 2)
+            {
+                continue;
+            }
+
+            double sumSin = 0;
+            double sumCos = 0;
+            foreach (var item in cluster)
+            {
+                var doubled = item.Angle * 2.0 * Math.PI / 180.0;
+                sumSin += Math.Sin(doubled);
+                sumCos += Math.Cos(doubled);
+            }
+
+            var theta = Math.Atan2(sumSin, sumCos) / 2.0;
+            var sin = Math.Sin(theta);
+            var cos = Math.Cos(theta);
+
+            var offsets = cluster
+                .Select(item => (Offset: -item.MidX * sin + item.MidY * cos, item.Length))
+                .OrderBy(o => o.Offset)
+                .ToList();
+
+            var tracks = new List<double>();
+            var trackSum = offsets[0].Offset;
+            var trackCount = 1;
+
+            for (var i = 1; i < offsets.Count; i++)
+            {
+                if (offsets[i].Offset - offsets[i - 1].Offset > trackTolerance)
+                {
+                    tracks.Add(trackSum / trackCount);
+                    trackSum = 0;
+                    trackCount = 0;
+                }
+
+                trackSum += offsets[i].Offset;
+                trackCount++;
+            }
+
+            tracks.Add(trackSum / trackCount);
+
+            if (tracks.Count < 2)
+            {
+                continue;
+            }
+
+            groupCount++;
+            maxTracks = Math.Max(maxTracks, tracks.Count);
+            parallelLength += cluster.Sum(item => item.Length);
+
+            if (tracks.Count >= 3)
+            {
+                evenCandidates++;
+
+                var gaps = new List<double>();
+                for (var i = 1; i < tracks.Count; i++)
+                {
+                    gaps.Add(tracks[i] - tracks[i - 1]);
+                }
+
+                var meanGap = gaps.Average();
+                if (meanGap > 1e-9)
+                {
+                    var variance = gaps.Sum(g => (g - meanGap) * (g - meanGap)) / gaps.Count;
+                    if (Math.Sqrt(variance) / meanGap < 0.1)
+                    {
+                        evenCount++;
+                    }
+                }
+            }
+        }
+
+        var lengthFraction = totalLength > 0 ? Math.Min(1.0, parallelLength / totalLength) : 0;
+        var evenFraction = evenCandidates > 0 ? evenCount / (double)evenCandidates : 0;
+
+        return (lengthFraction, maxTracks, groupCount, evenFraction);
+    }
+
+    private static List<string> CollectTokens(ExtractedGeometry geometry)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var text in geometry.Texts)
+        {
+            if (text.Tokens.Count > 0)
+            {
+                foreach (var token in text.Tokens)
+                {
+                    AddToken(set, token);
+                }
+            }
+            else
+            {
+                foreach (var token in Tokenize(text.Text))
+                {
+                    AddToken(set, token);
+                }
+            }
+        }
+
+        foreach (var dimension in geometry.Dimensions)
+        {
+            foreach (var token in Tokenize(dimension.Text))
+            {
+                AddToken(set, token);
+            }
+        }
+
+        return set.ToList();
+    }
+
+    private static IEnumerable<string> Tokenize(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            yield break;
+        }
+
+        foreach (Match match in WordToken.Matches(text))
+        {
+            yield return match.Value;
+        }
+    }
+
+    private static void AddToken(HashSet<string> set, string token)
+    {
+        var normalized = token.Trim().ToLowerInvariant();
+        if (normalized.Length < 2 || StopTokens.Contains(normalized))
+        {
+            return;
+        }
+
+        set.Add(normalized);
+    }
+
+    private static uint Fnv1a(string value)
+    {
+        var hash = 2166136261u;
+        foreach (var b in Encoding.UTF8.GetBytes(value))
+        {
+            hash ^= b;
+            hash *= 16777619u;
+        }
+
+        return hash;
     }
 
     private static (double MinX, double MinY, double MaxX, double MaxY) ComputeBounds(
@@ -334,6 +633,34 @@ public class GeometryEmbedder
         double cell,
         bool mirrorX)
     {
+        return TransformMatchScore(points, cell, point => mirrorX
+            ? (2.0 * centerX - point.X, point.Y)
+            : (point.X, 2.0 * centerY - point.Y));
+    }
+
+    private static double RotationScore(
+        List<(double X, double Y)> points,
+        double centerX,
+        double centerY,
+        double cell,
+        double angleRadians)
+    {
+        var cos = Math.Cos(angleRadians);
+        var sin = Math.Sin(angleRadians);
+
+        return TransformMatchScore(points, cell, point =>
+        {
+            var dx = point.X - centerX;
+            var dy = point.Y - centerY;
+            return (centerX + dx * cos - dy * sin, centerY + dx * sin + dy * cos);
+        });
+    }
+
+    private static double TransformMatchScore(
+        List<(double X, double Y)> points,
+        double cell,
+        Func<(double X, double Y), (double X, double Y)> transform)
+    {
         if (points.Count < 2)
         {
             return 0;
@@ -346,12 +673,11 @@ public class GeometryEmbedder
         }
 
         var matched = 0;
-        foreach (var (x, y) in points)
+        foreach (var point in points)
         {
-            var mx = mirrorX ? 2.0 * centerX - x : x;
-            var my = mirrorX ? y : 2.0 * centerY - y;
-            var cx = (long)Math.Round(mx / cell);
-            var cy = (long)Math.Round(my / cell);
+            var (tx, ty) = transform(point);
+            var cx = (long)Math.Round(tx / cell);
+            var cy = (long)Math.Round(ty / cell);
 
             var found = false;
             for (var dx = -1; dx <= 1 && !found; dx++)
@@ -449,4 +775,6 @@ public class GeometryEmbedder
             vector[i] /= norm;
         }
     }
+
+    private readonly record struct LineInfo(double Angle, double Length, double MidX, double MidY);
 }

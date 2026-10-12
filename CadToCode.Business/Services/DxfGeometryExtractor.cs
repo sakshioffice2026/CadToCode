@@ -6,7 +6,6 @@ using IxMilia.Dxf.Entities;
 using IxMilia.Dxf.Blocks;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
 
 namespace CadToCode.Business.Services;
 
@@ -24,30 +23,97 @@ public class DxfGeometryExtractor : IGeometryExtractor
 
     private static readonly Regex Whitespace = new(@"\s+", RegexOptions.Compiled);
 
-    public bool CanHandle(SourceFileType fileType) => fileType == SourceFileType.Dxf;
+    private static readonly Regex WordToken = new(
+        @"[A-Za-z][A-Za-z0-9]*",
+        RegexOptions.Compiled);
 
-    public Task<ExtractedGeometry> ExtractAsync(Stream fileStream, CancellationToken cancellationToken = default)
+    private static readonly Regex NumberToken = new(
+        @"(?<![A-Za-z0-9.])\d+(?:\.\d+)?",
+        RegexOptions.Compiled);
+
+    private readonly IDxfCompatibilityService _compatibility;
+
+    public DxfGeometryExtractor(IDxfCompatibilityService compatibility)
     {
-        return Task.Run(() => Extract(fileStream, cancellationToken), cancellationToken);
+        _compatibility = compatibility;
     }
 
-    private static ExtractedGeometry Extract(Stream fileStream, CancellationToken cancellationToken)
-    {
-        using var memory = new MemoryStream();
-        fileStream.CopyTo(memory);
+    public bool CanHandle(SourceFileType fileType) => fileType == SourceFileType.Dxf;
 
-        if (LooksLikeDwg(memory))
+    public async Task<ExtractedGeometry> ExtractAsync(Stream fileStream, CancellationToken cancellationToken = default)
+    {
+        byte[] original;
+        using (var buffer = new MemoryStream())
+        {
+            await fileStream.CopyToAsync(buffer, cancellationToken);
+            original = buffer.ToArray();
+        }
+
+        using var prepared = await _compatibility.PrepareAsync(new MemoryStream(original, writable: false), cancellationToken);
+
+        if (prepared.IsDwg)
         {
             throw new InvalidOperationException(
                 "DWG files are not supported. Please export the drawing as DXF and upload that file.");
         }
 
-        memory.Position = 0;
+        return await Task.Run(() => Extract(original, prepared, cancellationToken), cancellationToken);
+    }
+
+    private static ExtractedGeometry Extract(
+        byte[] original,
+        DxfCompatibilityResult prepared,
+        CancellationToken cancellationToken)
+    {
+        ExtractedGeometry result;
+        var usedPatched = prepared.HeaderPatched;
+
+        try
+        {
+            result = ExtractFromStream(prepared.Stream, cancellationToken);
+        }
+        catch (InvalidOperationException) when (prepared.HeaderPatched)
+        {
+            using var raw = new MemoryStream(original, writable: false);
+            result = ExtractFromStream(raw, cancellationToken);
+            result.Warnings.Add("The patched DXF header could not be read; the original file was used instead.");
+            usedPatched = false;
+        }
+
+        result.HeaderPatched = usedPatched;
+
+        if (!string.IsNullOrEmpty(prepared.OriginalVersionCode))
+        {
+            result.OriginalVersion = prepared.OriginalVersionCode;
+            result.SourceVersion = string.IsNullOrEmpty(prepared.OriginalVersionName)
+                ? prepared.OriginalVersionCode
+                : prepared.OriginalVersionName + " (" + prepared.OriginalVersionCode + ")";
+        }
+        else if (!string.IsNullOrEmpty(prepared.OriginalVersionName))
+        {
+            result.OriginalVersion = prepared.OriginalVersionName;
+            result.SourceVersion = prepared.OriginalVersionName;
+        }
+
+        if (usedPatched)
+        {
+            foreach (var note in prepared.Notes)
+            {
+                result.Warnings.Add(note);
+            }
+        }
+
+        return result;
+    }
+
+    private static ExtractedGeometry ExtractFromStream(Stream stream, CancellationToken cancellationToken)
+    {
+        stream.Position = 0;
 
         DxfFile file;
         try
         {
-            file = DxfFile.Load(memory);
+            file = DxfFile.Load(stream);
         }
         catch (DxfReadException ex)
         {
@@ -80,6 +146,9 @@ public class DxfGeometryExtractor : IGeometryExtractor
 
         ProcessEntities(source, Matrix2D.Identity, context, 0, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
+        result.Layers = context.Layers.OrderBy(l => l, StringComparer.OrdinalIgnoreCase).ToList();
+        result.Bounds = ComputeBounds(result);
+
         if (context.SplineApproximated)
         {
             result.Warnings.Add("Splines were approximated with straight segments.");
@@ -107,17 +176,58 @@ public class DxfGeometryExtractor : IGeometryExtractor
         return result;
     }
 
-    private static bool LooksLikeDwg(MemoryStream memory)
+    private static GeometryBounds? ComputeBounds(ExtractedGeometry geometry)
     {
-        var buffer = memory.GetBuffer();
-        var length = (int)memory.Length;
+        var minX = double.MaxValue;
+        var minY = double.MaxValue;
+        var maxX = double.MinValue;
+        var maxY = double.MinValue;
+        var any = false;
 
-        return length >= 6
-            && buffer[0] == (byte)'A'
-            && buffer[1] == (byte)'C'
-            && buffer[2] == (byte)'1'
-            && buffer[3] >= (byte)'0'
-            && buffer[3] <= (byte)'9';
+        void Include(double x, double y)
+        {
+            any = true;
+            minX = Math.Min(minX, x);
+            minY = Math.Min(minY, y);
+            maxX = Math.Max(maxX, x);
+            maxY = Math.Max(maxY, y);
+        }
+
+        foreach (var line in geometry.Lines)
+        {
+            Include(line.Start.X, line.Start.Y);
+            Include(line.End.X, line.End.Y);
+        }
+
+        foreach (var arc in geometry.Arcs)
+        {
+            Include(arc.Center.X - arc.Radius, arc.Center.Y - arc.Radius);
+            Include(arc.Center.X + arc.Radius, arc.Center.Y + arc.Radius);
+        }
+
+        foreach (var circle in geometry.Circles)
+        {
+            Include(circle.Center.X - circle.Radius, circle.Center.Y - circle.Radius);
+            Include(circle.Center.X + circle.Radius, circle.Center.Y + circle.Radius);
+        }
+
+        foreach (var hatch in geometry.Hatches)
+        {
+            foreach (var path in hatch.BoundaryPaths)
+            {
+                foreach (var point in path)
+                {
+                    Include(point.X, point.Y);
+                }
+            }
+        }
+
+        return any ? new GeometryBounds(minX, minY, maxX, maxY) : null;
+    }
+
+    private static string? HandleOf(DxfEntity entity)
+    {
+        return entity.Handle != 0 ? entity.Handle.ToString("X") : null;
     }
 
     private static void ProcessEntities(
@@ -141,6 +251,8 @@ public class DxfGeometryExtractor : IGeometryExtractor
                 continue;
             }
 
+            context.NoteLayer(entity.Layer);
+
             switch (entity)
             {
                 case DxfLine line:
@@ -160,8 +272,14 @@ public class DxfGeometryExtractor : IGeometryExtractor
                 case DxfLwPolyline lwPolyline:
                     if (lwPolyline.Vertices.Count >= 2)
                     {
-                        ProcessEntities(lwPolyline.AsSimpleEntities(), WithNormal(matrix, lwPolyline.ExtrusionDirection),
-                            context, depth, blockStack);
+                        var lwMatrix = WithNormal(matrix, lwPolyline.ExtrusionDirection);
+                        AddPolylineRecord(
+                            context,
+                            lwMatrix,
+                            lwPolyline.Vertices.Select(v => (v.X, v.Y, v.Bulge)),
+                            lwPolyline.IsClosed,
+                            entity);
+                        ProcessEntities(lwPolyline.AsSimpleEntities(), lwMatrix, context, depth, blockStack);
                     }
                     break;
 
@@ -172,6 +290,12 @@ public class DxfGeometryExtractor : IGeometryExtractor
                     }
                     else
                     {
+                        AddPolylineRecord(
+                            context,
+                            matrix,
+                            polyline.Vertices.Select(v => (v.Location.X, v.Location.Y, v.Bulge)),
+                            polyline.IsClosed,
+                            entity);
                         ProcessEntities(polyline.AsSimpleEntities(), matrix, context, depth, blockStack);
                     }
                     break;
@@ -185,12 +309,13 @@ public class DxfGeometryExtractor : IGeometryExtractor
                     break;
 
                 case DxfText text:
-                    AddText(context, matrix, text.Value, text.Location.X, text.Location.Y, text.TextHeight, entity);
+                    AddText(context, matrix, text.Value, text.Location.X, text.Location.Y, text.TextHeight,
+                        text.Rotation, "TEXT", entity);
                     break;
 
                 case DxfMText mText:
                     AddText(context, matrix, GetMTextValue(mText), mText.InsertionPoint.X, mText.InsertionPoint.Y,
-                        mText.InitialTextHeight, entity);
+                        mText.InitialTextHeight, mText.RotationAngle, "MTEXT", entity);
                     break;
 
                 case DxfHatch hatch:
@@ -292,6 +417,41 @@ public class DxfGeometryExtractor : IGeometryExtractor
         return normal.Z < 0 ? Matrix2D.MirrorX.Then(matrix) : matrix;
     }
 
+    private static void AddPolylineRecord(
+        ExtractionContext context,
+        Matrix2D matrix,
+        IEnumerable<(double X, double Y, double Bulge)> vertices,
+        bool isClosed,
+        DxfEntity entity)
+    {
+        if (context.Truncated)
+        {
+            return;
+        }
+
+        var determinant = matrix.A * matrix.D - matrix.B * matrix.C;
+        var bulgeSign = determinant < 0 ? -1.0 : 1.0;
+
+        var record = new GeometryPolyline
+        {
+            IsClosed = isClosed,
+            Layer = entity.Layer,
+            LineType = entity.LineTypeName,
+            Handle = HandleOf(entity)
+        };
+
+        foreach (var vertex in vertices)
+        {
+            var (x, y) = matrix.Apply(vertex.X, vertex.Y);
+            record.Vertices.Add(new GeometryVertex(x, y, vertex.Bulge * bulgeSign));
+        }
+
+        if (record.Vertices.Count >= 2)
+        {
+            context.Result.Polylines.Add(record);
+        }
+    }
+
     private static void AddLine(
         ExtractionContext context,
         Matrix2D matrix,
@@ -314,7 +474,8 @@ public class DxfGeometryExtractor : IGeometryExtractor
             Start = new GeometryPoint(sx, sy),
             End = new GeometryPoint(ex, ey),
             Layer = entity.Layer,
-            LineType = entity.LineTypeName
+            LineType = entity.LineTypeName,
+            Handle = HandleOf(entity)
         });
     }
 
@@ -348,7 +509,8 @@ public class DxfGeometryExtractor : IGeometryExtractor
                 StartAngle = NormalizeAngle(startAngle + rotation),
                 EndAngle = NormalizeAngle(endAngle + rotation),
                 Layer = entity.Layer,
-                LineType = entity.LineTypeName
+                LineType = entity.LineTypeName,
+                Handle = HandleOf(entity)
             });
             return;
         }
@@ -388,7 +550,8 @@ public class DxfGeometryExtractor : IGeometryExtractor
                 Center = new GeometryPoint(x, y),
                 Radius = radius * scale,
                 Layer = entity.Layer,
-                LineType = entity.LineTypeName
+                LineType = entity.LineTypeName,
+                Handle = HandleOf(entity)
             });
             return;
         }
@@ -557,8 +720,13 @@ public class DxfGeometryExtractor : IGeometryExtractor
         double x,
         double y,
         double height,
+        double rotation,
+        string entityType,
         DxfEntity entity)
     {
+        var isMultiLine = rawText is not null
+            && (rawText.Contains("\\P", StringComparison.Ordinal) || rawText.Contains('\n'));
+
         var text = CleanText(rawText);
         if (text.Length == 0)
         {
@@ -566,13 +734,40 @@ public class DxfGeometryExtractor : IGeometryExtractor
         }
 
         var (px, py) = matrix.Apply(x, y);
-        context.Result.Texts.Add(new GeometryText
+        var finalRotation = matrix.TryGetSimilarity(out _, out var matrixRotation)
+            ? NormalizeAngle(rotation + matrixRotation)
+            : NormalizeAngle(rotation);
+
+        var geometryText = new GeometryText
         {
             Text = text,
             Position = new GeometryPoint(px, py),
             Height = height,
-            Layer = entity.Layer
-        });
+            Rotation = finalRotation,
+            IsMultiLine = isMultiLine,
+            EntityType = entityType,
+            Layer = entity.Layer,
+            Handle = HandleOf(entity)
+        };
+
+        foreach (Match match in WordToken.Matches(text))
+        {
+            geometryText.Tokens.Add(match.Value.ToLowerInvariant());
+        }
+
+        foreach (Match match in NumberToken.Matches(text))
+        {
+            if (double.TryParse(
+                    match.Value,
+                    System.Globalization.NumberStyles.Float,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out var number))
+            {
+                geometryText.Numbers.Add(number);
+            }
+        }
+
+        context.Result.Texts.Add(geometryText);
     }
 
     private static string GetMTextValue(DxfMText mText)
@@ -600,9 +795,9 @@ public class DxfGeometryExtractor : IGeometryExtractor
 
         text = MTextCodes.Replace(text, string.Empty);
         text = text
-            .Replace("%%c", "\u2300", StringComparison.OrdinalIgnoreCase)
-            .Replace("%%d", "\u00B0", StringComparison.OrdinalIgnoreCase)
-            .Replace("%%p", "\u00B1", StringComparison.OrdinalIgnoreCase);
+            .Replace("%%c", "⌀", StringComparison.OrdinalIgnoreCase)
+            .Replace("%%d", "°", StringComparison.OrdinalIgnoreCase)
+            .Replace("%%p", "±", StringComparison.OrdinalIgnoreCase);
 
         return Whitespace.Replace(text, " ").Trim();
     }
@@ -612,8 +807,10 @@ public class DxfGeometryExtractor : IGeometryExtractor
         var geometryHatch = new GeometryHatch
         {
             PatternName = hatch.PatternName,
+            IsSolid = string.Equals(hatch.PatternName, "SOLID", StringComparison.OrdinalIgnoreCase),
             Layer = entity.Layer,
-            LineType = entity.LineTypeName
+            LineType = entity.LineTypeName,
+            Handle = HandleOf(entity)
         };
 
         foreach (var path in hatch.BoundaryPaths)
@@ -706,7 +903,8 @@ public class DxfGeometryExtractor : IGeometryExtractor
             Text = hasUserText ? CleanText(userText) : null,
             Value = dimension.ActualMeasurement > 0 ? dimension.ActualMeasurement : null,
             Position = new GeometryPoint(x, y),
-            Layer = entity.Layer
+            Layer = entity.Layer,
+            Handle = HandleOf(entity)
         });
     }
 
@@ -763,6 +961,7 @@ public class DxfGeometryExtractor : IGeometryExtractor
         public Dictionary<string, DxfBlock> Blocks { get; }
         public CancellationToken Token { get; }
         public Dictionary<string, int> Skipped { get; } = new(StringComparer.OrdinalIgnoreCase);
+        public HashSet<string> Layers { get; } = new(StringComparer.OrdinalIgnoreCase);
         public bool Truncated { get; private set; }
         public bool SplineApproximated { get; set; }
 
@@ -782,6 +981,14 @@ public class DxfGeometryExtractor : IGeometryExtractor
         {
             var key = string.IsNullOrWhiteSpace(typeName) ? "UNKNOWN" : typeName;
             Skipped[key] = Skipped.TryGetValue(key, out var count) ? count + 1 : 1;
+        }
+
+        public void NoteLayer(string? layer)
+        {
+            if (!string.IsNullOrWhiteSpace(layer))
+            {
+                Layers.Add(layer);
+            }
         }
     }
 
