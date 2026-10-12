@@ -5,12 +5,15 @@ using Web.Models;
 
 namespace Web.Controllers;
 
-public class ProjectsController : Controller
+public class ProjectController : Controller
 {
+    private const string UploadViewPath = "~/Views/Projects/Upload.cshtml";
+    private const string DetailsViewPath = "~/Views/Projects/Details.cshtml";
+
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
 
-    public ProjectsController(
+    public ProjectController(
         IProjectProcessingService processingService,
         ICodeGenerationService codeGenerationService)
     {
@@ -21,7 +24,7 @@ public class ProjectsController : Controller
     [HttpGet]
     public IActionResult Upload()
     {
-        return View();
+        return View(UploadViewPath);
     }
 
     [HttpPost]
@@ -31,7 +34,7 @@ public class ProjectsController : Controller
         if (file is null || file.Length == 0)
         {
             ModelState.AddModelError(string.Empty, "Please choose a file to upload.");
-            return View();
+            return View(UploadViewPath);
         }
 
         await using var stream = file.OpenReadStream();
@@ -39,15 +42,15 @@ public class ProjectsController : Controller
 
         if (result.ProjectId.HasValue)
         {
-            return RedirectToAction(nameof(Result), new { id = result.ProjectId.Value });
+            return RedirectToAction(nameof(Details), new { id = result.ProjectId.Value });
         }
 
         ModelState.AddModelError(string.Empty, result.ErrorMessage ?? "The upload failed.");
-        return View();
+        return View(UploadViewPath);
     }
 
     [HttpGet]
-    public async Task<IActionResult> Result(int id, CancellationToken cancellationToken)
+    public async Task<IActionResult> Details(int id, CancellationToken cancellationToken)
     {
         var project = await _processingService.GetProjectAsync(id, cancellationToken);
         if (project is null)
@@ -57,7 +60,7 @@ public class ProjectsController : Controller
 
         var code = await _codeGenerationService.GenerateAsync(id, cancellationToken);
 
-        return View(new ProjectResultViewModel
+        return View(DetailsViewPath, new ProjectResultViewModel
         {
             Project = project,
             GeneratedCode = code
@@ -71,7 +74,7 @@ public class ProjectsController : Controller
         if (HasNegativeValue(component))
         {
             TempData["Error"] = "Dimensions and angle cannot be negative.";
-            return RedirectToAction(nameof(Result), new { id = component.ProjectId });
+            return RedirectToAction(nameof(Details), new { id = component.ProjectId });
         }
 
         var updated = await _processingService.UpdateComponentAsync(component, cancellationToken);
@@ -81,7 +84,7 @@ public class ProjectsController : Controller
         }
 
         TempData["Success"] = "Component updated.";
-        return RedirectToAction(nameof(Result), new { id = component.ProjectId });
+        return RedirectToAction(nameof(Details), new { id = component.ProjectId });
     }
 
     [HttpGet]

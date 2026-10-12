@@ -17,6 +17,9 @@
     double Height(ComponentDto c) => (double)(c.Height ?? 0m);
     double Widest(ComponentDto c) => (double)Math.Max(c.Diameter ?? 0m, Math.Max(c.TopDiameter ?? 0m, c.BottomDiameter ?? 0m));
 
+    string SvgLabel(double x, double y, string content) =>
+        $"<text x=\"{N(x)}\" y=\"{N(y)}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-size=\"14\" font-weight=\"600\" fill=\"#2a3439\" stroke=\"#ffffff\" stroke-width=\"4\" paint-order=\"stroke\">{content}</text>";
+
     const double canvasWidth = 400;
     const double canvasHeight = 420;
     const double centerX = canvasWidth / 2;
@@ -93,30 +96,28 @@
                                 {
                                     var w = (double)(part.Diameter ?? 0m) * scale;
                                     var x = centerX - w / 2;
+                                    var cylinderLabel = "&#8960;" + N((double)(part.Diameter ?? 0m)) + " x " + N((double)(part.Height ?? 0m));
 
                                     <rect x="@N(x)" y="@N(cursorY)" width="@N(w)" height="@N(h)" style="fill: var(--cc-accent-soft);" stroke="#2a3439" stroke-width="2" />
                                     if (part.HasHatch)
                                     {
                                         <rect x="@N(x)" y="@N(cursorY)" width="@N(w)" height="@N(h)" fill="url(#cc-hatch)" stroke="none" />
                                     }
-                                    <text x="@N(centerX)" y="@N(cursorY + h / 2)" text-anchor="middle" dominant-baseline="middle" font-size="14" font-weight="600" fill="#2a3439" stroke="#ffffff" stroke-width="4" paint-order="stroke">
-                                        &#8960;@N((double)(part.Diameter ?? 0m)) x @N((double)(part.Height ?? 0m))
-                                    </text>
+                                    <g>@Html.Raw(SvgLabel(centerX, cursorY + h / 2, cylinderLabel))</g>
                                 }
                                 else
                                 {
                                     var top = (double)(part.TopDiameter ?? 0m) * scale;
                                     var bottom = (double)(part.BottomDiameter ?? 0m) * scale;
                                     var points = $"{N(centerX - top / 2)},{N(cursorY)} {N(centerX + top / 2)},{N(cursorY)} {N(centerX + bottom / 2)},{N(cursorY + h)} {N(centerX - bottom / 2)},{N(cursorY + h)}";
+                                    var coneLabel = N((double)(part.Angle ?? 0m)) + "&deg; cone";
 
                                     <polygon points="@points" style="fill: var(--cc-accent-soft);" stroke="#2a3439" stroke-width="2" stroke-linejoin="round" />
                                     if (part.HasHatch)
                                     {
                                         <polygon points="@points" fill="url(#cc-hatch)" stroke="none" />
                                     }
-                                    <text x="@N(centerX)" y="@N(cursorY + h / 2)" text-anchor="middle" dominant-baseline="middle" font-size="14" font-weight="600" fill="#2a3439" stroke="#ffffff" stroke-width="4" paint-order="stroke">
-                                        @N((double)(part.Angle ?? 0m))&deg; cone
-                                    </text>
+                                    <g>@Html.Raw(SvgLabel(centerX, cursorY + h / 2, coneLabel))</g>
                                 }
 
                                 cursorY += h;

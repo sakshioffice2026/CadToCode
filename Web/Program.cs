@@ -1,4 +1,3 @@
-
 using CadToCode.Business.Interfaces;
 using CadToCode.Business.Services;
 using CadToCode.Database;
@@ -31,6 +30,7 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
 builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
 builder.Services.AddSingleton<IGeometryExtractor, DxfGeometryExtractor>();
+builder.Services.AddSingleton<IGeometryExtractor, ImageGeometryExtractor>();
 builder.Services.AddScoped<IGeometryNormalizer, GeometryNormalizer>();
 builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
 builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();

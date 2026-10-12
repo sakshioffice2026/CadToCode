@@ -1,14 +1,16 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
-  <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
-  </PropertyGroup>
+	<PropertyGroup>
+		<TargetFramework>net8.0</TargetFramework>
+		<Nullable>enable</Nullable>
+		<ImplicitUsings>enable</ImplicitUsings>
+	</PropertyGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\CadToCode.Business\CadToCode.Business.csproj" />
-    <ProjectReference Include="..\CadToCode.Database\CadToCode.Database.csproj" />
-  </ItemGroup>
+	<ItemGroup>
+		<ProjectReference Include="..\CadToCode.Business\CadToCode.Business.csproj" />
+		<ProjectReference Include="..\CadToCode.Database\CadToCode.Database.csproj" />
+		<ProjectReference Include="..\CadToCode.Models\CadToCode.Models.csproj" />
+		<ProjectReference Include="..\CadToCode.Repositories\CadToCode.Repositories.csproj" />
+	</ItemGroup>
 
 </Project>

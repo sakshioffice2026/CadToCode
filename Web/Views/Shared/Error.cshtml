@@ -1,0 +1,23 @@
+@{
+    ViewData["Title"] = "Error";
+    var requestId = ViewData["RequestId"] as string;
+}
+
+<div class="cc-topbar">
+    <div>
+        <h1 class="cc-page-title">Something went wrong</h1>
+        <p class="cc-page-meta">The request could not be completed. Please try again.</p>
+    </div>
+
+    <div class="d-flex gap-2">
+        <a class="cc-btn cc-btn-primary" asp-controller="Project" asp-action="Upload">Back to upload</a>
+    </div>
+</div>
+
+<div class="cc-alert cc-alert-error" role="alert">
+    An unexpected error occurred while processing your request.
+    @if (!string.IsNullOrEmpty(requestId))
+    {
+        <div>Request ID: <code>@requestId</code></div>
+    }
+</div>
