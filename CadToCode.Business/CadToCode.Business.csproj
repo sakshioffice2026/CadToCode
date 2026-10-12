@@ -8,6 +8,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CadToCode.Database\CadToCode.Database.csproj" />
+    <ProjectReference Include="..\CadToCode.Models\CadToCode.Models.csproj" />
   </ItemGroup>
 
 </Project>

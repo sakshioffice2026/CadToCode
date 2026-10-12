@@ -9,9 +9,6 @@ public class Project
     [Key, Column("Id")]
     public int Id { get; set; }
 
-    [Column("UserId")]
-    public int? UserId { get; set; }
-
     [Required, MaxLength(200), Column("Title")]
     public string Title { get; set; } = string.Empty;
 
@@ -41,9 +38,6 @@ public class Project
 
     [Column("CreatedAt")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
-
-    [ForeignKey(nameof(UserId))]
-    public User? User { get; set; }
 
     public ICollection<DrawingComponent> DrawingComponents { get; set; } = new List<DrawingComponent>();
 }
