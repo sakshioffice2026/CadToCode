@@ -1,4 +1,10 @@
+
+using CadToCode.Business.Interfaces;
+using CadToCode.Business.Services;
 using CadToCode.Database;
+using CadToCode.Models.Options;
+using CadToCode.Repositories.Interfaces;
+using CadToCode.Repositories.Repository;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,6 +16,24 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+
+builder.Services.Configure<UploadOptions>(builder.Configuration.GetSection(UploadOptions.SectionName));
+builder.Services.PostConfigure<UploadOptions>(options =>
+{
+    if (string.IsNullOrWhiteSpace(options.StorageRoot))
+    {
+        options.StorageRoot = Path.Combine(builder.Environment.ContentRootPath, "App_Data", "uploads");
+    }
+});
+builder.Services.Configure<ExtractionOptions>(builder.Configuration.GetSection(ExtractionOptions.SectionName));
+
+builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
+
+builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
+builder.Services.AddSingleton<IGeometryExtractor, DxfGeometryExtractor>();
+builder.Services.AddScoped<IGeometryNormalizer, GeometryNormalizer>();
+builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
+builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();
 
 var app = builder.Build();
 

@@ -1,0 +1,166 @@
+@model Web.Models.ProjectResultViewModel
+@using System.Globalization
+@using CadToCode.Models.Enums
+
+@{
+    var components = Model.Project.Components;
+
+    string Fmt(decimal? value) =>
+        value.HasValue ? value.Value.ToString("0.####", CultureInfo.InvariantCulture) : string.Empty;
+
+    string ConfidenceClass(decimal confidence) =>
+        confidence >= 0.85m ? "cc-confidence-high" : confidence >= 0.60m ? "cc-confidence-medium" : "cc-confidence-low";
+
+    string ConfidenceText(decimal confidence) =>
+        (confidence * 100m).ToString("0", CultureInfo.InvariantCulture) + "%";
+}
+
+<section class="cc-panel" aria-labelledby="cc-components-title">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title" id="cc-components-title">Recognized components</h2>
+        <span class="cc-chip cc-chip-muted">mm and degrees</span>
+    </div>
+
+    <div class="cc-panel-body">
+        @if (Model.IsImageSource)
+        {
+            <div class="cc-alert cc-alert-note">
+                Values read from an image are estimates. Check each one and correct any that look off.
+            </div>
+        }
+
+        @if (components.Count == 0)
+        {
+            <div class="cc-empty">
+                <p class="cc-empty-title">No components found</p>
+                <p>Upload a clearer drawing with a visible cylinder and cone outline.</p>
+            </div>
+        }
+        else
+        {
+            <div class="cc-table-wrap">
+                <table class="cc-stats-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Component</th>
+                            <th scope="col" class="cc-num">Height</th>
+                            <th scope="col" class="cc-num">Diameter</th>
+                            <th scope="col" class="cc-num">Top dia.</th>
+                            <th scope="col" class="cc-num">Bottom dia.</th>
+                            <th scope="col" class="cc-num">Angle</th>
+                            <th scope="col">Hatch</th>
+                            <th scope="col">Confidence</th>
+                            <th scope="col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var c in components)
+                        {
+                            var formId = $"cc-edit-{c.Id}";
+
+                            <tr data-cc-row>
+                                <th scope="row">
+                                    <span>@c.Name</span>
+                                    @if (c.IsManuallyEdited)
+                                    {
+                                        <span class="cc-chip cc-chip-muted">Edited</span>
+                                    }
+                                </th>
+
+                                <td class="cc-num">
+                                    @if (c.Height.HasValue)
+                                    {
+                                        <span data-cc-view>@Fmt(c.Height)</span>
+                                        <input type="number" step="0.01" min="0" name="Height" value="@Fmt(c.Height)" form="@formId" class="cc-inline-input" aria-label="Height in millimeters" data-cc-edit hidden />
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+
+                                <td class="cc-num">
+                                    @if (c.Diameter.HasValue)
+                                    {
+                                        <span data-cc-view>@Fmt(c.Diameter)</span>
+                                        <input type="number" step="0.01" min="0" name="Diameter" value="@Fmt(c.Diameter)" form="@formId" class="cc-inline-input" aria-label="Diameter in millimeters" data-cc-edit hidden />
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+
+                                <td class="cc-num">
+                                    @if (c.TopDiameter.HasValue)
+                                    {
+                                        <span data-cc-view>@Fmt(c.TopDiameter)</span>
+                                        <input type="number" step="0.01" min="0" name="TopDiameter" value="@Fmt(c.TopDiameter)" form="@formId" class="cc-inline-input" aria-label="Top diameter in millimeters" data-cc-edit hidden />
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+
+                                <td class="cc-num">
+                                    @if (c.BottomDiameter.HasValue)
+                                    {
+                                        <span data-cc-view>@Fmt(c.BottomDiameter)</span>
+                                        <input type="number" step="0.01" min="0" name="BottomDiameter" value="@Fmt(c.BottomDiameter)" form="@formId" class="cc-inline-input" aria-label="Bottom diameter in millimeters" data-cc-edit hidden />
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+
+                                <td class="cc-num">
+                                    @if (c.Angle.HasValue)
+                                    {
+                                        <span data-cc-view>@Fmt(c.Angle)&deg;</span>
+                                        <input type="number" step="0.01" min="0" name="Angle" value="@Fmt(c.Angle)" form="@formId" class="cc-inline-input" aria-label="Angle in degrees" data-cc-edit hidden />
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+
+                                <td>
+                                    <span data-cc-view>@(c.HasHatch ? "Yes" : "No")</span>
+                                    <label data-cc-edit hidden>
+                                        <input type="checkbox" name="HasHatch" value="true" form="@formId" @(c.HasHatch ? "checked" : null) />
+                                        Hatched
+                                    </label>
+                                </td>
+
+                                <td>
+                                    <span class="cc-confidence @ConfidenceClass(c.Confidence)">@ConfidenceText(c.Confidence)</span>
+                                </td>
+
+                                <td>
+                                    <button type="button" class="cc-btn cc-btn-ghost cc-btn-small" data-cc-edit-start data-cc-view>Edit</button>
+                                    <button type="submit" form="@formId" class="cc-btn cc-btn-primary cc-btn-small" data-cc-edit hidden>Save</button>
+                                    <button type="button" class="cc-btn cc-btn-ghost cc-btn-small" data-cc-edit-cancel data-cc-edit hidden>Cancel</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @foreach (var c in components)
+            {
+                <form id="cc-edit-@c.Id" asp-controller="Project" asp-action="UpdateComponent" method="post">
+                    <input type="hidden" name="Id" value="@c.Id" />
+                    <input type="hidden" name="ProjectId" value="@c.ProjectId" />
+                    <input type="hidden" name="ComponentType" value="@c.ComponentType" />
+                    <input type="hidden" name="Name" value="@c.Name" />
+                    <input type="hidden" name="Width" value="@Fmt(c.Width)" />
+                    <input type="hidden" name="HasHatch" value="false" />
+                </form>
+            }
+        }
+    </div>
+</section>

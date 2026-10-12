@@ -1,0 +1,60 @@
+@{
+    var controller = ViewContext.RouteData.Values["controller"]?.ToString() ?? string.Empty;
+    var action = ViewContext.RouteData.Values["action"]?.ToString() ?? string.Empty;
+
+    var isProject = string.Equals(controller, "Project", StringComparison.OrdinalIgnoreCase);
+    var isUpload = isProject && string.Equals(action, "Upload", StringComparison.OrdinalIgnoreCase);
+    var isDetails = isProject && string.Equals(action, "Details", StringComparison.OrdinalIgnoreCase);
+
+    var projectId = isDetails ? ViewContext.RouteData.Values["id"]?.ToString() : null;
+}
+
+<aside class="cc-sidebar" aria-label="Main navigation">
+    <a class="cc-brand" asp-controller="Project" asp-action="Upload">
+        <span class="cc-brand-mark" aria-hidden="true">C</span>
+        <span>CadToCode</span>
+    </a>
+
+    <nav>
+        <ul class="cc-nav">
+            <li>
+                <a class="cc-nav-link @(isUpload ? "active" : string.Empty)"
+                   asp-controller="Project"
+                   asp-action="Upload"
+                   aria-current="@(isUpload ? "page" : null)">
+                    Upload drawing
+                </a>
+            </li>
+        </ul>
+    </nav>
+
+    @if (!string.IsNullOrEmpty(projectId))
+    {
+        <div class="cc-sidebar-section">
+            <p class="cc-sidebar-heading">This project</p>
+            <ul class="cc-nav">
+                <li>
+                    <a class="cc-nav-link active"
+                       asp-controller="Project"
+                       asp-action="Details"
+                       asp-route-id="@projectId"
+                       aria-current="page">
+                        Design and code
+                    </a>
+                </li>
+                <li>
+                    <a class="cc-nav-link"
+                       asp-controller="Project"
+                       asp-action="Download"
+                       asp-route-id="@projectId">
+                        Download original
+                    </a>
+                </li>
+            </ul>
+        </div>
+    }
+
+    <div class="cc-sidebar-footer">
+        Millimeters and degrees
+    </div>
+</aside>

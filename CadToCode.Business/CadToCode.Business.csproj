@@ -7,6 +7,11 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<PackageReference Include="netDxf" Version="3.0.1" />
+		<PackageReference Include="Microsoft.Extensions.Options" Version="8.0.2" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<ProjectReference Include="..\CadToCode.Repositories\CadToCode.Repositories.csproj" />
 		<ProjectReference Include="..\CadToCode.Models\CadToCode.Models.csproj" />
 	</ItemGroup>

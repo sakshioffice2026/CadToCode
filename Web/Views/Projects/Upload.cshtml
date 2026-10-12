@@ -1,0 +1,33 @@
+@{
+    ViewData["Title"] = "Upload drawing";
+}
+
+<div class="cc-topbar">
+    <div>
+        <h1 class="cc-page-title">Upload a drawing</h1>
+        <p class="cc-page-meta">We read the shapes, find the cylinder and cone, and write the C# classes for you.</p>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-xl-8">
+        @if (!ViewData.ModelState.IsValid)
+        {
+            <div class="cc-alert cc-alert-error" role="alert">
+                @foreach (var error in ViewData.ModelState.Values.SelectMany(v => v.Errors))
+                {
+                    <div>@error.ErrorMessage</div>
+                }
+            </div>
+        }
+
+        <form asp-controller="Project" asp-action="Upload" method="post" enctype="multipart/form-data" data-cc-upload-form>
+            <partial name="_UploadDropzone" />
+
+            <div class="d-flex align-items-center gap-3 mt-3">
+                <button type="submit" class="cc-btn cc-btn-primary" data-cc-submit>Upload and analyze</button>
+                <span class="cc-page-meta mb-0">Image results are estimates. You can correct any value afterwards.</span>
+            </div>
+        </form>
+    </div>
+</div>
