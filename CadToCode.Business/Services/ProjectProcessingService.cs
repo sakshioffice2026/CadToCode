@@ -14,20 +14,20 @@ public class ProjectProcessingService : IProjectProcessingService
     private readonly IUnitOfWork _unitOfWork;
     private readonly IFileStorageService _storage;
     private readonly IEnumerable<IGeometryExtractor> _extractors;
-    private readonly IGeometryNormalizer _normalizer;
+    private readonly IAiComponentClassifier _classifier;
     private readonly ILogger<ProjectProcessingService> _logger;
 
     public ProjectProcessingService(
         IUnitOfWork unitOfWork,
         IFileStorageService storage,
         IEnumerable<IGeometryExtractor> extractors,
-        IGeometryNormalizer normalizer,
+        IAiComponentClassifier classifier,
         ILogger<ProjectProcessingService> logger)
     {
         _unitOfWork = unitOfWork;
         _storage = storage;
         _extractors = extractors;
-        _normalizer = normalizer;
+        _classifier = classifier;
         _logger = logger;
     }
 
@@ -154,10 +154,10 @@ public class ProjectProcessingService : IProjectProcessingService
 
         await _unitOfWork.Projects.UpdateDetectedUnitAsync(projectId, geometry.DetectedUnit, cancellationToken);
 
-        var components = _normalizer.Normalize(geometry);
+        var components = await _classifier.ExtractComponentsAsync(geometry, cancellationToken);
         if (components.Count == 0)
         {
-            throw new InvalidOperationException("No Cylinder or Cone could be recognized in the drawing.");
+            throw new InvalidOperationException("No component could be recognized in the drawing.");
         }
 
         await _unitOfWork.Components.AddRangeAsync(projectId, components, cancellationToken);

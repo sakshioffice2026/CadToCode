@@ -3,7 +3,7 @@ using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using IxMilia.Dxf;
 using IxMilia.Dxf.Entities;
-using netDxf.Entities;
+using IxMilia.Dxf.Blocks;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;

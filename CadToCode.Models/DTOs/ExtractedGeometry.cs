@@ -5,11 +5,14 @@ namespace CadToCode.Models.Dtos;
 public class ExtractedGeometry
 {
     public DrawingUnit DetectedUnit { get; set; } = DrawingUnit.Millimeter;
+    public string? SourceVersion { get; set; }
     public List<GeometryLine> Lines { get; set; } = new();
     public List<GeometryArc> Arcs { get; set; } = new();
     public List<GeometryCircle> Circles { get; set; } = new();
     public List<GeometryHatch> Hatches { get; set; } = new();
     public List<GeometryDimension> Dimensions { get; set; } = new();
+    public List<GeometryText> Texts { get; set; } = new();
+    public List<string> Warnings { get; set; } = new();
 }
 
 public record GeometryPoint(double X, double Y);
@@ -53,5 +56,13 @@ public class GeometryDimension
     public string? Text { get; set; }
     public double? Value { get; set; }
     public GeometryPoint? Position { get; set; }
+    public string? Layer { get; set; }
+}
+
+public class GeometryText
+{
+    public string Text { get; set; } = string.Empty;
+    public GeometryPoint Position { get; set; } = new(0, 0);
+    public double Height { get; set; }
     public string? Layer { get; set; }
 }

@@ -15,6 +15,7 @@
 	<ItemGroup>
 		<ProjectReference Include="..\CadToCode.Repositories\CadToCode.Repositories.csproj" />
 		<ProjectReference Include="..\CadToCode.Models\CadToCode.Models.csproj" />
+		<ProjectReference Include="..\CadToCode.LLM\CadToCode.LLM.csproj" />
 	</ItemGroup>
 
 </Project>

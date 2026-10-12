@@ -21,13 +21,13 @@ public class CodeGenerationService : ICodeGenerationService
         var components = await _unitOfWork.Components.GetByProjectIdAsync(projectId, cancellationToken);
 
         var supported = components
-            .Where(c => c.ComponentType == ComponentType.Cylinder || c.ComponentType == ComponentType.Cone)
+            .Where(c => IsSupported(c.ComponentType))
             .OrderBy(c => c.SequenceIndex)
             .ToList();
 
         if (supported.Count == 0)
         {
-            return "// No Cylinder or Cone components were found for this project.";
+            return "// No supported components were found for this project.";
         }
 
         var builder = new StringBuilder();
@@ -63,22 +63,48 @@ public class CodeGenerationService : ICodeGenerationService
         return builder.ToString();
     }
 
+    private static bool IsSupported(ComponentType type)
+    {
+        return type is not (ComponentType.Line or ComponentType.Arc or ComponentType.Circle or ComponentType.Hatch);
+    }
+
     private static void AppendClass(StringBuilder builder, string className, ComponentDto component)
     {
         builder.AppendLine($"public class {className}");
         builder.AppendLine("{");
 
-        if (component.ComponentType == ComponentType.Cylinder)
+        switch (component.ComponentType)
         {
-            AppendProperty(builder, "Height", component.Height);
-            AppendProperty(builder, "Diameter", component.Diameter);
-        }
-        else
-        {
-            AppendProperty(builder, "Angle", component.Angle);
-            AppendProperty(builder, "TopDiameter", component.TopDiameter);
-            AppendProperty(builder, "BottomDiameter", component.BottomDiameter);
-            AppendProperty(builder, "Height", component.Height);
+            case ComponentType.Cylinder:
+                AppendProperty(builder, "Height", component.Height);
+                AppendProperty(builder, "Diameter", component.Diameter);
+                break;
+
+            case ComponentType.Cone:
+                AppendProperty(builder, "Angle", component.Angle);
+                AppendProperty(builder, "TopDiameter", component.TopDiameter);
+                AppendProperty(builder, "BottomDiameter", component.BottomDiameter);
+                AppendProperty(builder, "Height", component.Height);
+                break;
+
+            case ComponentType.Door:
+            case ComponentType.Window:
+            case ComponentType.Duct:
+                AppendProperty(builder, "Width", component.Width);
+                AppendProperty(builder, "Height", component.Height);
+                break;
+
+            case ComponentType.AxialFan:
+                AppendProperty(builder, "Diameter", component.Diameter);
+                break;
+
+            case ComponentType.Cyclone:
+                AppendProperty(builder, "Height", component.Height);
+                AppendProperty(builder, "Diameter", component.Diameter);
+                AppendProperty(builder, "TopDiameter", component.TopDiameter);
+                AppendProperty(builder, "BottomDiameter", component.BottomDiameter);
+                AppendProperty(builder, "Angle", component.Angle);
+                break;
         }
 
         builder.AppendLine($"    public bool HasHatch {{ get; set; }} = {(component.HasHatch ? "true" : "false")};");
