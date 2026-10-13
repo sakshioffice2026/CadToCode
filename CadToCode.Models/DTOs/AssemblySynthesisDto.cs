@@ -4,6 +4,8 @@ public class AssemblyAnalysisRequest
 {
     public AssemblyTree Tree { get; set; } = new();
     public string TreeJson { get; set; } = string.Empty;
+    public string? DrawingTitle { get; set; }
+    public List<string> Texts { get; set; } = new();
     public List<ClassificationPatternHint> SimilarPatterns { get; set; } = new();
 }
 

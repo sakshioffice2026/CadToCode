@@ -1,4 +1,4 @@
-@model Web.Models.ProjectResultViewModel
+﻿@model Web.Models.ProjectResultViewModel
 @using System.Globalization
 @using CadToCode.Models.Dtos
 @using CadToCode.Models.Enums
@@ -9,13 +9,14 @@
     var project = Model.Project;
 
     var parts = project.Components
-        .Where(c => c.ComponentType == ComponentType.Cylinder || c.ComponentType == ComponentType.Cone)
+        .Where(c => c.ComponentType == ComponentType.Cylinder || c.ComponentType == ComponentType.Cone || IsRect(c))
         .OrderBy(c => c.SequenceIndex)
         .ToList();
 
     string N(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
     double Height(ComponentDto c) => (double)(c.Height ?? 0m);
-    double Widest(ComponentDto c) => (double)Math.Max(c.Diameter ?? 0m, Math.Max(c.TopDiameter ?? 0m, c.BottomDiameter ?? 0m));
+    bool IsRect(ComponentDto c) => c.ComponentType == ComponentType.Door || c.ComponentType == ComponentType.Window || c.ComponentType == ComponentType.Duct || c.ComponentType == ComponentType.Generic || c.ComponentType.IsProfile();
+    double Widest(ComponentDto c) => (double)Math.Max(c.Width ?? 0m, Math.Max(c.Diameter ?? 0m, Math.Max(c.TopDiameter ?? 0m, c.BottomDiameter ?? 0m)));
 
     string SvgLabel(double x, double y, string content) =>
         $"<text x=\"{N(x)}\" y=\"{N(y)}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-size=\"14\" font-weight=\"600\" fill=\"#2a3439\" stroke=\"#ffffff\" stroke-width=\"4\" paint-order=\"stroke\">{content}</text>";
@@ -79,7 +80,7 @@
                 <div class="cc-preview-frame">
                     @if (parts.Count > 0 && scale > 0)
                     {
-                        <svg viewBox="0 0 @N(canvasWidth) @N(canvasHeight)" width="100%" style="max-width: 26rem;" role="img" aria-label="Schematic of the recognized cylinder and cone">
+                        <svg viewBox="0 0 @N(canvasWidth) @N(canvasHeight)" width="100%" style="max-width: 26rem;" role="img" aria-label="Schematic of the recognized components">
                             <defs>
                                 <pattern id="cc-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
                                     <line x1="0" y1="0" x2="0" y2="6" stroke="#2a3439" stroke-width="1" />
@@ -105,6 +106,19 @@
                                     }
                                     <g>@Html.Raw(SvgLabel(centerX, cursorY + h / 2, cylinderLabel))</g>
                                 }
+                                else if (IsRect(part))
+                                {
+                                    var rw = (double)(part.Width ?? 0m) * scale;
+                                    var rx = centerX - rw / 2;
+                                    var rectLabel = N((double)(part.Width ?? 0m)) + " x " + N((double)(part.Height ?? 0m));
+
+                                    <rect x="@N(rx)" y="@N(cursorY)" width="@N(rw)" height="@N(h)" style="fill: var(--cc-accent-soft);" stroke="#2a3439" stroke-width="2" />
+                                    if (part.HasHatch)
+                                    {
+                                        <rect x="@N(rx)" y="@N(cursorY)" width="@N(rw)" height="@N(h)" fill="url(#cc-hatch)" stroke="none" />
+                                    }
+                                    <g>@Html.Raw(SvgLabel(centerX, cursorY + h / 2, rectLabel))</g>
+                                }
                                 else
                                 {
                                     var top = (double)(part.TopDiameter ?? 0m) * scale;
@@ -128,7 +142,7 @@
                     {
                         <div class="cc-preview-empty">
                             <p class="cc-empty-title">Nothing to preview yet</p>
-                            <p class="mb-0">The preview appears once a cylinder or cone is recognized.</p>
+                            <p class="mb-0">The preview appears once a component is recognized.</p>
                         </div>
                     }
                 </div>

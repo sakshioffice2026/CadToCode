@@ -139,6 +139,7 @@ public class DrawingComponentRepository : IDrawingComponentRepository
             Angle = entity.Angle,
             HasHatch = entity.HasHatch,
             IsManuallyEdited = entity.IsManuallyEdited,
+            Profile = StructuralProfile.FromRawJson(entity.RawDataJson),
             Confidence = entity.Confidence,
             CreatedAt = entity.CreatedAt
         };

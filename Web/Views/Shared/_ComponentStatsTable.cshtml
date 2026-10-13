@@ -1,4 +1,4 @@
-@model Web.Models.ProjectResultViewModel
+﻿@model Web.Models.ProjectResultViewModel
 @using System.Globalization
 @using CadToCode.Models.Enums
 
@@ -33,7 +33,7 @@
         {
             <div class="cc-empty">
                 <p class="cc-empty-title">No components found</p>
-                <p>Upload a clearer drawing with a visible cylinder and cone outline.</p>
+                <p>Upload a clearer drawing with a visible outline.</p>
             </div>
         }
         else
@@ -44,6 +44,7 @@
                         <tr>
                             <th scope="col">Component</th>
                             <th scope="col" class="cc-num">Height</th>
+                            <th scope="col" class="cc-num">Width</th>
                             <th scope="col" class="cc-num">Diameter</th>
                             <th scope="col" class="cc-num">Top dia.</th>
                             <th scope="col" class="cc-num">Bottom dia.</th>
@@ -72,6 +73,18 @@
                                     {
                                         <span data-cc-view>@Fmt(c.Height)</span>
                                         <input type="number" step="0.01" min="0" name="Height" value="@Fmt(c.Height)" form="@formId" class="cc-inline-input" aria-label="Height in millimeters" data-cc-edit hidden />
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+
+                                <td class="cc-num">
+                                    @if (c.Width.HasValue)
+                                    {
+                                        <span data-cc-view>@Fmt(c.Width)</span>
+                                        <input type="number" step="0.01" min="0" name="Width" value="@Fmt(c.Width)" form="@formId" class="cc-inline-input" aria-label="Width in millimeters" data-cc-edit hidden />
                                     }
                                     else
                                     {
@@ -157,7 +170,6 @@
                     <input type="hidden" name="ProjectId" value="@c.ProjectId" />
                     <input type="hidden" name="ComponentType" value="@c.ComponentType" />
                     <input type="hidden" name="Name" value="@c.Name" />
-                    <input type="hidden" name="Width" value="@Fmt(c.Width)" />
                     <input type="hidden" name="HasHatch" value="false" />
                 </form>
             }

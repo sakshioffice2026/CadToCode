@@ -92,9 +92,10 @@ public class CodeGenerationService : ICodeGenerationService
             index++;
             typeIndexes[component.ComponentType] = index;
 
+            var baseName = ClassNameFor(component.ComponentType);
             var className = typeCounts[component.ComponentType] > 1
-                ? $"{component.ComponentType}{index}"
-                : component.ComponentType.ToString();
+                ? $"{baseName}{index}"
+                : baseName;
 
             AppendClass(builder, className, component);
 
@@ -222,6 +223,12 @@ public class CodeGenerationService : ICodeGenerationService
                 {
                     Tree = tree,
                     TreeJson = JsonSerializer.Serialize(tree, TreeJsonOptions),
+                    DrawingTitle = project.Title,
+                    Texts = geometry.Texts
+                        .Select(t => t.Text)
+                        .Concat(geometry.Dimensions.Select(d => d.Text ?? string.Empty))
+                        .Where(t => !string.IsNullOrWhiteSpace(t))
+                        .ToList(),
                     SimilarPatterns = hints
                 },
                 cancellationToken);
@@ -340,8 +347,20 @@ public class CodeGenerationService : ICodeGenerationService
             case ComponentType.Door:
             case ComponentType.Window:
             case ComponentType.Duct:
+            case ComponentType.Generic:
                 AppendProperty(builder, "Width", component.Width);
                 AppendProperty(builder, "Height", component.Height);
+                break;
+
+            case ComponentType.Head:
+            case ComponentType.Jamb:
+            case ComponentType.Mullion:
+            case ComponentType.Sill:
+            case ComponentType.Bracket:
+            case ComponentType.Flange:
+            case ComponentType.Panel:
+            case ComponentType.CustomProfile:
+                AppendProfileProperties(builder, component);
                 break;
 
             case ComponentType.AxialFan:
@@ -358,7 +377,124 @@ public class CodeGenerationService : ICodeGenerationService
         }
 
         builder.AppendLine($"    public bool HasHatch {{ get; set; }} = {(component.HasHatch ? "true" : "false")};");
+        AppendMembers(builder, component);
         builder.AppendLine("}");
+    }
+
+    private static void AppendMembers(StringBuilder builder, ComponentDto component)
+    {
+        switch (component.ComponentType)
+        {
+            case ComponentType.Cylinder:
+                if (component.Height is null || component.Diameter is null)
+                {
+                    return;
+                }
+
+                builder.AppendLine();
+                builder.AppendLine("    public double Volume => System.Math.PI * Diameter * Diameter / 4.0 * Height;");
+                builder.AppendLine("    public bool IsValid() => Height > 0 && Diameter > 0;");
+                return;
+
+            case ComponentType.Cone:
+                if (component.Height is null || component.TopDiameter is null || component.BottomDiameter is null)
+                {
+                    return;
+                }
+
+                builder.AppendLine();
+                builder.AppendLine("    public double Volume => System.Math.PI * Height / 12.0 * (TopDiameter * TopDiameter + TopDiameter * BottomDiameter + BottomDiameter * BottomDiameter);");
+                builder.AppendLine("    public double ExpectedAngle => System.Math.Atan(System.Math.Abs(BottomDiameter - TopDiameter) / 2.0 / Height) * 180.0 / System.Math.PI;");
+                builder.AppendLine("    public bool IsValid() => Height > 0 && TopDiameter > 0 && BottomDiameter > 0;");
+
+                if (component.Angle is not null)
+                {
+                    builder.AppendLine("    public bool IsAngleConsistent(double toleranceDegrees = 0.5) => System.Math.Abs(Angle - ExpectedAngle) <= toleranceDegrees;");
+                }
+
+                return;
+
+            case ComponentType.Door:
+            case ComponentType.Window:
+            case ComponentType.Duct:
+            case ComponentType.Generic:
+                if (component.Width is null || component.Height is null)
+                {
+                    return;
+                }
+
+                builder.AppendLine();
+                builder.AppendLine("    public double Area => Width * Height;");
+                builder.AppendLine("    public bool IsValid() => Width > 0 && Height > 0;");
+                return;
+
+            case ComponentType.Head:
+            case ComponentType.Jamb:
+            case ComponentType.Mullion:
+            case ComponentType.Sill:
+            case ComponentType.Bracket:
+            case ComponentType.Flange:
+            case ComponentType.Panel:
+            case ComponentType.CustomProfile:
+                if (component.Width is null && component.Profile is null)
+                {
+                    return;
+                }
+
+                builder.AppendLine();
+                builder.AppendLine("    public double BoundingArea => BoundingWidth * BoundingHeight;");
+
+                if (component.Profile is not null)
+                {
+                    builder.AppendLine("    public bool HasNotches => NotchCount > 0;");
+                    builder.AppendLine("    public bool HasCutouts => InnerCutoutsCount > 0;");
+                }
+
+                builder.AppendLine("    public bool IsValid() => BoundingWidth > 0 && BoundingHeight > 0;");
+                return;
+
+            case ComponentType.AxialFan:
+                if (component.Diameter is null)
+                {
+                    return;
+                }
+
+                builder.AppendLine();
+                builder.AppendLine("    public double Area => System.Math.PI * Diameter * Diameter / 4.0;");
+                builder.AppendLine("    public bool IsValid() => Diameter > 0;");
+                return;
+        }
+    }
+
+    private static string ClassNameFor(ComponentType type)
+    {
+        if (type == ComponentType.CustomProfile)
+        {
+            return "CustomProfile";
+        }
+
+        return type.IsProfile() ? type + "Profile" : type.ToString();
+    }
+
+    private static void AppendProfileProperties(StringBuilder builder, ComponentDto component)
+    {
+        var profile = component.Profile;
+
+        var width = component.Width ?? (profile is null ? null : (decimal?)Math.Round(profile.BoundingWidth, 4));
+        var height = component.Height ?? (profile is null ? null : (decimal?)Math.Round(profile.BoundingHeight, 4));
+
+        AppendProperty(builder, "BoundingWidth", width);
+        AppendProperty(builder, "BoundingHeight", height);
+
+        if (profile is null)
+        {
+            return;
+        }
+
+        builder.AppendLine($"    public int SegmentCount {{ get; set; }} = {profile.SegmentCount.ToString(CultureInfo.InvariantCulture)};");
+        builder.AppendLine($"    public int VertexCount {{ get; set; }} = {profile.VertexCount.ToString(CultureInfo.InvariantCulture)};");
+        builder.AppendLine($"    public int InnerCutoutsCount {{ get; set; }} = {profile.InnerCutoutsCount.ToString(CultureInfo.InvariantCulture)};");
+        builder.AppendLine($"    public int NotchCount {{ get; set; }} = {profile.NotchCount.ToString(CultureInfo.InvariantCulture)};");
     }
 
     private static void AppendProperty(StringBuilder builder, string name, decimal? value)

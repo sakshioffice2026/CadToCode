@@ -73,7 +73,7 @@ public class ProjectProcessingService : IProjectProcessingService
 
             try
             {
-                await ExtractAndSaveAsync(projectId, fileType, storedPath, cancellationToken);
+                await ExtractAndSaveAsync(projectId, fileType, storedPath, title, cancellationToken);
                 await _unitOfWork.Projects.UpdateStatusAsync(projectId, ProjectStatus.Processed, null, cancellationToken);
             }
             catch (OperationCanceledException)
@@ -142,7 +142,7 @@ public class ProjectProcessingService : IProjectProcessingService
         return await _storage.OpenReadAsync(path, cancellationToken);
     }
 
-    private async Task ExtractAndSaveAsync(int projectId, SourceFileType fileType, string storedPath, CancellationToken cancellationToken)
+    private async Task ExtractAndSaveAsync(int projectId, SourceFileType fileType, string storedPath, string title, CancellationToken cancellationToken)
     {
         var extractor = _extractors.FirstOrDefault(e => e.CanHandle(fileType))
             ?? throw new InvalidOperationException($"No extractor is available for {fileType} files.");
@@ -160,7 +160,24 @@ public class ProjectProcessingService : IProjectProcessingService
             throw new InvalidOperationException("No component could be recognized in the drawing.");
         }
 
+        ApplyTitleHint(components, title);
+
         await _unitOfWork.Components.AddRangeAsync(projectId, components, cancellationToken);
+    }
+
+    private static void ApplyTitleHint(List<ExtractedComponent> components, string title)
+    {
+        var resolved = ProfileKeywordResolver.Resolve(new string?[] { title });
+        if (resolved is null)
+        {
+            return;
+        }
+
+        foreach (var component in components.Where(c => c.ComponentType is ComponentType.CustomProfile or ComponentType.Generic))
+        {
+            component.ComponentType = resolved.Value;
+            component.Name = resolved.Value + " profile";
+        }
     }
 
     private static string Truncate(string value, int maxLength)

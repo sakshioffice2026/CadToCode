@@ -46,6 +46,11 @@ public class ProjectController : Controller
 
         if (result.ProjectId.HasValue)
         {
+            if (result.Success)
+            {
+                await _codeGenerationService.GenerateAssemblyAsync(result.ProjectId.Value, true, cancellationToken);
+            }
+
             return RedirectToAction(nameof(Details), new { id = result.ProjectId.Value });
         }
 

@@ -9,7 +9,8 @@ public static class AssemblyPromptTemplates
     public const string AnalysisSystemPrompt =
         "You name parts of mechanical and architectural CAD assemblies and explain how they relate. "
         + "All measurements are computed by code and are final. You never change or invent numbers. "
-        + "You reply with one JSON object and nothing else. No markdown, no commentary.";
+        + "You reply with exactly one JSON object. The first character of your reply is { and the last character is }. "
+        + "No markdown, no code fences, no text before or after the object, no comments, no trailing commas. Use double quotes for every key and string.";
 
     public const string CodeSystemPrompt =
         "You write short, clean C# data classes for CAD assemblies. "
@@ -30,13 +31,13 @@ public static class AssemblyPromptTemplates
         foreach (var limit in DetailLevels)
         {
             user = BuildAnalysisBody(request, limit);
-            if (Wrap(AnalysisSystemPrompt, user).Length <= maxChars)
+            if (Wrap(AnalysisSystemPrompt, user).Length + 1 <= maxChars)
             {
-                return Wrap(AnalysisSystemPrompt, user);
+                return Wrap(AnalysisSystemPrompt, user) + "{";
             }
         }
 
-        return WrapWithinLimit(AnalysisSystemPrompt, user, maxChars);
+        return WrapWithinLimit(AnalysisSystemPrompt, user, maxChars - 1) + "{";
     }
 
     public static string BuildCodePrompt(CodeSynthesisRequest request, int maxChars)
@@ -142,6 +143,27 @@ public static class AssemblyPromptTemplates
 
         user.AppendLine("Analyze this CAD assembly. Name each node by its function, describe how nodes relate, and give the assembly a short name.");
         user.AppendLine("Use only node ids from the list. Do not change any measurement.");
+        user.AppendLine("Name things from the drawing title and the texts found in the drawing first. Never use a name that the title, texts or shapes do not support.");
+        user.AppendLine("Similar known patterns are weak hints. Do not copy a pattern name unless the title or texts confirm it. If unsure, use a plain shape-based name.");
+
+        if (!string.IsNullOrWhiteSpace(request.DrawingTitle))
+        {
+            user.AppendLine();
+            user.AppendLine("Drawing title: " + Truncate(request.DrawingTitle, 80));
+        }
+
+        var texts = request.Texts
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .Select(t => Truncate(t.Trim(), 40))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(Math.Min(8, Math.Max(3, limit / 3)))
+            .ToList();
+
+        if (texts.Count > 0)
+        {
+            user.AppendLine("Texts found in the drawing: " + string.Join("; ", texts));
+        }
+
         user.AppendLine();
         user.AppendLine(string.Format(
             CultureInfo.InvariantCulture,
@@ -357,7 +379,7 @@ public static class AssemblyPromptTemplates
 
     private static void AppendPatterns(StringBuilder user, List<ClassificationPatternHint> patterns)
     {
-        var hints = patterns.Take(3).ToList();
+        var hints = patterns.Where(p => p.Similarity >= 0.75).Take(3).ToList();
         if (hints.Count == 0)
         {
             return;

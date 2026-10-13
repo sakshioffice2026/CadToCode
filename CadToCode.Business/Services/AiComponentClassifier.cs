@@ -39,7 +39,7 @@ public class AiComponentClassifier : IAiComponentClassifier
         if (!_llm.IsAvailable)
         {
             _logger.LogInformation("AI model is not available. Using the rule-based result.");
-            return deterministic;
+            return WithFallback(deterministic, geometry);
         }
 
         try
@@ -52,19 +52,26 @@ public class AiComponentClassifier : IAiComponentClassifier
             if (!result.Success)
             {
                 _logger.LogInformation("AI classification was not used: {Error}", result.Error);
-                return deterministic;
+                return WithFallback(deterministic, geometry);
             }
 
             if (!IsSupportedType(result.ComponentType))
             {
                 _logger.LogInformation("AI returned unsupported type {Type}. Using the rule-based result.", result.ComponentType);
-                return deterministic;
+                return WithFallback(deterministic, geometry);
+            }
+
+            if (result.ComponentType is ComponentType.Cylinder or ComponentType.Cone or ComponentType.Cyclone
+                && !deterministic.Any(c => c.ComponentType is ComponentType.Cylinder or ComponentType.Cone))
+            {
+                _logger.LogInformation("AI returned {Type} but no round geometry was found. Using the rule-based result.", result.ComponentType);
+                return WithFallback(deterministic, geometry);
             }
 
             if (result.ComponentType is ComponentType.Cylinder or ComponentType.Cone
                 && deterministic.Any(c => c.ComponentType == result.ComponentType))
             {
-                return deterministic;
+                return WithFallback(deterministic, geometry);
             }
 
             return new List<ExtractedComponent> { BuildComponent(result, geometry, matches) };
@@ -76,8 +83,41 @@ public class AiComponentClassifier : IAiComponentClassifier
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "AI classification failed. Using the rule-based result.");
+            return WithFallback(deterministic, geometry);
+        }
+    }
+
+    private static List<ExtractedComponent> WithFallback(
+        List<ExtractedComponent> deterministic,
+        ExtractedGeometry geometry)
+    {
+        if (deterministic.Count > 0)
+        {
             return deterministic;
         }
+
+        var scale = ScaleToMillimeter(geometry.DetectedUnit);
+        var extents = ComputeExtents(geometry, scale);
+
+        if (extents.Width <= 0 || extents.Height <= 0)
+        {
+            return deterministic;
+        }
+
+        return new List<ExtractedComponent>
+        {
+            new ExtractedComponent
+            {
+                ComponentType = ComponentType.Generic,
+                Name = "Drawing",
+                SequenceIndex = 1,
+                Width = ToDecimal(extents.Width),
+                Height = ToDecimal(extents.Height),
+                HasHatch = geometry.Hatches.Count > 0,
+                Confidence = 0.50m,
+                RawDataJson = JsonSerializer.Serialize(new { Source = "Extents", extents.Width, extents.Height })
+            }
+        };
     }
 
     private static ComponentClassificationRequest BuildRequest(
@@ -168,10 +208,28 @@ public class AiComponentClassifier : IAiComponentClassifier
 
         FillMissingFromExtents(component, extents);
 
+        var profile = component.ComponentType.IsProfile()
+            ? StructuralProfileExtractor.Extract(geometry, scale)
+            : null;
+
+        if (profile is not null)
+        {
+            component.Width = ToDecimal(profile.BoundingWidth);
+            component.Height = ToDecimal(profile.BoundingHeight);
+        }
+        else if (component.ComponentType is ComponentType.Door or ComponentType.Window or ComponentType.Duct or ComponentType.Generic
+            && extents.Width > 0
+            && extents.Height > 0)
+        {
+            component.Width = ToDecimal(extents.Width);
+            component.Height = ToDecimal(extents.Height);
+        }
+
         component.RawDataJson = JsonSerializer.Serialize(new
         {
             Source = "AI",
             result.Reasoning,
+            Profile = profile,
             Patterns = matches.Select(m => new
             {
                 Type = m.Pattern.ComponentType.ToString(),
@@ -197,6 +255,15 @@ public class AiComponentClassifier : IAiComponentClassifier
             case ComponentType.Door:
             case ComponentType.Window:
             case ComponentType.Duct:
+            case ComponentType.Generic:
+            case ComponentType.Head:
+            case ComponentType.Jamb:
+            case ComponentType.Mullion:
+            case ComponentType.Sill:
+            case ComponentType.Bracket:
+            case ComponentType.Flange:
+            case ComponentType.Panel:
+            case ComponentType.CustomProfile:
                 component.Width ??= width;
                 component.Height ??= height;
                 break;

@@ -30,7 +30,8 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
 
     private const string SystemPrompt =
         "You classify mechanical and architectural CAD drawings. "
-        + "You reply with one JSON object and nothing else. No markdown, no commentary.";
+        + "You reply with exactly one JSON object. The first character of your reply is { and the last character is }. "
+        + "No markdown, no code fences, no text before or after the object, no comments, no trailing commas. Use double quotes for every key and string.";
 
     private readonly LlmOptions _options;
     private readonly ILogger<LLamaGenerationService> _logger;
@@ -142,7 +143,7 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
             maxTokens,
             AnalysisMaxResponseChars,
             Math.Max(5, _options.InferenceTimeoutSeconds),
-            raw => AssemblyOutputValidator.ParseAnalysis(raw, request.Tree, (decimal)_options.MinConfidence),
+            raw => AssemblyOutputValidator.ParseAnalysis(JsonExtractor.WithPrefill(raw), request.Tree, (decimal)_options.MinConfidence),
             error => new AssemblyAnalysisResult { Success = false, Error = error },
             result => result.Success,
             cancellationToken);
@@ -209,7 +210,7 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
             {
                 await Task.Run(() => EnsureModelLoaded(modelPath), CancellationToken.None);
 
-                var promptChars = (int)Math.Max(1500, ((long)_options.ContextSize - maxTokens - 64) * 3);
+                var promptChars = (int)Math.Max(1500, ((long)_options.ContextSize - maxTokens - 64) * 2);
                 var attempts = 1 + Math.Max(0, _options.MaxRetries);
                 var last = fail("The AI model returned no usable answer.");
 
@@ -340,7 +341,7 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
 
     private string BuildPrompt(ComponentClassificationRequest request)
     {
-        var maxChars = (int)Math.Max(1500, ((long)_options.ContextSize - _options.MaxTokens - 64) * 3);
+        var maxChars = (int)Math.Max(1500, ((long)_options.ContextSize - _options.MaxTokens - 64) * 2);
         var prompt = string.Empty;
 
         foreach (var textLimit in TextLimits)
@@ -363,6 +364,7 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
         user.AppendLine("Classify the main component in this CAD drawing.");
         user.AppendLine();
         user.AppendLine("Allowed componentType values: " + types + ".");
+        user.AppendLine("The drawing can be anything: a door, window, duct, scrubber, vessel, frame, profile or any other part. Do not assume a cylinder, cone or cyclone unless round shapes are clearly present. Flat stepped or notched outlines are profiles: answer Head, Jamb, Mullion, Sill, Bracket, Flange, Panel or CustomProfile. If nothing fits, answer Generic.");
         user.AppendLine();
         user.AppendLine("Drawing summary:");
         user.AppendLine(Truncate(request.DrawingSummary, 600));
@@ -436,11 +438,12 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
 
         return "<|system|>\n" + SystemPrompt + "<|end|>\n"
             + "<|user|>\n" + user.ToString().TrimEnd() + "<|end|>\n"
-            + "<|assistant|>\n";
+            + "<|assistant|>\n{";
     }
 
     private (ComponentClassificationResult Result, bool Retryable) ParseAndValidate(string raw)
     {
+        raw = JsonExtractor.WithPrefill(raw);
         var json = ExtractJsonObject(raw);
         if (json == null)
         {
@@ -450,7 +453,7 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(json);
+            document = JsonDocument.Parse(json, JsonExtractor.ParseOptions);
         }
         catch (JsonException)
         {
@@ -548,57 +551,7 @@ public sealed class LLamaGenerationService : ILLMGenerationService, IDisposable
 
     private static string? ExtractJsonObject(string raw)
     {
-        var start = raw.IndexOf('{');
-        if (start < 0)
-        {
-            return null;
-        }
-
-        var depth = 0;
-        var inString = false;
-        var escaped = false;
-
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-
-            if (inString)
-            {
-                if (escaped)
-                {
-                    escaped = false;
-                }
-                else if (c == '\\')
-                {
-                    escaped = true;
-                }
-                else if (c == '"')
-                {
-                    inString = false;
-                }
-
-                continue;
-            }
-
-            if (c == '"')
-            {
-                inString = true;
-            }
-            else if (c == '{')
-            {
-                depth++;
-            }
-            else if (c == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    return raw.Substring(start, i - start + 1);
-                }
-            }
-        }
-
-        return null;
+        return JsonExtractor.Extract(raw);
     }
 
     private static bool TryGetProperty(JsonElement root, string name, out JsonElement value)

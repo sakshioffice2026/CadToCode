@@ -54,7 +54,7 @@ public static class AssemblyOutputValidator
         JsonDocument document;
         try
         {
-            document = JsonDocument.Parse(json);
+            document = JsonDocument.Parse(json, JsonExtractor.ParseOptions);
         }
         catch (JsonException)
         {
@@ -632,62 +632,7 @@ public static class AssemblyOutputValidator
 
     private static string? ExtractJsonObject(string raw)
     {
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-
-        var start = raw.IndexOf('{');
-        if (start < 0)
-        {
-            return null;
-        }
-
-        var depth = 0;
-        var inString = false;
-        var escaped = false;
-
-        for (var i = start; i < raw.Length; i++)
-        {
-            var c = raw[i];
-
-            if (inString)
-            {
-                if (escaped)
-                {
-                    escaped = false;
-                }
-                else if (c == '\\')
-                {
-                    escaped = true;
-                }
-                else if (c == '"')
-                {
-                    inString = false;
-                }
-
-                continue;
-            }
-
-            if (c == '"')
-            {
-                inString = true;
-            }
-            else if (c == '{')
-            {
-                depth++;
-            }
-            else if (c == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    return raw.Substring(start, i - start + 1);
-                }
-            }
-        }
-
-        return null;
+        return JsonExtractor.Extract(raw);
     }
 
     private static string GetString(JsonElement element, string name)

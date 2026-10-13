@@ -18,6 +18,7 @@ public class ComponentDto
     public decimal? Angle { get; set; }
     public bool HasHatch { get; set; }
     public bool IsManuallyEdited { get; set; }
+    public StructuralProfile? Profile { get; set; }
     public decimal Confidence { get; set; }
     public DateTime CreatedAt { get; set; }
 }

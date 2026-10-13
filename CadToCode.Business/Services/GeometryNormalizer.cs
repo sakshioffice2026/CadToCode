@@ -9,7 +9,18 @@ namespace CadToCode.Business.Services;
 
 public class GeometryNormalizer : IGeometryNormalizer
 {
-    private static readonly string[] IgnoredMarkers = { "center", "centre", "dim", "hidden", "phantom", "dash" };
+    private const double MinExplainedFraction = 0.85;
+
+    private static readonly string[] IgnoredMarkers = { "center", "centre", "axis", "dim", "hidden", "phantom", "dash" };
+
+    private static readonly string[] AxisMarkers = { "center", "centre", "axis" };
+
+    private static readonly string[] RevolveSymbols = { "\u00D8", "\u2300", "%%c" };
+
+    private static readonly HashSet<string> RevolveWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dia", "diameter", "cyl", "cylinder", "cylindrical", "cone", "conical", "cyclone", "tank", "vessel", "shaft", "pipe", "tube", "hopper"
+    };
 
     private readonly ExtractionOptions _options;
 
@@ -46,39 +57,52 @@ public class GeometryNormalizer : IGeometryNormalizer
         var found = new List<(double CenterY, ExtractedComponent Component)>();
 
         var cylinder = FindCylinder(vertical);
-        if (cylinder is not null)
+        var cone = FindCone(slanted);
+
+        if (HasRevolveEvidence(geometry, cylinder, cone) && IsExplainedByPrimitives(segments, cylinder, cone))
         {
-            var c = cylinder.Value;
-            found.Add(((c.BottomY + c.TopY) / 2.0, new ExtractedComponent
+            if (cylinder is not null)
             {
-                ComponentType = ComponentType.Cylinder,
-                Name = "Cylinder",
-                Height = ToDecimal(c.Height),
-                Diameter = ToDecimal(c.Diameter),
-                HasHatch = HasHatchNear(hatches, c.CenterX - c.Diameter / 2.0, c.CenterX + c.Diameter / 2.0, c.BottomY, c.TopY),
-                Confidence = 1.00m,
-                RawDataJson = JsonSerializer.Serialize(new { c.Height, c.Diameter, c.CenterX, c.BottomY, c.TopY })
-            }));
+                var c = cylinder.Value;
+                found.Add(((c.BottomY + c.TopY) / 2.0, new ExtractedComponent
+                {
+                    ComponentType = ComponentType.Cylinder,
+                    Name = "Cylinder",
+                    Height = ToDecimal(c.Height),
+                    Diameter = ToDecimal(c.Diameter),
+                    HasHatch = HasHatchNear(hatches, c.CenterX - c.Diameter / 2.0, c.CenterX + c.Diameter / 2.0, c.BottomY, c.TopY),
+                    Confidence = 1.00m,
+                    RawDataJson = JsonSerializer.Serialize(new { c.Height, c.Diameter, c.CenterX, c.BottomY, c.TopY })
+                }));
+            }
+
+            if (cone is not null)
+            {
+                var c = cone.Value;
+                var maxDiameter = Math.Max(c.TopDiameter, c.BottomDiameter);
+
+                found.Add(((c.BottomY + c.TopY) / 2.0, new ExtractedComponent
+                {
+                    ComponentType = ComponentType.Cone,
+                    Name = "Cone",
+                    Height = ToDecimal(c.Height),
+                    TopDiameter = ToDecimal(c.TopDiameter),
+                    BottomDiameter = ToDecimal(c.BottomDiameter),
+                    Angle = ToDecimal(c.Angle),
+                    HasHatch = HasHatchNear(hatches, c.CenterX - maxDiameter / 2.0, c.CenterX + maxDiameter / 2.0, c.BottomY, c.TopY),
+                    Confidence = 1.00m,
+                    RawDataJson = JsonSerializer.Serialize(new { c.Height, c.TopDiameter, c.BottomDiameter, c.Angle, c.CenterX, c.BottomY, c.TopY })
+                }));
+            }
         }
 
-        var cone = FindCone(slanted);
-        if (cone is not null)
+        if (found.Count == 0)
         {
-            var c = cone.Value;
-            var maxDiameter = Math.Max(c.TopDiameter, c.BottomDiameter);
-
-            found.Add(((c.BottomY + c.TopY) / 2.0, new ExtractedComponent
+            var profile = BuildProfileComponent(geometry, scale);
+            if (profile is not null)
             {
-                ComponentType = ComponentType.Cone,
-                Name = "Cone",
-                Height = ToDecimal(c.Height),
-                TopDiameter = ToDecimal(c.TopDiameter),
-                BottomDiameter = ToDecimal(c.BottomDiameter),
-                Angle = ToDecimal(c.Angle),
-                HasHatch = HasHatchNear(hatches, c.CenterX - maxDiameter / 2.0, c.CenterX + maxDiameter / 2.0, c.BottomY, c.TopY),
-                Confidence = 1.00m,
-                RawDataJson = JsonSerializer.Serialize(new { c.Height, c.TopDiameter, c.BottomDiameter, c.Angle, c.CenterX, c.BottomY, c.TopY })
-            }));
+                found.Add((0.0, profile));
+            }
         }
 
         var ordered = found.OrderByDescending(f => f.CenterY).Select(f => f.Component).ToList();
@@ -88,6 +112,190 @@ public class GeometryNormalizer : IGeometryNormalizer
         }
 
         return ordered;
+    }
+
+    private static ExtractedComponent? BuildProfileComponent(ExtractedGeometry geometry, double scale)
+    {
+        var profile = StructuralProfileExtractor.Extract(geometry, scale);
+        if (profile is null || profile.BoundingWidth <= 0 || profile.BoundingHeight <= 0)
+        {
+            return null;
+        }
+
+        var hints = geometry.Texts.Select(t => (string?)t.Text).Concat(geometry.Layers.Select(l => (string?)l));
+        var type = ProfileKeywordResolver.Resolve(hints) ?? ComponentType.CustomProfile;
+
+        return new ExtractedComponent
+        {
+            ComponentType = type,
+            Name = type == ComponentType.CustomProfile ? "Custom profile" : type + " profile",
+            Width = ToDecimal(profile.BoundingWidth),
+            Height = ToDecimal(profile.BoundingHeight),
+            HasHatch = geometry.Hatches.Count > 0,
+            Confidence = profile.IsClosed ? 0.90m : 0.60m,
+            RawDataJson = profile.ToRawJson()
+        };
+    }
+
+    private bool HasRevolveEvidence(ExtractedGeometry geometry, CylinderCandidate? cylinder, ConeCandidate? cone)
+    {
+        if (cylinder is null && cone is null)
+        {
+            return false;
+        }
+
+        if (cylinder is not null && cone is not null)
+        {
+            var reference = Math.Max(cylinder.Value.Diameter, Math.Max(cone.Value.TopDiameter, cone.Value.BottomDiameter));
+            if (Math.Abs(cylinder.Value.CenterX - cone.Value.CenterX) <= Tolerance(reference))
+            {
+                return true;
+            }
+        }
+
+        if (geometry.Lines.Any(l => IsAxis(l.Layer, l.LineType))
+            || geometry.Polylines.Any(p => IsAxis(p.Layer, p.LineType)))
+        {
+            return true;
+        }
+
+        var sources = geometry.Texts.Select(t => t.Text)
+            .Concat(geometry.Dimensions.Select(d => d.Text ?? string.Empty))
+            .Concat(geometry.Layers)
+            .Where(t => !string.IsNullOrWhiteSpace(t));
+
+        foreach (var source in sources)
+        {
+            if (RevolveSymbols.Any(symbol => source.Contains(symbol, StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+
+            var tokens = System.Text.RegularExpressions.Regex.Split(source.ToLowerInvariant(), "[^a-z]+");
+            if (tokens.Any(token => token.Length > 0 && RevolveWords.Contains(token)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsExplainedByPrimitives(List<Segment> segments, CylinderCandidate? cylinder, ConeCandidate? cone)
+    {
+        if (cylinder is null && cone is null)
+        {
+            return false;
+        }
+
+        var total = segments.Sum(s => s.Length);
+        if (total <= 0)
+        {
+            return false;
+        }
+
+        var explained = 0.0;
+
+        foreach (var segment in segments)
+        {
+            if ((cylinder is not null && ExplainedByCylinder(segment, cylinder.Value))
+                || (cone is not null && ExplainedByCone(segment, cone.Value)))
+            {
+                explained += segment.Length;
+            }
+        }
+
+        return explained / total >= MinExplainedFraction;
+    }
+
+    private bool ExplainedByCylinder(Segment segment, CylinderCandidate c)
+    {
+        var tolerance = Tolerance(c.Diameter);
+        var left = c.CenterX - c.Diameter / 2.0;
+        var right = c.CenterX + c.Diameter / 2.0;
+
+        if (AngleFromVertical(segment) <= _options.ParallelLineToleranceDegrees)
+        {
+            var x = (segment.TopX + segment.BottomX) / 2.0;
+
+            return (Math.Abs(x - left) <= tolerance || Math.Abs(x - right) <= tolerance)
+                && segment.BottomY >= c.BottomY - tolerance
+                && segment.TopY <= c.TopY + tolerance;
+        }
+
+        if (IsHorizontal(segment))
+        {
+            var y = (segment.TopY + segment.BottomY) / 2.0;
+            var minX = Math.Min(segment.TopX, segment.BottomX);
+            var maxX = Math.Max(segment.TopX, segment.BottomX);
+
+            return (Math.Abs(y - c.TopY) <= tolerance || Math.Abs(y - c.BottomY) <= tolerance)
+                && minX >= left - tolerance
+                && maxX <= right + tolerance;
+        }
+
+        return false;
+    }
+
+    private bool ExplainedByCone(Segment segment, ConeCandidate k)
+    {
+        var maxDiameter = Math.Max(k.TopDiameter, k.BottomDiameter);
+        var tolerance = Tolerance(maxDiameter);
+        var span = k.TopY - k.BottomY;
+
+        if (span <= 0)
+        {
+            return false;
+        }
+
+        double SideX(double y, double side)
+        {
+            var t = (y - k.BottomY) / span;
+            var half = k.BottomDiameter / 2.0 + (k.TopDiameter / 2.0 - k.BottomDiameter / 2.0) * t;
+            return k.CenterX + side * half;
+        }
+
+        if (IsHorizontal(segment))
+        {
+            var y = (segment.TopY + segment.BottomY) / 2.0;
+            var minX = Math.Min(segment.TopX, segment.BottomX);
+            var maxX = Math.Max(segment.TopX, segment.BottomX);
+
+            return (Math.Abs(y - k.TopY) <= tolerance || Math.Abs(y - k.BottomY) <= tolerance)
+                && minX >= k.CenterX - maxDiameter / 2.0 - tolerance
+                && maxX <= k.CenterX + maxDiameter / 2.0 + tolerance;
+        }
+
+        foreach (var side in new[] { -1.0, 1.0 })
+        {
+            if (Math.Abs(SideX(segment.TopY, side) - segment.TopX) <= tolerance
+                && Math.Abs(SideX(segment.BottomY, side) - segment.BottomX) <= tolerance)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsHorizontal(Segment segment)
+    {
+        var dx = Math.Abs(segment.TopX - segment.BottomX);
+        var dy = Math.Abs(segment.TopY - segment.BottomY);
+        var angle = Math.Atan2(dy, dx) * 180.0 / Math.PI;
+
+        return angle <= _options.ParallelLineToleranceDegrees;
+    }
+
+    private static bool IsAxis(string? layer, string? lineType)
+    {
+        return Contains(layer) || Contains(lineType);
+
+        static bool Contains(string? value)
+        {
+            return !string.IsNullOrWhiteSpace(value)
+                && AxisMarkers.Any(m => value.Contains(m, StringComparison.OrdinalIgnoreCase));
+        }
     }
 
     private CylinderCandidate? FindCylinder(List<Segment> vertical)
