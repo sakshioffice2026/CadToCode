@@ -434,6 +434,141 @@ public static class StructuralProfileExtractor
         return any ? (minX, minY, maxX, maxY) : null;
     }
 
+    public static string BuildSignature(AssemblyNode node, double scaleToMm)
+    {
+        var (small, large) = SortedExtents(node, scaleToMm);
+        var culture = System.Globalization.CultureInfo.InvariantCulture;
+
+        return string.Format(
+            culture,
+            "{0}:{1:0.##}x{2:0.##}:L{3}A{4}C{5}P{6}H{7}",
+            node.Shape,
+            small,
+            large,
+            node.LineCount,
+            node.ArcCount,
+            node.CircleCount,
+            node.PolylineCount,
+            node.HatchCount);
+    }
+
+    public static List<SharedProfileGroup> CatalogShared(
+        IReadOnlyList<AssemblyNode> nodes,
+        double scaleToMm,
+        double relativeTolerance = 0.02)
+    {
+        var result = new List<SharedProfileGroup>();
+        if (nodes == null || nodes.Count == 0)
+        {
+            return result;
+        }
+
+        var groups = new List<List<AssemblyNode>>();
+
+        foreach (var node in nodes)
+        {
+            if (string.IsNullOrWhiteSpace(node.AssemblyId))
+            {
+                continue;
+            }
+
+            var (_, large) = SortedExtents(node, scaleToMm);
+            if (large <= 0)
+            {
+                continue;
+            }
+
+            var placed = false;
+            foreach (var group in groups)
+            {
+                if (IsSameProfile(group[0], node, scaleToMm, relativeTolerance))
+                {
+                    group.Add(node);
+                    placed = true;
+                    break;
+                }
+            }
+
+            if (!placed)
+            {
+                groups.Add(new List<AssemblyNode> { node });
+            }
+        }
+
+        var shared = groups
+            .Where(g => g.Select(n => n.AssemblyId).Distinct(StringComparer.OrdinalIgnoreCase).Count() >= 2)
+            .OrderBy(g => g.Min(n => n.Bounds.MinX))
+            .ThenBy(g => g.Min(n => n.Bounds.MinY))
+            .ToList();
+
+        for (var i = 0; i < shared.Count; i++)
+        {
+            var members = shared[i];
+            var head = members[0];
+            var (small, large) = SortedExtents(head, scaleToMm);
+
+            var label = members
+                .SelectMany(n => n.Labels)
+                .Where(l => !string.IsNullOrWhiteSpace(l) && l.Any(char.IsLetter))
+                .Select(l => l.Trim())
+                .GroupBy(l => l, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Key)
+                .FirstOrDefault();
+
+            result.Add(new SharedProfileGroup
+            {
+                Id = "S" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Name = label ?? "SharedProfile" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Signature = BuildSignature(head, scaleToMm),
+                Shape = head.Shape,
+                Width = Math.Round(large, 4),
+                Height = Math.Round(small, 4),
+                IsHatched = head.IsFilled,
+                NodeIds = members.Select(n => n.Id).ToList(),
+                AssemblyIds = members
+                    .Select(n => n.AssemblyId!)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList()
+            });
+        }
+
+        return result;
+    }
+
+    private static bool IsSameProfile(AssemblyNode a, AssemblyNode b, double scaleToMm, double relativeTolerance)
+    {
+        if (a.Shape != b.Shape
+            || a.IsFilled != b.IsFilled
+            || a.LineCount != b.LineCount
+            || a.ArcCount != b.ArcCount
+            || a.CircleCount != b.CircleCount
+            || a.PolylineCount != b.PolylineCount
+            || a.HatchCount != b.HatchCount)
+        {
+            return false;
+        }
+
+        var (aSmall, aLarge) = SortedExtents(a, scaleToMm);
+        var (bSmall, bLarge) = SortedExtents(b, scaleToMm);
+
+        return SizeClose(aSmall, bSmall, relativeTolerance) && SizeClose(aLarge, bLarge, relativeTolerance);
+    }
+
+    private static bool SizeClose(double x, double y, double relativeTolerance)
+    {
+        var allowed = Math.Max(Math.Max(Math.Abs(x), Math.Abs(y)) * relativeTolerance, 1e-6);
+        return Math.Abs(x - y) <= allowed;
+    }
+
+    private static (double Small, double Large) SortedExtents(AssemblyNode node, double scaleToMm)
+    {
+        var width = Math.Abs(node.Bounds.Width) * scaleToMm;
+        var height = Math.Abs(node.Bounds.Height) * scaleToMm;
+        return (Math.Min(width, height), Math.Max(width, height));
+    }
+
     private static double Distance(Pt a, Pt b)
     {
         var dx = a.X - b.X;

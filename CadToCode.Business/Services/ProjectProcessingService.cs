@@ -15,6 +15,7 @@ public class ProjectProcessingService : IProjectProcessingService
     private readonly IFileStorageService _storage;
     private readonly IEnumerable<IGeometryExtractor> _extractors;
     private readonly IAiComponentClassifier _classifier;
+    private readonly ICodeGenerationService _codeGeneration;
     private readonly ILogger<ProjectProcessingService> _logger;
 
     public ProjectProcessingService(
@@ -22,12 +23,14 @@ public class ProjectProcessingService : IProjectProcessingService
         IFileStorageService storage,
         IEnumerable<IGeometryExtractor> extractors,
         IAiComponentClassifier classifier,
+        ICodeGenerationService codeGeneration,
         ILogger<ProjectProcessingService> logger)
     {
         _unitOfWork = unitOfWork;
         _storage = storage;
         _extractors = extractors;
         _classifier = classifier;
+        _codeGeneration = codeGeneration;
         _logger = logger;
     }
 
@@ -51,6 +54,8 @@ public class ProjectProcessingService : IProjectProcessingService
         {
             return new UploadResultDto { Success = false, ErrorMessage = ex.Message };
         }
+
+        UploadResultDto result;
 
         try
         {
@@ -89,7 +94,7 @@ public class ProjectProcessingService : IProjectProcessingService
 
             await _unitOfWork.CommitAsync(cancellationToken);
 
-            return new UploadResultDto
+            result = new UploadResultDto
             {
                 Success = errorMessage is null,
                 ProjectId = projectId,
@@ -110,6 +115,13 @@ public class ProjectProcessingService : IProjectProcessingService
 
             return new UploadResultDto { Success = false, ErrorMessage = "The upload could not be processed." };
         }
+
+        if (result.Success && result.ProjectId.HasValue)
+        {
+            await RunAssemblyAnalysisAsync(result.ProjectId.Value, cancellationToken);
+        }
+
+        return result;
     }
 
     public Task<ProjectResultDto?> GetProjectAsync(int projectId, CancellationToken cancellationToken = default)
@@ -140,6 +152,22 @@ public class ProjectProcessingService : IProjectProcessingService
         }
 
         return await _storage.OpenReadAsync(path, cancellationToken);
+    }
+
+    private async Task RunAssemblyAnalysisAsync(int projectId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _codeGeneration.GenerateAssemblyAsync(projectId, true, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Assembly analysis failed for project {ProjectId}. The rule-based result will be shown.", projectId);
+        }
     }
 
     private async Task ExtractAndSaveAsync(int projectId, SourceFileType fileType, string storedPath, string title, CancellationToken cancellationToken)

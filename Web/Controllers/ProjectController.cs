@@ -46,11 +46,6 @@ public class ProjectController : Controller
 
         if (result.ProjectId.HasValue)
         {
-            if (result.Success)
-            {
-                await _codeGenerationService.GenerateAssemblyAsync(result.ProjectId.Value, true, cancellationToken);
-            }
-
             return RedirectToAction(nameof(Details), new { id = result.ProjectId.Value });
         }
 
@@ -99,30 +94,6 @@ public class ProjectController : Controller
 
         TempData["Success"] = "Component updated.";
         return RedirectToAction(nameof(Details), new { id = component.ProjectId });
-    }
-
-    [HttpPost]
-    [ValidateAntiForgeryToken]
-    public async Task<IActionResult> RefineWithAi(int id, CancellationToken cancellationToken)
-    {
-        var project = await _processingService.GetProjectAsync(id, cancellationToken);
-        if (project is null)
-        {
-            return NotFound();
-        }
-
-        var result = await _codeGenerationService.GenerateAssemblyAsync(id, true, cancellationToken);
-
-        if (result.Success && result.Source == AssemblyCodeSource.Ai)
-        {
-            TempData["Success"] = "AI refinement complete.";
-        }
-        else
-        {
-            TempData["Error"] = "AI refinement was not used: " + (result.FallbackReason ?? result.Error ?? "unknown reason") + ".";
-        }
-
-        return RedirectToAction(nameof(Details), new { id });
     }
 
     [HttpPost]

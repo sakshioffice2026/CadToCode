@@ -1,4 +1,5 @@
 ﻿using CadToCode.Business.Interfaces;
+using System.Text.RegularExpressions;
 using CadToCode.Models.Dtos;
 
 namespace CadToCode.Business.Services;
@@ -16,6 +17,35 @@ public class ComponentDecomposer : IComponentDecomposer
     {
         "center", "centre", "hidden", "phantom", "dash", "dim", "defpoints"
     };
+
+    private const double TitleBlockMaxAreaFraction = 0.25;
+    private const double TitleBlockLinkFraction = 0.05;
+    private const double SheetBorderFraction = 0.9;
+    private const double SheetBorderEdgeFraction = 0.06;
+
+    private static readonly string[] TitleBlockLayerMarkers =
+    {
+        "titleblock", "title_block", "title-block", "title block", "tblock", "revision", "rev_table", "rev table", "stamp", "viewport"
+    };
+
+    private static readonly string[] TitleBlockKeywords =
+    {
+        "date", "drawn", "drawn by", "checked", "checked by", "approved", "approved by", "designed by",
+        "scale", "sheet no", "sheet of", "rev", "revision", "drawing no", "drawing number", "drg no", "dwg no",
+        "title", "project", "client", "customer", "company", "general tolerance", "tolerance"
+    };
+
+    private static readonly Regex NumericDatePattern = new(
+        @"^\d{1,4}[./\-]\d{1,2}[./\-]\d{1,4}$",
+        RegexOptions.Compiled);
+
+    private static readonly Regex MonthDatePattern = new(
+        @"^\d{1,2}[\s\-./]?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\-./,]*\d{2,4}$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex ScalePattern = new(
+        @"^(scale\s*[:=]?\s*)?\d+(\.\d+)?\s*:\s*\d+(\.\d+)?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private enum PrimitiveKind
     {
@@ -52,6 +82,9 @@ public class ComponentDecomposer : IComponentDecomposer
         {
             return nodes;
         }
+
+        var titleBlock = RemoveTitleBlock(geometry, items);
+        items = titleBlock.Items;
 
         var overall = items[0].Bounds;
         foreach (var item in items)
@@ -103,7 +136,7 @@ public class ComponentDecomposer : IComponentDecomposer
             nodes.Add(CreateNode(c + 1, cluster, bounds, overall, geometry, tolerance));
         }
 
-        AssignTexts(geometry, nodes, clusterBounds, clusterSpanning, tolerance, labelReach);
+        AssignTexts(FilterTexts(geometry, titleBlock.Regions), nodes, clusterBounds, clusterSpanning, tolerance, labelReach);
         FinalizeNodes(nodes);
 
         return nodes;
@@ -205,8 +238,279 @@ public class ComponentDecomposer : IComponentDecomposer
         items.Add(new Item { Kind = kind, Index = index, Bounds = bounds });
     }
 
+    private static bool IsTitleBlockLayer(string? layer)
+    {
+        if (string.IsNullOrEmpty(layer))
+        {
+            return false;
+        }
+
+        foreach (var marker in TitleBlockLayerMarkers)
+        {
+            if (layer.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsTitleBlockText(GeometryText text)
+    {
+        if (text == null || string.IsNullOrWhiteSpace(text.Text))
+        {
+            return false;
+        }
+
+        if (IsTitleBlockLayer(text.Layer))
+        {
+            return true;
+        }
+
+        var normalized = text.Text.Trim().Trim(':').Trim().ToLowerInvariant();
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        if (NumericDatePattern.IsMatch(normalized)
+            || MonthDatePattern.IsMatch(normalized)
+            || ScalePattern.IsMatch(normalized))
+        {
+            return true;
+        }
+
+        foreach (var keyword in TitleBlockKeywords)
+        {
+            if (!normalized.StartsWith(keyword, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (normalized.Length == keyword.Length || !char.IsLetterOrDigit(normalized[keyword.Length]))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static BoundingBox2D TitleTextBox(GeometryText text)
+    {
+        var height = text.Height > 0 ? text.Height : 0;
+        var lines = text.Text.Split(new[] { '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries);
+        var lineCount = Math.Max(1, lines.Length);
+        var longest = lines.Length == 0 ? text.Text.Length : lines.Max(l => l.Length);
+
+        var width = longest * height * 0.7;
+        var below = lineCount * height * 1.5;
+        var above = height * 1.5;
+
+        return new BoundingBox2D(
+            text.Position.X,
+            text.Position.Y - below,
+            text.Position.X + width,
+            text.Position.Y + above);
+    }
+
+    private static (List<Item> Items, List<BoundingBox2D> Regions) RemoveTitleBlock(
+        ExtractedGeometry geometry,
+        List<Item> items)
+    {
+        var regions = new List<BoundingBox2D>();
+
+        var matches = geometry.Texts.Where(IsTitleBlockText).ToList();
+        if (matches.Count == 0 || items.Count == 0)
+        {
+            return (items, regions);
+        }
+
+        var overall = items[0].Bounds;
+        foreach (var item in items)
+        {
+            overall = overall.Union(item.Bounds);
+        }
+
+        var diagonal = Math.Sqrt(overall.Width * overall.Width + overall.Height * overall.Height);
+        if (diagonal <= 0 || overall.Area <= 0)
+        {
+            return (items, regions);
+        }
+
+        var tolerance = diagonal * ProximityFraction;
+        var maxRegionArea = overall.Area * TitleBlockMaxAreaFraction;
+        var maxTextHeight = matches.Max(t => t.Height);
+        var linkGap = Math.Max(diagonal * TitleBlockLinkFraction, maxTextHeight * 6.0);
+
+        var boxes = matches.Select(TitleTextBox).ToList();
+        var parent = Enumerable.Range(0, boxes.Count).ToArray();
+
+        int Find(int x)
+        {
+            while (parent[x] != x)
+            {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+
+            return x;
+        }
+
+        for (var i = 0; i < boxes.Count; i++)
+        {
+            for (var j = i + 1; j < boxes.Count; j++)
+            {
+                if (boxes[i].GapTo(boxes[j]) <= linkGap)
+                {
+                    var ra = Find(i);
+                    var rb = Find(j);
+                    if (ra != rb)
+                    {
+                        parent[rb] = ra;
+                    }
+                }
+            }
+        }
+
+        foreach (var group in Enumerable.Range(0, boxes.Count).GroupBy(Find))
+        {
+            var members = group.ToList();
+            var region = boxes[members[0]];
+            var groupHeight = 0.0;
+
+            foreach (var index in members)
+            {
+                region = region.Union(boxes[index]);
+                groupHeight = Math.Max(groupHeight, matches[index].Height);
+            }
+
+            region = region.Expand(Math.Max(groupHeight * 2.0, tolerance * 2.0));
+
+            if (region.Area > maxRegionArea)
+            {
+                continue;
+            }
+
+            regions.Add(AbsorbTableLines(region, items, tolerance, maxRegionArea));
+        }
+
+        if (regions.Count == 0)
+        {
+            return (items, regions);
+        }
+
+        var kept = items
+            .Where(i => !regions.Any(r => r.Contains(i.Bounds, tolerance)) && !IsSheetBorder(i, overall))
+            .ToList();
+
+        if (kept.Count == 0)
+        {
+            return (items, new List<BoundingBox2D>());
+        }
+
+        return (kept, regions);
+    }
+
+    private static BoundingBox2D AbsorbTableLines(
+        BoundingBox2D region,
+        List<Item> items,
+        double tolerance,
+        double maxArea)
+    {
+        for (var pass = 0; pass < 3; pass++)
+        {
+            var changed = false;
+
+            foreach (var item in items)
+            {
+                if (item.Kind is not (PrimitiveKind.Line or PrimitiveKind.Polyline))
+                {
+                    continue;
+                }
+
+                if (Math.Min(item.Bounds.Width, item.Bounds.Height) > tolerance)
+                {
+                    continue;
+                }
+
+                if (region.Contains(item.Bounds, tolerance) || region.GapTo(item.Bounds) > tolerance)
+                {
+                    continue;
+                }
+
+                var union = region.Union(item.Bounds);
+                if (union.Area > maxArea)
+                {
+                    continue;
+                }
+
+                region = union;
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                break;
+            }
+        }
+
+        return region;
+    }
+
+    private static bool IsSheetBorder(Item item, BoundingBox2D overall)
+    {
+        if (item.Kind is not (PrimitiveKind.Line or PrimitiveKind.Polyline))
+        {
+            return false;
+        }
+
+        var bounds = item.Bounds;
+        var edgeX = overall.Width * SheetBorderEdgeFraction;
+        var edgeY = overall.Height * SheetBorderEdgeFraction;
+        var thinX = overall.Width * 0.002;
+        var thinY = overall.Height * 0.002;
+
+        var coversWidth = bounds.Width >= overall.Width * SheetBorderFraction;
+        var coversHeight = bounds.Height >= overall.Height * SheetBorderFraction;
+
+        if (coversWidth && coversHeight)
+        {
+            return true;
+        }
+
+        if (coversWidth && bounds.Height <= thinY
+            && (bounds.MinY <= overall.MinY + edgeY || bounds.MaxY >= overall.MaxY - edgeY))
+        {
+            return true;
+        }
+
+        if (coversHeight && bounds.Width <= thinX
+            && (bounds.MinX <= overall.MinX + edgeX || bounds.MaxX >= overall.MaxX - edgeX))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static List<GeometryText> FilterTexts(ExtractedGeometry geometry, List<BoundingBox2D> regions)
+    {
+        return geometry.Texts
+            .Where(t => !IsTitleBlockText(t)
+                && !regions.Any(r => t.Position.X >= r.MinX && t.Position.X <= r.MaxX
+                    && t.Position.Y >= r.MinY && t.Position.Y <= r.MaxY))
+            .ToList();
+    }
+
     private static bool IsIgnored(string? layer, string? lineType)
     {
+        if (IsTitleBlockLayer(layer))
+        {
+            return true;
+        }
+
         foreach (var marker in IgnoredMarkers)
         {
             if (!string.IsNullOrEmpty(layer) && layer.Contains(marker, StringComparison.OrdinalIgnoreCase))
@@ -598,14 +902,14 @@ public class ComponentDecomposer : IComponentDecomposer
     }
 
     private static void AssignTexts(
-        ExtractedGeometry geometry,
+        IEnumerable<GeometryText> texts,
         List<AssemblyNode> nodes,
         List<BoundingBox2D> clusterBounds,
         List<bool> clusterSpanning,
         double tolerance,
         double labelReach)
     {
-        foreach (var text in geometry.Texts)
+        foreach (var text in texts)
         {
             if (string.IsNullOrWhiteSpace(text.Text))
             {

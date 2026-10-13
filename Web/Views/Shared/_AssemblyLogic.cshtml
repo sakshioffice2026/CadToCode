@@ -1,4 +1,4 @@
-﻿@model Web.Models.ProjectResultViewModel
+@model Web.Models.ProjectResultViewModel
 @using System.Globalization
 @using CadToCode.Models.Dtos
 @using CadToCode.Models.Enums
@@ -47,14 +47,6 @@
                     <text>&nbsp;|&nbsp;@Percent(assembly.Confidence)</text>
                 }
             </span>
-
-            @if (Model.HasAssembly && !Model.UsedAi)
-            {
-                <form asp-controller="Project" asp-action="RefineWithAi" asp-route-id="@Model.Project.Id" method="post"
-                      onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Running AI...';">
-                    <button type="submit" class="cc-btn cc-btn-small">Refine with AI</button>
-                </form>
-            }
         </div>
     </div>
 
@@ -63,25 +55,11 @@
         {
             <div class="cc-empty">
                 <p class="cc-empty-title">No assembly logic available</p>
-                <p class="mb-0">@(assembly.Error ?? "Relationships appear once sub-components are detected.")</p>
+                <p class="mb-0">Relationships appear once sub-components are detected.</p>
             </div>
         }
         else
         {
-            @if (!Model.UsedAi && !string.IsNullOrWhiteSpace(assembly.FallbackReason))
-            {
-                <div class="cc-alert cc-alert-note">
-                    @if (assembly.FallbackReason.StartsWith("it has not been run", StringComparison.OrdinalIgnoreCase))
-                    {
-                        <text>Measurements come from the drawing. AI naming has not been run yet. Click "Refine with AI" to run it.</text>
-                    }
-                    else
-                    {
-                        <text>Measurements come from the drawing. AI naming failed: @assembly.FallbackReason</text>
-                    }
-                </div>
-            }
-
             @if (!string.IsNullOrWhiteSpace(assembly.Analysis?.AssemblyName) || !string.IsNullOrWhiteSpace(assembly.Analysis?.Summary))
             {
                 <div class="cc-logic-block">

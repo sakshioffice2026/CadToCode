@@ -100,6 +100,8 @@ public class AssemblyNode
     public string? ParentId { get; set; }
     public List<string> ChildIds { get; set; } = new();
     public string? ArrayGroupId { get; set; }
+    public string? AssemblyId { get; set; }
+    public string? SharedProfileId { get; set; }
 
     [JsonIgnore]
     public ExtractedGeometry Geometry { get; set; } = new();
@@ -136,10 +138,38 @@ public class AssemblyArrayGroup
     public string? CenterNodeId { get; set; }
 }
 
+public class ComponentAssembly
+{
+    public string Id { get; set; } = string.Empty;
+    public string AssemblyName { get; set; } = string.Empty;
+    public string Category { get; set; } = "Unknown";
+    public BoundingBox2D Bounds { get; set; } = new(0, 0, 0, 0);
+    public List<string> NodeIds { get; set; } = new();
+    public List<string> Labels { get; set; } = new();
+    public decimal Confidence { get; set; }
+}
+
+public class SharedProfileGroup
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Signature { get; set; } = string.Empty;
+    public PartShape Shape { get; set; } = PartShape.Unknown;
+    public double Width { get; set; }
+    public double Height { get; set; }
+    public bool IsHatched { get; set; }
+    public List<string> NodeIds { get; set; } = new();
+    public List<string> AssemblyIds { get; set; } = new();
+    public int Count => NodeIds.Count;
+}
+
 public class AssemblyTree
 {
     public DrawingUnit Unit { get; set; } = DrawingUnit.Millimeter;
     public BoundingBox2D Bounds { get; set; } = new(0, 0, 0, 0);
+    public List<ComponentAssembly> Assemblies { get; set; } = new();
+    public int AssemblyCount => Assemblies.Count;
+    public List<SharedProfileGroup> SharedProfiles { get; set; } = new();
     public List<AssemblyNode> Nodes { get; set; } = new();
     public List<AssemblyRelation> Relations { get; set; } = new();
     public List<AssemblyArrayGroup> Arrays { get; set; } = new();

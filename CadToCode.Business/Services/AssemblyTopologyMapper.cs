@@ -12,6 +12,22 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
     private const int MinArrayMembers = 3;
     private const int MaxRelations = 4000;
     private const int MaxSymmetryGroup = 200;
+    private const double IslandMinGapFraction = 0.03;
+    private const double IslandJumpRatio = 2.5;
+    private const double IslandPairSizeFactor = 0.5;
+    private const int MaxIslandNodes = 600;
+
+    private static readonly (string[] Keywords, string Category)[] CategoryRules =
+    {
+        (new[] { "door" }, "Door"),
+        (new[] { "window", "glazing", "sash" }, "Window"),
+        (new[] { "fan", "impeller", "rotor", "blade" }, "Fan"),
+        (new[] { "flange", "gasket", "bolt" }, "Flange"),
+        (new[] { "cyclone" }, "Cyclone"),
+        (new[] { "duct" }, "Duct"),
+        (new[] { "bracket" }, "Bracket"),
+        (new[] { "panel", "glass" }, "Panel")
+    };
 
     public AssemblyTree Map(ExtractedGeometry geometry, IReadOnlyList<AssemblyNode> nodes)
     {
@@ -51,6 +67,8 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
         ResetLinks(list);
         BuildHierarchy(list, tolerance);
         tree.RootIds = list.Where(n => n.ParentId == null).Select(n => n.Id).ToList();
+        tree.Assemblies = DetectAssemblies(list, diagonal, tolerance);
+        tree.SharedProfiles = BuildSharedProfiles(list, tree.Unit);
         tree.Arrays = DetectArrays(list, tolerance);
         BuildRelations(tree, list, tolerance, adjacentReach, alignReach);
         AddSymmetry(tree, list, tolerance);
@@ -65,6 +83,8 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
             node.ParentId = null;
             node.ChildIds = new List<string>();
             node.ArrayGroupId = null;
+            node.AssemblyId = null;
+            node.SharedProfileId = null;
         }
     }
 
@@ -847,6 +867,273 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
                 }
             }
         }
+    }
+
+    private static List<ComponentAssembly> DetectAssemblies(List<AssemblyNode> list, double diagonal, double tolerance)
+    {
+        var assemblies = new List<ComponentAssembly>();
+
+        var roots = list.Where(n => n.ParentId == null).ToList();
+        if (roots.Count == 0)
+        {
+            return assemblies;
+        }
+
+        var byId = list.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
+        var groups = ClusterIslands(roots, diagonal, tolerance);
+
+        var ordered = groups
+            .Select(g => new { Roots = g, Bounds = UnionBounds(g) })
+            .OrderBy(g => g.Bounds.MinX)
+            .ThenBy(g => g.Bounds.MinY)
+            .ToList();
+
+        for (var i = 0; i < ordered.Count; i++)
+        {
+            var members = new List<AssemblyNode>();
+            foreach (var root in ordered[i].Roots)
+            {
+                CollectWithDescendants(root, byId, members);
+            }
+
+            var id = "A" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var (category, confidence) = ClassifyAssembly(members);
+
+            var labels = members
+                .SelectMany(n => n.Labels)
+                .Where(l => !string.IsNullOrWhiteSpace(l) && l.Any(char.IsLetter))
+                .Select(l => l.Trim())
+                .GroupBy(l => l, StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(g => g.Count())
+                .ThenBy(g => g.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(g => g.Key)
+                .Take(8)
+                .ToList();
+
+            foreach (var member in members)
+            {
+                member.AssemblyId = id;
+            }
+
+            assemblies.Add(new ComponentAssembly
+            {
+                Id = id,
+                AssemblyName = labels.Count > 0 && category == "Assembly"
+                    ? labels[0]
+                    : category + " " + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Category = category,
+                Bounds = ordered[i].Bounds,
+                NodeIds = members.Select(n => n.Id).ToList(),
+                Labels = labels,
+                Confidence = confidence
+            });
+        }
+
+        return assemblies;
+    }
+
+    private static List<SharedProfileGroup> BuildSharedProfiles(List<AssemblyNode> list, CadToCode.Models.Enums.DrawingUnit unit)
+    {
+        var scale = unit switch
+        {
+            CadToCode.Models.Enums.DrawingUnit.Centimeter => 10.0,
+            CadToCode.Models.Enums.DrawingUnit.Meter => 1000.0,
+            CadToCode.Models.Enums.DrawingUnit.Inch => 25.4,
+            CadToCode.Models.Enums.DrawingUnit.Foot => 304.8,
+            _ => 1.0
+        };
+
+        var shared = StructuralProfileExtractor.CatalogShared(list, scale);
+        var byId = list.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var group in shared)
+        {
+            foreach (var nodeId in group.NodeIds)
+            {
+                if (byId.TryGetValue(nodeId, out var node))
+                {
+                    node.SharedProfileId = group.Id;
+                }
+            }
+        }
+
+        return shared;
+    }
+
+    private static BoundingBox2D UnionBounds(List<AssemblyNode> nodes)
+    {
+        var bounds = nodes[0].Bounds;
+        foreach (var node in nodes)
+        {
+            bounds = bounds.Union(node.Bounds);
+        }
+
+        return bounds;
+    }
+
+    private static void CollectWithDescendants(
+        AssemblyNode root,
+        Dictionary<string, AssemblyNode> byId,
+        List<AssemblyNode> output)
+    {
+        var stack = new Stack<AssemblyNode>();
+        stack.Push(root);
+
+        while (stack.Count > 0)
+        {
+            var node = stack.Pop();
+            output.Add(node);
+
+            foreach (var childId in node.ChildIds)
+            {
+                if (byId.TryGetValue(childId, out var child))
+                {
+                    stack.Push(child);
+                }
+            }
+        }
+    }
+
+    private static List<List<AssemblyNode>> ClusterIslands(List<AssemblyNode> roots, double diagonal, double tolerance)
+    {
+        var single = new List<List<AssemblyNode>> { roots };
+
+        if (roots.Count < 2 || roots.Count > MaxIslandNodes)
+        {
+            return single;
+        }
+
+        var edges = new List<(double Gap, int A, int B)>();
+        for (var i = 0; i < roots.Count; i++)
+        {
+            for (var j = i + 1; j < roots.Count; j++)
+            {
+                edges.Add((roots[i].Bounds.GapTo(roots[j].Bounds), i, j));
+            }
+        }
+
+        edges.Sort((x, y) => x.Gap.CompareTo(y.Gap));
+
+        var parent = Enumerable.Range(0, roots.Count).ToArray();
+
+        int Find(int x)
+        {
+            while (parent[x] != x)
+            {
+                parent[x] = parent[parent[x]];
+                x = parent[x];
+            }
+
+            return x;
+        }
+
+        var mst = new List<(double Gap, int A, int B)>();
+        foreach (var edge in edges)
+        {
+            var ra = Find(edge.A);
+            var rb = Find(edge.B);
+            if (ra == rb)
+            {
+                continue;
+            }
+
+            parent[rb] = ra;
+            mst.Add(edge);
+        }
+
+        var minGap = diagonal * IslandMinGapFraction;
+        var cutAbove = double.PositiveInfinity;
+
+        if (mst.Count == 1)
+        {
+            var gap = mst[0].Gap;
+            var smaller = Math.Min(
+                Math.Max(roots[0].Bounds.Width, roots[0].Bounds.Height),
+                Math.Max(roots[1].Bounds.Width, roots[1].Bounds.Height));
+
+            if (gap >= minGap && gap >= smaller * IslandPairSizeFactor)
+            {
+                cutAbove = 0;
+            }
+        }
+        else
+        {
+            var bestRatio = 0.0;
+            for (var k = 0; k + 1 < mst.Count; k++)
+            {
+                var next = mst[k + 1].Gap;
+                if (next < minGap)
+                {
+                    continue;
+                }
+
+                var ratio = next / Math.Max(mst[k].Gap, tolerance);
+                if (ratio >= IslandJumpRatio && ratio > bestRatio)
+                {
+                    bestRatio = ratio;
+                    cutAbove = mst[k].Gap;
+                }
+            }
+        }
+
+        if (double.IsPositiveInfinity(cutAbove))
+        {
+            return single;
+        }
+
+        for (var i = 0; i < parent.Length; i++)
+        {
+            parent[i] = i;
+        }
+
+        foreach (var edge in mst)
+        {
+            if (edge.Gap > cutAbove)
+            {
+                continue;
+            }
+
+            var ra = Find(edge.A);
+            var rb = Find(edge.B);
+            if (ra != rb)
+            {
+                parent[rb] = ra;
+            }
+        }
+
+        return Enumerable.Range(0, roots.Count)
+            .GroupBy(Find)
+            .Select(g => g.Select(index => roots[index]).ToList())
+            .ToList();
+    }
+
+    private static (string Category, decimal Confidence) ClassifyAssembly(List<AssemblyNode> members)
+    {
+        var text = string.Join(
+            " ",
+            members.SelectMany(n => n.Labels.Concat(n.Tokens)).Select(t => t.ToLowerInvariant()));
+
+        foreach (var (keywords, category) in CategoryRules)
+        {
+            if (keywords.Any(k => text.Contains(k, StringComparison.Ordinal)))
+            {
+                return (category, 0.9m);
+            }
+        }
+
+        var circular = members.Count(n => n.Shape is PartShape.Circular or PartShape.Annular);
+        if (circular > 0 && circular * 2 >= members.Count)
+        {
+            return ("RadialAssembly", 0.6m);
+        }
+
+        var boxy = members.Count(n => n.Shape is PartShape.Rectangular or PartShape.Polygonal or PartShape.Linear);
+        if (members.Count >= 3 && boxy * 2 >= members.Count)
+        {
+            return ("FramedAssembly", 0.5m);
+        }
+
+        return ("Assembly", 0.4m);
     }
 
     private static double Distance(double x1, double y1, double x2, double y2)

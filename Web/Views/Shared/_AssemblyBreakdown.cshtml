@@ -43,6 +43,28 @@
         }
         else
         {
+            var assemblies = tree.Assemblies;
+
+            if (assemblies.Count > 0)
+            {
+                var summary = string.Join(", ", assemblies.GroupBy(a => a.Category).Select(g => g.Count() + " " + g.Key));
+
+                <div class="cc-logic-block">
+                    <p class="cc-logic-heading">Detected: @assemblies.Count @(assemblies.Count == 1 ? "Assembly" : "Assemblies") (@summary)</p>
+
+                    <ul class="cc-logic-list">
+                        @foreach (var assembly in assemblies)
+                        {
+                            <li>
+                                <strong>@assembly.AssemblyName</strong>
+                                <span class="cc-chip cc-chip-muted">@assembly.Category</span>
+                                <span class="cc-logic-detail">@assembly.NodeIds.Count parts, @Mm(assembly.Bounds.Width) x @Mm(assembly.Bounds.Height) mm</span>
+                            </li>
+                        }
+                    </ul>
+                </div>
+            }
+
             <div class="cc-table-wrap">
                 <table class="cc-stats-table">
                     <thead>
