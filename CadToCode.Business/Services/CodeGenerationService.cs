@@ -1,6 +1,5 @@
 ﻿using System.Collections.Concurrent;
 using System.Globalization;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using CadToCode.Business.Interfaces;
@@ -25,6 +24,7 @@ public class CodeGenerationService : ICodeGenerationService
     };
 
     private const int MaxCachedAssemblies = 20;
+    private const int MaxComponentNotes = 50;
 
     private static readonly ConcurrentDictionary<int, (AssemblyGenerationResult Result, DateTime StoredUtc)> AssemblyCache = new();
 
@@ -62,50 +62,40 @@ public class CodeGenerationService : ICodeGenerationService
 
     public async Task<string> GenerateAsync(int projectId, CancellationToken cancellationToken = default)
     {
+        var project = await _unitOfWork.Projects.GetByIdAsync(projectId, cancellationToken);
+        if (project is null)
+        {
+            return "// The project was not found.";
+        }
+
+        ExtractedGeometry geometry;
+
+        try
+        {
+            geometry = await ExtractGeometryAsync(projectId, project.SourceFileType, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Drawing geometry could not be read for project {ProjectId}.", projectId);
+            return "// The drawing could not be read, so no STEP script could be generated.";
+        }
+
+        if (geometry.PrimitiveCount == 0 && geometry.Texts.Count == 0 && geometry.Dimensions.Count == 0)
+        {
+            return "// No drawing entities were found for this project.";
+        }
+
         var components = await _unitOfWork.Components.GetByProjectIdAsync(projectId, cancellationToken);
+        var notes = DescribeComponents(components);
 
-        var supported = components
-            .Where(c => IsSupported(c.ComponentType))
-            .OrderBy(c => c.SequenceIndex)
-            .ToList();
-
-        if (supported.Count == 0)
-        {
-            return "// No supported components were found for this project.";
-        }
-
-        var builder = new StringBuilder();
-        builder.AppendLine("// All dimensions in millimeters, all angles in degrees.");
-        builder.AppendLine();
-
-        var typeCounts = supported
-            .GroupBy(c => c.ComponentType)
-            .ToDictionary(g => g.Key, g => g.Count());
-
-        var typeIndexes = new Dictionary<ComponentType, int>();
-
-        for (var i = 0; i < supported.Count; i++)
-        {
-            var component = supported[i];
-
-            typeIndexes.TryGetValue(component.ComponentType, out var index);
-            index++;
-            typeIndexes[component.ComponentType] = index;
-
-            var baseName = ClassNameFor(component.ComponentType);
-            var className = typeCounts[component.ComponentType] > 1
-                ? $"{baseName}{index}"
-                : baseName;
-
-            AppendClass(builder, className, component);
-
-            if (i < supported.Count - 1)
-            {
-                builder.AppendLine();
-            }
-        }
-
-        return builder.ToString();
+        return AssemblyCodeBuilder.BuildGeometryScript(
+            geometry,
+            AssemblyPromptTemplates.ToIdentifier(project.Title, "Drawing"),
+            notes);
     }
 
     public async Task<AssemblyGenerationResult> GenerateAssemblyAsync(int projectId, bool useAi, CancellationToken cancellationToken = default)
@@ -245,34 +235,10 @@ public class CodeGenerationService : ICodeGenerationService
             }
 
             result.Analysis = analysis;
-
-            var synthesis = await _llm.SynthesizeCodeAsync(
-                new CodeSynthesisRequest
-                {
-                    Tree = tree,
-                    Analysis = analysis,
-                    ClassName = className,
-                    SimilarPatterns = hints
-                },
-                cancellationToken);
-
-            if (!synthesis.Success
-                || synthesis.Confidence < minConfidence
-                || string.IsNullOrWhiteSpace(synthesis.Code))
-            {
-                _logger.LogWarning(
-                    "AI code not used for project {ProjectId}: {Error}. Raw response: {Raw}",
-                    projectId,
-                    synthesis.Error,
-                    synthesis.RawResponse);
-
-                return UseFallback(result, analysis, synthesis.Error ?? "The AI code confidence was too low.");
-            }
-
             result.Success = true;
             result.Source = AssemblyCodeSource.Ai;
-            result.Code = synthesis.Code;
-            result.Confidence = Math.Min(analysis.Confidence, synthesis.Confidence);
+            result.Code = AssemblyCodeBuilder.Build(tree, analysis, className);
+            result.Confidence = analysis.Confidence;
             return result;
         }
         catch (OperationCanceledException)
@@ -325,186 +291,55 @@ public class CodeGenerationService : ICodeGenerationService
         return type is not (ComponentType.Line or ComponentType.Arc or ComponentType.Circle or ComponentType.Hatch);
     }
 
-    private static void AppendClass(StringBuilder builder, string className, ComponentDto component)
+    private static List<string> DescribeComponents(IEnumerable<ComponentDto> components)
     {
-        builder.AppendLine($"public class {className}");
-        builder.AppendLine("{");
+        var notes = new List<string>();
 
-        switch (component.ComponentType)
+        foreach (var component in components
+                     .Where(c => IsSupported(c.ComponentType))
+                     .OrderBy(c => c.SequenceIndex)
+                     .Take(MaxComponentNotes))
         {
-            case ComponentType.Cylinder:
-                AppendProperty(builder, "Height", component.Height);
-                AppendProperty(builder, "Diameter", component.Diameter);
-                break;
+            var parts = new List<string>();
 
-            case ComponentType.Cone:
-                AppendProperty(builder, "Angle", component.Angle);
-                AppendProperty(builder, "TopDiameter", component.TopDiameter);
-                AppendProperty(builder, "BottomDiameter", component.BottomDiameter);
-                AppendProperty(builder, "Height", component.Height);
-                break;
+            AddPart(parts, "Width", component.Width);
+            AddPart(parts, "Height", component.Height);
+            AddPart(parts, "Diameter", component.Diameter);
+            AddPart(parts, "TopDiameter", component.TopDiameter);
+            AddPart(parts, "BottomDiameter", component.BottomDiameter);
+            AddPart(parts, "Angle", component.Angle);
 
-            case ComponentType.Door:
-            case ComponentType.Window:
-            case ComponentType.Duct:
-            case ComponentType.Generic:
-                AppendProperty(builder, "Width", component.Width);
-                AppendProperty(builder, "Height", component.Height);
-                break;
+            if (component.Profile is not null)
+            {
+                parts.Add("BoundingWidth " + FormatNumber(component.Profile.BoundingWidth));
+                parts.Add("BoundingHeight " + FormatNumber(component.Profile.BoundingHeight));
+            }
 
-            case ComponentType.Head:
-            case ComponentType.Jamb:
-            case ComponentType.Mullion:
-            case ComponentType.Sill:
-            case ComponentType.Bracket:
-            case ComponentType.Flange:
-            case ComponentType.Panel:
-            case ComponentType.CustomProfile:
-                AppendProfileProperties(builder, component);
-                break;
+            if (component.HasHatch)
+            {
+                parts.Add("Hatched");
+            }
 
-            case ComponentType.AxialFan:
-                AppendProperty(builder, "Diameter", component.Diameter);
-                break;
-
-            case ComponentType.Cyclone:
-                AppendProperty(builder, "Height", component.Height);
-                AppendProperty(builder, "Diameter", component.Diameter);
-                AppendProperty(builder, "TopDiameter", component.TopDiameter);
-                AppendProperty(builder, "BottomDiameter", component.BottomDiameter);
-                AppendProperty(builder, "Angle", component.Angle);
-                break;
+            notes.Add(parts.Count == 0
+                ? component.ComponentType.ToString()
+                : component.ComponentType + ": " + string.Join(", ", parts));
         }
 
-        builder.AppendLine($"    public bool HasHatch {{ get; set; }} = {(component.HasHatch ? "true" : "false")};");
-        AppendMembers(builder, component);
-        builder.AppendLine("}");
+        return notes;
     }
 
-    private static void AppendMembers(StringBuilder builder, ComponentDto component)
-    {
-        switch (component.ComponentType)
-        {
-            case ComponentType.Cylinder:
-                if (component.Height is null || component.Diameter is null)
-                {
-                    return;
-                }
-
-                builder.AppendLine();
-                builder.AppendLine("    public double Volume => System.Math.PI * Diameter * Diameter / 4.0 * Height;");
-                builder.AppendLine("    public bool IsValid() => Height > 0 && Diameter > 0;");
-                return;
-
-            case ComponentType.Cone:
-                if (component.Height is null || component.TopDiameter is null || component.BottomDiameter is null)
-                {
-                    return;
-                }
-
-                builder.AppendLine();
-                builder.AppendLine("    public double Volume => System.Math.PI * Height / 12.0 * (TopDiameter * TopDiameter + TopDiameter * BottomDiameter + BottomDiameter * BottomDiameter);");
-                builder.AppendLine("    public double ExpectedAngle => System.Math.Atan(System.Math.Abs(BottomDiameter - TopDiameter) / 2.0 / Height) * 180.0 / System.Math.PI;");
-                builder.AppendLine("    public bool IsValid() => Height > 0 && TopDiameter > 0 && BottomDiameter > 0;");
-
-                if (component.Angle is not null)
-                {
-                    builder.AppendLine("    public bool IsAngleConsistent(double toleranceDegrees = 0.5) => System.Math.Abs(Angle - ExpectedAngle) <= toleranceDegrees;");
-                }
-
-                return;
-
-            case ComponentType.Door:
-            case ComponentType.Window:
-            case ComponentType.Duct:
-            case ComponentType.Generic:
-                if (component.Width is null || component.Height is null)
-                {
-                    return;
-                }
-
-                builder.AppendLine();
-                builder.AppendLine("    public double Area => Width * Height;");
-                builder.AppendLine("    public bool IsValid() => Width > 0 && Height > 0;");
-                return;
-
-            case ComponentType.Head:
-            case ComponentType.Jamb:
-            case ComponentType.Mullion:
-            case ComponentType.Sill:
-            case ComponentType.Bracket:
-            case ComponentType.Flange:
-            case ComponentType.Panel:
-            case ComponentType.CustomProfile:
-                if (component.Width is null && component.Profile is null)
-                {
-                    return;
-                }
-
-                builder.AppendLine();
-                builder.AppendLine("    public double BoundingArea => BoundingWidth * BoundingHeight;");
-
-                if (component.Profile is not null)
-                {
-                    builder.AppendLine("    public bool HasNotches => NotchCount > 0;");
-                    builder.AppendLine("    public bool HasCutouts => InnerCutoutsCount > 0;");
-                }
-
-                builder.AppendLine("    public bool IsValid() => BoundingWidth > 0 && BoundingHeight > 0;");
-                return;
-
-            case ComponentType.AxialFan:
-                if (component.Diameter is null)
-                {
-                    return;
-                }
-
-                builder.AppendLine();
-                builder.AppendLine("    public double Area => System.Math.PI * Diameter * Diameter / 4.0;");
-                builder.AppendLine("    public bool IsValid() => Diameter > 0;");
-                return;
-        }
-    }
-
-    private static string ClassNameFor(ComponentType type)
-    {
-        if (type == ComponentType.CustomProfile)
-        {
-            return "CustomProfile";
-        }
-
-        return type.IsProfile() ? type + "Profile" : type.ToString();
-    }
-
-    private static void AppendProfileProperties(StringBuilder builder, ComponentDto component)
-    {
-        var profile = component.Profile;
-
-        var width = component.Width ?? (profile is null ? null : (decimal?)Math.Round(profile.BoundingWidth, 4));
-        var height = component.Height ?? (profile is null ? null : (decimal?)Math.Round(profile.BoundingHeight, 4));
-
-        AppendProperty(builder, "BoundingWidth", width);
-        AppendProperty(builder, "BoundingHeight", height);
-
-        if (profile is null)
-        {
-            return;
-        }
-
-        builder.AppendLine($"    public int SegmentCount {{ get; set; }} = {profile.SegmentCount.ToString(CultureInfo.InvariantCulture)};");
-        builder.AppendLine($"    public int VertexCount {{ get; set; }} = {profile.VertexCount.ToString(CultureInfo.InvariantCulture)};");
-        builder.AppendLine($"    public int InnerCutoutsCount {{ get; set; }} = {profile.InnerCutoutsCount.ToString(CultureInfo.InvariantCulture)};");
-        builder.AppendLine($"    public int NotchCount {{ get; set; }} = {profile.NotchCount.ToString(CultureInfo.InvariantCulture)};");
-    }
-
-    private static void AppendProperty(StringBuilder builder, string name, decimal? value)
+    private static void AddPart(List<string> parts, string name, decimal? value)
     {
         if (value is null)
         {
             return;
         }
 
-        var text = value.Value.ToString("0.####", CultureInfo.InvariantCulture);
-        builder.AppendLine($"    public double {name} {{ get; set; }} = {text};");
+        parts.Add(name + " " + value.Value.ToString("0.####", CultureInfo.InvariantCulture));
+    }
+
+    private static string FormatNumber(double value)
+    {
+        return Math.Round(value, 4).ToString("0.####", CultureInfo.InvariantCulture);
     }
 }

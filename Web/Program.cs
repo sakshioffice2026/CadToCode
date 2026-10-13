@@ -1,4 +1,5 @@
 using CadToCode.Business.Interfaces;
+using CadToCode.Business.Sandbox;
 using CadToCode.Business.Services;
 using CadToCode.Database;
 using CadToCode.LLM.Interfaces;
@@ -46,6 +47,7 @@ builder.Services.AddScoped<IAiComponentClassifier, AiComponentClassifier>();
 builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
 builder.Services.AddScoped<IDefinitionLearningService, DefinitionLearningService>();
 builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();
+builder.Services.AddSingleton<IStepScriptRunner, StepScriptRunner>();
 
 var app = builder.Build();
 
