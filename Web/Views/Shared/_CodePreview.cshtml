@@ -3,6 +3,7 @@
 @{
     var assembly = Model.Assembly;
     var showAssemblyCode = Model.HasAssembly && !string.IsNullOrWhiteSpace(assembly.Code);
+    var hasEntityMarkers = showAssemblyCode && assembly.Code.Contains("// id:", StringComparison.Ordinal);
 }
 
 @if (showAssemblyCode)
@@ -24,7 +25,14 @@
             </div>
         </div>
 
-        <pre class="cc-code-body" tabindex="0"><code id="cc-assembly-code" class="language-csharp" data-cc-highlight>@assembly.Code</code></pre>
+        @if (hasEntityMarkers)
+        {
+            <pre class="cc-code-body cc-entity-code" tabindex="0"><code id="cc-assembly-code" class="language-csharp">@Html.Raw(CadToCode.Business.Services.AssemblyCodeBuilder.ToEntityHtml(assembly.Code))</code></pre>
+        }
+        else
+        {
+            <pre class="cc-code-body" tabindex="0"><code id="cc-assembly-code" class="language-csharp" data-cc-highlight>@assembly.Code</code></pre>
+        }
     </section>
 }
 

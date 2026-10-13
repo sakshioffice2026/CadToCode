@@ -452,10 +452,47 @@ public static class StructuralProfileExtractor
             node.HatchCount);
     }
 
+    private const double MinSharedExtentMm = 0.5;
+    private const double DefaultAbsoluteToleranceMm = 0.05;
+
+    public static Dictionary<string, List<string>> ScopeUniqueNodes(
+        IReadOnlyList<AssemblyNode> nodes,
+        IReadOnlyList<SharedProfileGroup> shared)
+    {
+        var result = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        if (nodes == null)
+        {
+            return result;
+        }
+
+        var sharedIds = new HashSet<string>(
+            (shared ?? Array.Empty<SharedProfileGroup>()).SelectMany(g => g.NodeIds),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var node in nodes)
+        {
+            if (string.IsNullOrWhiteSpace(node.AssemblyId) || sharedIds.Contains(node.Id))
+            {
+                continue;
+            }
+
+            if (!result.TryGetValue(node.AssemblyId, out var list))
+            {
+                list = new List<string>();
+                result[node.AssemblyId] = list;
+            }
+
+            list.Add(node.Id);
+        }
+
+        return result;
+    }
+
     public static List<SharedProfileGroup> CatalogShared(
         IReadOnlyList<AssemblyNode> nodes,
         double scaleToMm,
-        double relativeTolerance = 0.02)
+        double relativeTolerance = 0.02,
+        double absoluteToleranceMm = DefaultAbsoluteToleranceMm)
     {
         var result = new List<SharedProfileGroup>();
         if (nodes == null || nodes.Count == 0)
@@ -465,23 +502,21 @@ public static class StructuralProfileExtractor
 
         var groups = new List<List<AssemblyNode>>();
 
-        foreach (var node in nodes)
+        var candidates = nodes
+            .Where(n => !string.IsNullOrWhiteSpace(n.AssemblyId) && SortedExtents(n, scaleToMm).Large >= MinSharedExtentMm)
+            .OrderBy(n => n.Shape)
+            .ThenBy(n => SortedExtents(n, scaleToMm).Large)
+            .ThenBy(n => SortedExtents(n, scaleToMm).Small)
+            .ThenBy(n => n.Bounds.MinX)
+            .ThenBy(n => n.Bounds.MinY)
+            .ToList();
+
+        foreach (var node in candidates)
         {
-            if (string.IsNullOrWhiteSpace(node.AssemblyId))
-            {
-                continue;
-            }
-
-            var (_, large) = SortedExtents(node, scaleToMm);
-            if (large <= 0)
-            {
-                continue;
-            }
-
             var placed = false;
             foreach (var group in groups)
             {
-                if (IsSameProfile(group[0], node, scaleToMm, relativeTolerance))
+                if (IsSameProfile(group[0], node, scaleToMm, relativeTolerance, absoluteToleranceMm))
                 {
                     group.Add(node);
                     placed = true;
@@ -493,6 +528,15 @@ public static class StructuralProfileExtractor
             {
                 groups.Add(new List<AssemblyNode> { node });
             }
+        }
+
+        foreach (var group in groups)
+        {
+            group.Sort((x, y) =>
+            {
+                var byX = x.Bounds.MinX.CompareTo(y.Bounds.MinX);
+                return byX != 0 ? byX : x.Bounds.MinY.CompareTo(y.Bounds.MinY);
+            });
         }
 
         var shared = groups
@@ -520,7 +564,7 @@ public static class StructuralProfileExtractor
             result.Add(new SharedProfileGroup
             {
                 Id = "S" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
-                Name = label ?? "SharedProfile" + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                Name = label ?? SharedFallbackName(head.Shape) + (i + 1).ToString(System.Globalization.CultureInfo.InvariantCulture),
                 Signature = BuildSignature(head, scaleToMm),
                 Shape = head.Shape,
                 Width = Math.Round(large, 4),
@@ -537,10 +581,17 @@ public static class StructuralProfileExtractor
         return result;
     }
 
-    private static bool IsSameProfile(AssemblyNode a, AssemblyNode b, double scaleToMm, double relativeTolerance)
+    private static bool IsSameProfile(
+        AssemblyNode a,
+        AssemblyNode b,
+        double scaleToMm,
+        double relativeTolerance,
+        double absoluteToleranceMm)
     {
         if (a.Shape != b.Shape
             || a.IsFilled != b.IsFilled
+            || a.HasClosedProfile != b.HasClosedProfile
+            || a.ChildIds.Count != b.ChildIds.Count
             || a.LineCount != b.LineCount
             || a.ArcCount != b.ArcCount
             || a.CircleCount != b.CircleCount
@@ -553,13 +604,30 @@ public static class StructuralProfileExtractor
         var (aSmall, aLarge) = SortedExtents(a, scaleToMm);
         var (bSmall, bLarge) = SortedExtents(b, scaleToMm);
 
-        return SizeClose(aSmall, bSmall, relativeTolerance) && SizeClose(aLarge, bLarge, relativeTolerance);
+        return SizeClose(aSmall, bSmall, relativeTolerance, absoluteToleranceMm)
+            && SizeClose(aLarge, bLarge, relativeTolerance, absoluteToleranceMm);
     }
 
-    private static bool SizeClose(double x, double y, double relativeTolerance)
+    private static bool SizeClose(double x, double y, double relativeTolerance, double absoluteToleranceMm)
     {
-        var allowed = Math.Max(Math.Max(Math.Abs(x), Math.Abs(y)) * relativeTolerance, 1e-6);
+        var allowed = Math.Max(
+            Math.Max(Math.Abs(x), Math.Abs(y)) * relativeTolerance,
+            Math.Max(absoluteToleranceMm, 1e-6));
+
         return Math.Abs(x - y) <= allowed;
+    }
+
+    private static string SharedFallbackName(PartShape shape)
+    {
+        return shape switch
+        {
+            PartShape.Circular => "SharedCircle",
+            PartShape.Annular => "SharedRing",
+            PartShape.Rectangular => "SharedPlate",
+            PartShape.Polygonal => "SharedPolygon",
+            PartShape.Linear => "SharedBar",
+            _ => "SharedProfile"
+        };
     }
 
     private static (double Small, double Large) SortedExtents(AssemblyNode node, double scaleToMm)

@@ -28,16 +28,42 @@ public class ComponentDecomposer : IComponentDecomposer
         "titleblock", "title_block", "title-block", "title block", "tblock", "revision", "rev_table", "rev table", "stamp", "viewport"
     };
 
+    private const double PeripheralZoneFraction = 0.28;
+    private const int PeripheralMinTexts = 4;
+    private const int PeripheralMinRows = 3;
+    private const double PeripheralLinkHeightFactor = 6.0;
+
     private static readonly string[] TitleBlockKeywords =
     {
         "date", "drawn", "drawn by", "checked", "checked by", "approved", "approved by", "designed by",
-        "scale", "sheet no", "sheet of", "rev", "revision", "drawing no", "drawing number", "drg no", "dwg no",
-        "title", "project", "client", "customer", "company", "general tolerance", "tolerance"
+        "prepared by", "reviewed by", "created by", "modified by", "issued", "issue date", "plot date", "plotted",
+        "last saved", "created", "modified",
+        "scale", "sheet", "sheet no", "sheet of", "page", "rev", "revision", "drawing no", "drawing number",
+        "drg no", "dwg no", "drg", "dwg", "part no", "part number", "supersedes", "zone", "eco", "ecn", "initials",
+        "title", "project", "client", "customer", "company", "general tolerance", "tolerance",
+        "material", "finish", "weight", "mass", "units", "dimensions in", "all dimensions", "do not scale",
+        "unless otherwise", "projection", "first angle", "third angle", "copyright", "confidential", "proprietary"
     };
 
     private static readonly Regex NumericDatePattern = new(
         @"^\d{1,4}[./\-]\d{1,2}[./\-]\d{1,4}$",
         RegexOptions.Compiled);
+
+    private static readonly Regex DateTimePattern = new(
+        @"^\d{1,4}[./\-]\d{1,2}[./\-]\d{1,4}[\sT,]+\d{1,2}:\d{2}(:\d{2})?(\s?(am|pm))?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex TimePattern = new(
+        @"^\d{1,2}:\d{2}(:\d{2})?(\s?(am|pm))?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex MonthFirstDatePattern = new(
+        @"^(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s*\d{1,2}(st|nd|rd|th)?[\s,\-./]+\d{2,4}$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex RevisionCodePattern = new(
+        @"^rev(ision)?\.?\s*[:=\-]?\s*[a-z]?\d{0,3}[a-z]?$",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
     private static readonly Regex MonthDatePattern = new(
         @"^\d{1,2}[\s\-./]?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[\s\-./,]*\d{2,4}$",
@@ -136,7 +162,7 @@ public class ComponentDecomposer : IComponentDecomposer
             nodes.Add(CreateNode(c + 1, cluster, bounds, overall, geometry, tolerance));
         }
 
-        AssignTexts(FilterTexts(geometry, titleBlock.Regions), nodes, clusterBounds, clusterSpanning, tolerance, labelReach);
+        AssignTexts(FilterTexts(geometry, titleBlock.Regions, titleBlock.Excluded), nodes, clusterBounds, clusterSpanning, tolerance, labelReach);
         FinalizeNodes(nodes);
 
         return nodes;
@@ -275,7 +301,11 @@ public class ComponentDecomposer : IComponentDecomposer
         }
 
         if (NumericDatePattern.IsMatch(normalized)
+            || DateTimePattern.IsMatch(normalized)
+            || TimePattern.IsMatch(normalized)
             || MonthDatePattern.IsMatch(normalized)
+            || MonthFirstDatePattern.IsMatch(normalized)
+            || RevisionCodePattern.IsMatch(normalized)
             || ScalePattern.IsMatch(normalized))
         {
             return true;
@@ -315,16 +345,16 @@ public class ComponentDecomposer : IComponentDecomposer
             text.Position.Y + above);
     }
 
-    private static (List<Item> Items, List<BoundingBox2D> Regions) RemoveTitleBlock(
+    private static (List<Item> Items, List<BoundingBox2D> Regions, HashSet<GeometryText> Excluded) RemoveTitleBlock(
         ExtractedGeometry geometry,
         List<Item> items)
     {
         var regions = new List<BoundingBox2D>();
+        var excluded = new HashSet<GeometryText>();
 
-        var matches = geometry.Texts.Where(IsTitleBlockText).ToList();
-        if (matches.Count == 0 || items.Count == 0)
+        if (items.Count == 0)
         {
-            return (items, regions);
+            return (items, regions, excluded);
         }
 
         var overall = items[0].Bounds;
@@ -336,7 +366,26 @@ public class ComponentDecomposer : IComponentDecomposer
         var diagonal = Math.Sqrt(overall.Width * overall.Width + overall.Height * overall.Height);
         if (diagonal <= 0 || overall.Area <= 0)
         {
-            return (items, regions);
+            return (items, regions, excluded);
+        }
+
+        var matches = geometry.Texts.Where(IsTitleBlockText).ToList();
+        foreach (var match in matches)
+        {
+            excluded.Add(match);
+        }
+
+        foreach (var peripheral in FindPeripheralTableTexts(geometry, overall, excluded))
+        {
+            if (excluded.Add(peripheral))
+            {
+                matches.Add(peripheral);
+            }
+        }
+
+        if (matches.Count == 0)
+        {
+            return (items, regions, excluded);
         }
 
         var tolerance = diagonal * ProximityFraction;
@@ -398,7 +447,7 @@ public class ComponentDecomposer : IComponentDecomposer
 
         if (regions.Count == 0)
         {
-            return (items, regions);
+            return (items, regions, excluded);
         }
 
         var kept = items
@@ -407,10 +456,128 @@ public class ComponentDecomposer : IComponentDecomposer
 
         if (kept.Count == 0)
         {
-            return (items, new List<BoundingBox2D>());
+            return (items, new List<BoundingBox2D>(), excluded);
         }
 
-        return (kept, regions);
+        return (kept, regions, excluded);
+    }
+
+    private static List<GeometryText> FindPeripheralTableTexts(
+        ExtractedGeometry geometry,
+        BoundingBox2D overall,
+        HashSet<GeometryText> excluded)
+    {
+        var result = new List<GeometryText>();
+        if (geometry.Texts.Count < PeripheralMinTexts)
+        {
+            return result;
+        }
+
+        var frame = overall;
+        foreach (var text in geometry.Texts)
+        {
+            frame = frame.Union(new BoundingBox2D(text.Position.X, text.Position.Y, text.Position.X, text.Position.Y));
+        }
+
+        if (frame.Width <= 0 || frame.Height <= 0)
+        {
+            return result;
+        }
+
+        var zoneWidth = frame.Width * PeripheralZoneFraction;
+        var zoneHeight = frame.Height * PeripheralZoneFraction;
+
+        var corners = new[]
+        {
+            new BoundingBox2D(frame.MinX, frame.MinY, frame.MinX + zoneWidth, frame.MinY + zoneHeight),
+            new BoundingBox2D(frame.MaxX - zoneWidth, frame.MinY, frame.MaxX, frame.MinY + zoneHeight),
+            new BoundingBox2D(frame.MinX, frame.MaxY - zoneHeight, frame.MinX + zoneWidth, frame.MaxY),
+            new BoundingBox2D(frame.MaxX - zoneWidth, frame.MaxY - zoneHeight, frame.MaxX, frame.MaxY)
+        };
+
+        var picked = new HashSet<GeometryText>();
+
+        foreach (var corner in corners)
+        {
+            var inZone = geometry.Texts
+                .Where(t => !string.IsNullOrWhiteSpace(t.Text)
+                    && t.Position.X >= corner.MinX && t.Position.X <= corner.MaxX
+                    && t.Position.Y >= corner.MinY && t.Position.Y <= corner.MaxY)
+                .ToList();
+
+            if (inZone.Count < PeripheralMinTexts)
+            {
+                continue;
+            }
+
+            var anchors = inZone.Where(excluded.Contains).ToList();
+            if (anchors.Count > 0)
+            {
+                var linkGap = Math.Max(anchors.Max(a => a.Height), 1e-6) * PeripheralLinkHeightFactor;
+                var anchorBoxes = anchors.Select(TitleTextBox).ToList();
+
+                foreach (var text in inZone)
+                {
+                    if (excluded.Contains(text))
+                    {
+                        continue;
+                    }
+
+                    var box = TitleTextBox(text);
+                    if (anchorBoxes.Any(b => b.GapTo(box) <= linkGap))
+                    {
+                        picked.Add(text);
+                    }
+                }
+            }
+
+            foreach (var text in AlignedTableTexts(inZone))
+            {
+                if (!excluded.Contains(text))
+                {
+                    picked.Add(text);
+                }
+            }
+        }
+
+        result.AddRange(picked);
+        return result;
+    }
+
+    private static List<GeometryText> AlignedTableTexts(List<GeometryText> texts)
+    {
+        var rows = new List<List<GeometryText>>();
+
+        foreach (var text in texts.OrderByDescending(t => t.Position.Y))
+        {
+            var row = rows.FirstOrDefault(r =>
+                Math.Abs(r[0].Position.Y - text.Position.Y) <= Math.Max(Math.Max(text.Height, r[0].Height), 1e-6) * 0.5);
+
+            if (row == null)
+            {
+                rows.Add(new List<GeometryText> { text });
+            }
+            else
+            {
+                row.Add(text);
+            }
+        }
+
+        var tableRows = rows.Where(r => r.Count >= 2).ToList();
+        if (tableRows.Count < PeripheralMinRows)
+        {
+            return new List<GeometryText>();
+        }
+
+        var members = tableRows.SelectMany(r => r).ToList();
+        var columnTolerance = Math.Max(members.Average(t => t.Height), 1e-6) * 2.0;
+        var aligned = members
+            .Where(t => members.Any(o => !ReferenceEquals(o, t)
+                && Math.Abs(o.Position.Y - t.Position.Y) > columnTolerance * 0.25
+                && Math.Abs(o.Position.X - t.Position.X) <= columnTolerance))
+            .ToList();
+
+        return aligned.Count >= PeripheralMinRows * 2 ? aligned : new List<GeometryText>();
     }
 
     private static BoundingBox2D AbsorbTableLines(
@@ -495,10 +662,14 @@ public class ComponentDecomposer : IComponentDecomposer
         return false;
     }
 
-    private static List<GeometryText> FilterTexts(ExtractedGeometry geometry, List<BoundingBox2D> regions)
+    private static List<GeometryText> FilterTexts(
+        ExtractedGeometry geometry,
+        List<BoundingBox2D> regions,
+        HashSet<GeometryText> excluded)
     {
         return geometry.Texts
-            .Where(t => !IsTitleBlockText(t)
+            .Where(t => !excluded.Contains(t)
+                && !IsTitleBlockText(t)
                 && !regions.Any(r => t.Position.X >= r.MinX && t.Position.X <= r.MaxX
                     && t.Position.Y >= r.MinY && t.Position.Y <= r.MaxY))
             .ToList();

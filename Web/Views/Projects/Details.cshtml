@@ -33,6 +33,23 @@
     var cursorY = (canvasHeight - totalHeight * scale) / 2;
 
     var statusText = project.Status.ToString();
+
+    var tTree = Model.Assembly.Tree;
+    var tBounds = tTree.Bounds;
+    var useTree = Model.HasAssembly && tBounds.Width > 0 && tBounds.Height > 0;
+    var tSpan = Math.Max(tBounds.Width, tBounds.Height);
+    var tPad = tSpan * 0.06;
+    var tViewWidth = tBounds.Width + tPad * 2;
+    var tViewHeight = tBounds.Height + tPad * 2;
+    var tHatchStep = tSpan / 80.0;
+    var tFont = tSpan / 38.0;
+
+    string P(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
+    double Tx(double value) => value - tBounds.MinX + tPad;
+    double Ty(double value) => tBounds.MaxY - value + tPad;
+
+    string TreeLabel(double lx, double ly, string content) =>
+        $"<text x=\"{P(lx)}\" y=\"{P(ly)}\" class=\"cc-svg-assembly-label\" font-size=\"{P(tFont)}\">{System.Net.WebUtility.HtmlEncode(content)}</text>";
 }
 
 <div class="cc-topbar">
@@ -78,7 +95,88 @@
 
             <div class="cc-panel-body">
                 <div class="cc-preview-frame">
-                    @if (parts.Count > 0 && scale > 0)
+                    @if (useTree)
+                    {
+                        <svg class="cc-entity-svg" viewBox="0 0 @P(tViewWidth) @P(tViewHeight)" width="100%" style="max-width: 36rem;" role="img" aria-label="Schematic of the detected assemblies">
+                            <defs>
+                                <pattern id="cc-tree-hatch" width="@P(tHatchStep)" height="@P(tHatchStep)" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+                                    <line x1="0" y1="0" x2="0" y2="@P(tHatchStep)" stroke="#2a3439" stroke-width="@P(tHatchStep / 8.0)" />
+                                </pattern>
+                            </defs>
+
+                            @if (tTree.Assemblies.Count > 0)
+                            {
+                                foreach (var assembly in tTree.Assemblies)
+                                {
+                                    var members = assembly.NodeIds.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                                    <g class="cc-svg-assembly" data-entity-id="@assembly.Id">
+                                        <rect class="cc-svg-assembly-box"
+                                              x="@P(Tx(assembly.Bounds.MinX))"
+                                              y="@P(Ty(assembly.Bounds.MaxY))"
+                                              width="@P(assembly.Bounds.Width)"
+                                              height="@P(assembly.Bounds.Height)" />
+                                        @Html.Raw(TreeLabel(Tx(assembly.Bounds.MinX), Ty(assembly.Bounds.MaxY) - tFont * 0.4, assembly.AssemblyName))
+
+                                        @foreach (var node in tTree.Nodes.Where(n => members.Contains(n.Id)))
+                                        {
+                                            var round = node.Shape == PartShape.Circular || node.Shape == PartShape.Annular;
+                                            var hatched = node.HatchCount > 0 || node.IsFilled;
+
+                                            <g class="cc-svg-node"
+                                               data-entity-id="@node.Id"
+                                               data-assembly-id="@assembly.Id"
+                                               data-profile-id="@node.SharedProfileId"
+                                               tabindex="0">
+                                                <title>@node.Name</title>
+                                                @if (round)
+                                                {
+                                                    <ellipse cx="@P(Tx(node.Bounds.CenterX))" cy="@P(Ty(node.Bounds.CenterY))" rx="@P(node.Bounds.Width / 2.0)" ry="@P(node.Bounds.Height / 2.0)" />
+                                                    if (hatched)
+                                                    {
+                                                        <ellipse class="cc-svg-hatch" cx="@P(Tx(node.Bounds.CenterX))" cy="@P(Ty(node.Bounds.CenterY))" rx="@P(node.Bounds.Width / 2.0)" ry="@P(node.Bounds.Height / 2.0)" fill="url(#cc-tree-hatch)" />
+                                                    }
+                                                }
+                                                else
+                                                {
+                                                    <rect x="@P(Tx(node.Bounds.MinX))" y="@P(Ty(node.Bounds.MaxY))" width="@P(node.Bounds.Width)" height="@P(node.Bounds.Height)" />
+                                                    if (hatched)
+                                                    {
+                                                        <rect class="cc-svg-hatch" x="@P(Tx(node.Bounds.MinX))" y="@P(Ty(node.Bounds.MaxY))" width="@P(node.Bounds.Width)" height="@P(node.Bounds.Height)" fill="url(#cc-tree-hatch)" />
+                                                    }
+                                                }
+                                            </g>
+                                        }
+                                    </g>
+                                }
+                            }
+                            else
+                            {
+                                foreach (var node in tTree.Nodes)
+                                {
+                                    var round = node.Shape == PartShape.Circular || node.Shape == PartShape.Annular;
+                                    var hatched = node.HatchCount > 0 || node.IsFilled;
+
+                                    <g class="cc-svg-node" data-entity-id="@node.Id" data-profile-id="@node.SharedProfileId" tabindex="0">
+                                        <title>@node.Name</title>
+                                        @if (round)
+                                        {
+                                            <ellipse cx="@P(Tx(node.Bounds.CenterX))" cy="@P(Ty(node.Bounds.CenterY))" rx="@P(node.Bounds.Width / 2.0)" ry="@P(node.Bounds.Height / 2.0)" />
+                                        }
+                                        else
+                                        {
+                                            <rect x="@P(Tx(node.Bounds.MinX))" y="@P(Ty(node.Bounds.MaxY))" width="@P(node.Bounds.Width)" height="@P(node.Bounds.Height)" />
+                                        }
+                                        @if (hatched)
+                                        {
+                                            <rect class="cc-svg-hatch" x="@P(Tx(node.Bounds.MinX))" y="@P(Ty(node.Bounds.MaxY))" width="@P(node.Bounds.Width)" height="@P(node.Bounds.Height)" fill="url(#cc-tree-hatch)" />
+                                        }
+                                    </g>
+                                }
+                            }
+                        </svg>
+                    }
+                    else if (parts.Count > 0 && scale > 0)
                     {
                         <svg viewBox="0 0 @N(canvasWidth) @N(canvasHeight)" width="100%" style="max-width: 26rem;" role="img" aria-label="Schematic of the recognized components">
                             <defs>
@@ -166,3 +264,7 @@
         <partial name="_CodePreview" model="Model" />
     </div>
 </div>
+
+@section Scripts {
+    <script src="~/js/entity-hover.js" asp-append-version="true"></script>
+}

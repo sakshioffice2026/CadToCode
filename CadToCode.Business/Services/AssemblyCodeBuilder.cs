@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 using CadToCode.LLM.Prompts;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
@@ -8,6 +9,86 @@ namespace CadToCode.Business.Services;
 
 public static class AssemblyCodeBuilder
 {
+    private static readonly Regex EntityMarkerPattern = new(
+        @"\s*//\s*id:(?<id>[A-Za-z0-9_\-]+)\s*$",
+        RegexOptions.Compiled);
+
+    public static string ToEntityHtml(string? code)
+    {
+        if (string.IsNullOrEmpty(code))
+        {
+            return string.Empty;
+        }
+
+        var lines = code.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        var builder = new StringBuilder();
+        string? current = null;
+        var blockIndent = -1;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var text = line;
+            string? id = null;
+
+            var match = EntityMarkerPattern.Match(line);
+            if (match.Success)
+            {
+                id = match.Groups["id"].Value;
+                text = line[..match.Index];
+
+                if (!text.TrimEnd().EndsWith(';'))
+                {
+                    current = id;
+                    blockIndent = LeadingSpaces(text);
+                }
+            }
+            else if (current != null)
+            {
+                id = current;
+
+                var trimmed = text.Trim();
+                if (LeadingSpaces(text) == blockIndent && (trimmed == "};" || trimmed == "});"))
+                {
+                    current = null;
+                }
+            }
+
+            var encoded = System.Net.WebUtility.HtmlEncode(text);
+
+            if (id != null)
+            {
+                builder.Append("<span class=\"cc-entity-line\" data-entity-id=\"")
+                    .Append(System.Net.WebUtility.HtmlEncode(id))
+                    .Append("\">")
+                    .Append(encoded)
+                    .Append("</span>");
+            }
+            else
+            {
+                builder.Append(encoded);
+            }
+
+            if (i < lines.Length - 1)
+            {
+                builder.Append('\n');
+            }
+        }
+
+        return builder.ToString();
+    }
+
+    private static int LeadingSpaces(string text)
+    {
+        var count = 0;
+        while (count < text.Length && text[count] == ' ')
+        {
+            count++;
+        }
+
+        return count;
+    }
+
     public static string Build(AssemblyTree tree, AssemblyAnalysisResult? analysis, string? className)
     {
         var assemblyName = AssemblyPromptTemplates.ToIdentifier(
@@ -114,6 +195,7 @@ public static class AssemblyCodeBuilder
             builder.AppendLine();
             builder.AppendLine($"        var {variable} = new SharedProfile // id:{group.Id}");
             builder.AppendLine("        {");
+            builder.AppendLine($"            Id = {Literal(group.Id)},");
             builder.AppendLine($"            Name = {Literal(baseName)},");
             builder.AppendLine($"            Shape = {Literal(head.Shape.ToString())},");
             builder.AppendLine($"            Width = {Num(head.Bounds.Width * scale)},");
@@ -124,7 +206,7 @@ public static class AssemblyCodeBuilder
             builder.AppendLine($"            IsHatched = {Bool(head.HatchCount > 0 || head.IsFilled)},");
             builder.AppendLine($"            UsageCount = {group.NodeIds.Count.ToString(CultureInfo.InvariantCulture)},");
             builder.AppendLine("        };");
-            builder.AppendLine($"        layout.SharedProfiles.Profiles.Add({variable});");
+            builder.AppendLine($"        layout.SharedProfiles.Profiles.Add({variable}); // id:{group.Id}");
         }
 
         for (var index = 0; index < tree.Assemblies.Count; index++)
@@ -143,8 +225,10 @@ public static class AssemblyCodeBuilder
             builder.AppendLine();
             builder.AppendLine($"        var {variable} = new ComponentAssembly // id:{assembly.Id}");
             builder.AppendLine("        {");
+            builder.AppendLine($"            Id = {Literal(assembly.Id)},");
             builder.AppendLine($"            AssemblyName = {Literal(name)},");
             builder.AppendLine($"            Category = {Literal(assembly.Category)},");
+            builder.AppendLine($"            Confidence = {assembly.Confidence.ToString("0.##", CultureInfo.InvariantCulture)}m,");
             builder.AppendLine($"            Width = {Num(assembly.Bounds.Width * scale)},");
             builder.AppendLine($"            Height = {Num(assembly.Bounds.Height * scale)},");
             builder.AppendLine($"            OffsetX = {Num((assembly.Bounds.MinX - tree.Bounds.MinX) * scale)},");
@@ -153,7 +237,7 @@ public static class AssemblyCodeBuilder
 
             foreach (var node in assemblyNodes)
             {
-                AppendUniversalNode(builder, variable, node, assembly, identifiers, profileVariables, scale);
+                AppendUniversalNode(builder, variable, node, assembly, identifiers, profileVariables, nodeById, scale);
             }
 
             var relationCount = 0;
@@ -181,11 +265,11 @@ public static class AssemblyCodeBuilder
                     counter++;
                 }
 
-                builder.AppendLine($"        {variable}.SpatialRelations[{Literal(unique)}] = {Literal(DescribeRelationValue(relation, scale))};");
+                builder.AppendLine($"        {variable}.SpatialRelations[{Literal(unique)}] = {Literal(DescribeRelationValue(relation, scale))}; // id:{relation.FromId}");
                 relationCount++;
             }
 
-            builder.AppendLine($"        layout.Assemblies.Add({variable});");
+            builder.AppendLine($"        layout.Assemblies.Add({variable}); // id:{assembly.Id}");
         }
 
         builder.AppendLine();
@@ -203,9 +287,13 @@ public static class AssemblyCodeBuilder
         ComponentAssembly assembly,
         Dictionary<string, string> identifiers,
         Dictionary<string, string> profileVariables,
+        Dictionary<string, AssemblyNode> nodeById,
         double scale)
     {
         var identifier = identifiers.TryGetValue(node.Id, out var value) ? value : "Part" + node.Id;
+        AssemblyNode? parent = node.ParentId != null && nodeById.TryGetValue(node.ParentId, out var parentNode)
+            ? parentNode
+            : null;
         var (orientation, axis) = Orient(node);
         var shared = node.SharedProfileId != null && profileVariables.TryGetValue(node.SharedProfileId, out var profileVariable)
             ? profileVariable
@@ -223,6 +311,20 @@ public static class AssemblyCodeBuilder
         builder.AppendLine($"            IsHatched = {Bool(node.HatchCount > 0 || node.IsFilled)},");
         builder.AppendLine($"            OffsetX = {Num((node.Bounds.MinX - assembly.Bounds.MinX) * scale)},");
         builder.AppendLine($"            OffsetY = {Num((node.Bounds.MinY - assembly.Bounds.MinY) * scale)},");
+        builder.AppendLine($"            CenterOffsetX = {Num((node.Bounds.CenterX - assembly.Bounds.CenterX) * scale)},");
+        builder.AppendLine($"            CenterOffsetY = {Num((node.Bounds.CenterY - assembly.Bounds.CenterY) * scale)},");
+
+        if (parent != null)
+        {
+            builder.AppendLine($"            ParentId = {Literal(parent.Id)},");
+            builder.AppendLine($"            RelativeOffsetX = {Num((node.Bounds.MinX - parent.Bounds.MinX) * scale)},");
+            builder.AppendLine($"            RelativeOffsetY = {Num((node.Bounds.MinY - parent.Bounds.MinY) * scale)},");
+        }
+
+        if (!string.IsNullOrWhiteSpace(node.ArrayGroupId))
+        {
+            builder.AppendLine($"            ArrayGroup = {Literal(node.ArrayGroupId)},");
+        }
 
         if (shared != null)
         {
@@ -266,6 +368,7 @@ public static class AssemblyCodeBuilder
             "",
             "public class SharedProfile",
             "{",
+            "    public string Id { get; set; } = string.Empty;",
             "    public string Name { get; set; } = string.Empty;",
             "    public string Shape { get; set; } = string.Empty;",
             "    public double Width { get; set; }",
@@ -293,6 +396,12 @@ public static class AssemblyCodeBuilder
             "    public bool IsHatched { get; set; }",
             "    public double OffsetX { get; set; }",
             "    public double OffsetY { get; set; }",
+            "    public double CenterOffsetX { get; set; }",
+            "    public double CenterOffsetY { get; set; }",
+            "    public string? ParentId { get; set; }",
+            "    public double RelativeOffsetX { get; set; }",
+            "    public double RelativeOffsetY { get; set; }",
+            "    public string? ArrayGroup { get; set; }",
             "    public double Width { get; set; }",
             "    public double Height { get; set; }",
             "    public SharedProfile? Profile { get; set; }",
@@ -301,8 +410,10 @@ public static class AssemblyCodeBuilder
             "",
             "public class ComponentAssembly",
             "{",
+            "    public string Id { get; set; } = string.Empty;",
             "    public string AssemblyName { get; set; } = string.Empty;",
             "    public string Category { get; set; } = string.Empty;",
+            "    public decimal Confidence { get; set; }",
             "    public double Width { get; set; }",
             "    public double Height { get; set; }",
             "    public double OffsetX { get; set; }",

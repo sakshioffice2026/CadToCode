@@ -16,6 +16,9 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
     private const double IslandJumpRatio = 2.5;
     private const double IslandPairSizeFactor = 0.5;
     private const int MaxIslandNodes = 600;
+    private const double IslandAmbiguityBand = 1.5;
+    private const double IslandSecondaryGapFactor = 1.0;
+    private const double IslandNoiseAreaFraction = 0.002;
 
     private static readonly (string[] Keywords, string Category)[] CategoryRules =
     {
@@ -67,7 +70,7 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
         ResetLinks(list);
         BuildHierarchy(list, tolerance);
         tree.RootIds = list.Where(n => n.ParentId == null).Select(n => n.Id).ToList();
-        tree.Assemblies = DetectAssemblies(list, diagonal, tolerance);
+        tree.Assemblies = DetectAssemblies(list, diagonal, tolerance, tree.Warnings);
         tree.SharedProfiles = BuildSharedProfiles(list, tree.Unit);
         tree.Arrays = DetectArrays(list, tolerance);
         BuildRelations(tree, list, tolerance, adjacentReach, alignReach);
@@ -869,7 +872,11 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
         }
     }
 
-    private static List<ComponentAssembly> DetectAssemblies(List<AssemblyNode> list, double diagonal, double tolerance)
+    private static List<ComponentAssembly> DetectAssemblies(
+        List<AssemblyNode> list,
+        double diagonal,
+        double tolerance,
+        List<string> warnings)
     {
         var assemblies = new List<ComponentAssembly>();
 
@@ -880,7 +887,16 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
         }
 
         var byId = list.ToDictionary(n => n.Id, StringComparer.OrdinalIgnoreCase);
-        var groups = ClusterIslands(roots, diagonal, tolerance);
+        var islands = ClusterIslands(roots, diagonal, tolerance);
+        var groups = islands.Groups;
+
+        if (islands.Ambiguous && groups.Count > 1)
+        {
+            warnings.Add(
+                "Assembly split is low-margin: " + groups.Count.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + " islands detected by spatial gaps; semantic tie-break (single assembly vs "
+                + groups.Count.ToString(System.Globalization.CultureInfo.InvariantCulture) + ") recommended.");
+        }
 
         var ordered = groups
             .Select(g => new { Roots = g, Bounds = UnionBounds(g) })
@@ -994,9 +1010,11 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
         }
     }
 
-    private static List<List<AssemblyNode>> ClusterIslands(List<AssemblyNode> roots, double diagonal, double tolerance)
+    private sealed record IslandResult(List<List<AssemblyNode>> Groups, bool Ambiguous);
+
+    private static IslandResult ClusterIslands(List<AssemblyNode> roots, double diagonal, double tolerance)
     {
-        var single = new List<List<AssemblyNode>> { roots };
+        var single = new IslandResult(new List<List<AssemblyNode>> { roots }, false);
 
         if (roots.Count < 2 || roots.Count > MaxIslandNodes)
         {
@@ -1041,8 +1059,37 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
             mst.Add(edge);
         }
 
-        var minGap = diagonal * IslandMinGapFraction;
+        List<List<AssemblyNode>> Build(double cut)
+        {
+            for (var i = 0; i < parent.Length; i++)
+            {
+                parent[i] = i;
+            }
+
+            foreach (var edge in mst)
+            {
+                if (edge.Gap > cut)
+                {
+                    continue;
+                }
+
+                var ra = Find(edge.A);
+                var rb = Find(edge.B);
+                if (ra != rb)
+                {
+                    parent[rb] = ra;
+                }
+            }
+
+            return Enumerable.Range(0, roots.Count)
+                .GroupBy(Find)
+                .Select(g => g.Select(index => roots[index]).ToList())
+                .ToList();
+        }
+
+        var minGap = Math.Max(diagonal * IslandMinGapFraction, tolerance * 4.0);
         var cutAbove = double.PositiveInfinity;
+        var ambiguous = false;
 
         if (mst.Count == 1)
         {
@@ -1074,6 +1121,41 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
                     cutAbove = mst[k].Gap;
                 }
             }
+
+            if (!double.IsPositiveInfinity(cutAbove))
+            {
+                ambiguous = bestRatio < IslandJumpRatio * IslandAmbiguityBand;
+            }
+            else
+            {
+                var widest = mst[^1].Gap;
+                if (widest >= minGap)
+                {
+                    var candidateCut = mst
+                        .Where(e => e.Gap < widest)
+                        .Select(e => e.Gap)
+                        .DefaultIfEmpty(0)
+                        .Max();
+
+                    var candidate = Build(candidateCut);
+                    if (candidate.Count >= 2)
+                    {
+                        var smallestExtent = candidate
+                            .Select(g =>
+                            {
+                                var b = UnionBounds(g);
+                                return Math.Max(b.Width, b.Height);
+                            })
+                            .Min();
+
+                        if (widest >= smallestExtent * IslandSecondaryGapFactor)
+                        {
+                            cutAbove = candidateCut;
+                            ambiguous = true;
+                        }
+                    }
+                }
+            }
         }
 
         if (double.IsPositiveInfinity(cutAbove))
@@ -1081,30 +1163,78 @@ public class AssemblyTopologyMapper : IAssemblyTopologyMapper
             return single;
         }
 
-        for (var i = 0; i < parent.Length; i++)
+        var groups = Build(cutAbove);
+        groups = MergeNoiseIslands(groups);
+
+        if (groups.Count < 2)
         {
-            parent[i] = i;
+            return single;
         }
 
-        foreach (var edge in mst)
+        return new IslandResult(groups, ambiguous);
+    }
+
+    private static List<List<AssemblyNode>> MergeNoiseIslands(List<List<AssemblyNode>> groups)
+    {
+        if (groups.Count < 2)
         {
-            if (edge.Gap > cutAbove)
+            return groups;
+        }
+
+        var boundsList = groups.Select(UnionBounds).ToList();
+        var total = boundsList[0];
+        foreach (var bounds in boundsList)
+        {
+            total = total.Union(bounds);
+        }
+
+        var noiseArea = total.Area * IslandNoiseAreaFraction;
+        var isNoise = new bool[groups.Count];
+
+        for (var i = 0; i < groups.Count; i++)
+        {
+            isNoise[i] = groups[i].Count == 1
+                && boundsList[i].Area <= noiseArea
+                && !groups[i][0].Labels.Any(l => !string.IsNullOrWhiteSpace(l) && l.Any(char.IsLetter));
+        }
+
+        if (isNoise.All(n => n))
+        {
+            return groups;
+        }
+
+        for (var i = 0; i < groups.Count; i++)
+        {
+            if (!isNoise[i])
             {
                 continue;
             }
 
-            var ra = Find(edge.A);
-            var rb = Find(edge.B);
-            if (ra != rb)
+            var target = -1;
+            var best = double.MaxValue;
+            for (var j = 0; j < groups.Count; j++)
             {
-                parent[rb] = ra;
+                if (j == i || isNoise[j])
+                {
+                    continue;
+                }
+
+                var gap = boundsList[i].GapTo(boundsList[j]);
+                if (gap < best)
+                {
+                    best = gap;
+                    target = j;
+                }
+            }
+
+            if (target >= 0)
+            {
+                groups[target].AddRange(groups[i]);
+                boundsList[target] = boundsList[target].Union(boundsList[i]);
             }
         }
 
-        return Enumerable.Range(0, roots.Count)
-            .GroupBy(Find)
-            .Select(g => g.Select(index => roots[index]).ToList())
-            .ToList();
+        return groups.Where((_, index) => !isNoise[index]).ToList();
     }
 
     private static (string Category, decimal Confidence) ClassifyAssembly(List<AssemblyNode> members)

@@ -72,3 +72,72 @@
     margin: 0 0 0.85rem;
     color: var(--cc-ink-soft);
 }
+
+.cc-entity-line {
+    display: inline;
+    border-radius: 2px;
+    transition: background-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.cc-entity-line.cc-entity-active {
+    background-color: var(--cc-accent-soft, #f6cfc4);
+    box-shadow: inset 2px 0 0 var(--cc-accent, #e76f51);
+}
+
+.cc-entity-code .cc-entity-line {
+    cursor: default;
+}
+
+.cc-entity-svg .cc-svg-node {
+    cursor: pointer;
+    outline: none;
+}
+
+.cc-entity-svg .cc-svg-node rect,
+.cc-entity-svg .cc-svg-node ellipse {
+    fill: var(--cc-accent-soft, #f6cfc4);
+    stroke: #2a3439;
+    stroke-width: 1.5px;
+    vector-effect: non-scaling-stroke;
+    transition: fill 0.12s ease, stroke 0.12s ease, stroke-width 0.12s ease;
+}
+
+.cc-entity-svg .cc-svg-node rect.cc-svg-hatch,
+.cc-entity-svg .cc-svg-node ellipse.cc-svg-hatch {
+    stroke: none;
+    pointer-events: none;
+}
+
+.cc-entity-svg .cc-svg-assembly-box {
+    fill: none;
+    stroke: #8c9aa0;
+    stroke-width: 1.2px;
+    stroke-dasharray: 6 4;
+    vector-effect: non-scaling-stroke;
+    transition: stroke 0.12s ease, stroke-width 0.12s ease;
+}
+
+.cc-entity-svg .cc-svg-assembly-label {
+    fill: #2a3439;
+    font-weight: 600;
+    pointer-events: none;
+}
+
+.cc-entity-svg g.cc-entity-active rect:not(.cc-svg-hatch):not(.cc-svg-assembly-box),
+.cc-entity-svg g.cc-entity-active ellipse:not(.cc-svg-hatch) {
+    fill: var(--cc-accent, #e76f51);
+    fill-opacity: 0.55;
+    stroke: var(--cc-accent-deep, #b34a2f);
+    stroke-width: 3px;
+}
+
+.cc-entity-svg g.cc-svg-assembly.cc-entity-active > .cc-svg-assembly-box {
+    stroke: var(--cc-accent-deep, #b34a2f);
+    stroke-width: 2.5px;
+}
+
+.cc-entity-svg .cc-svg-node:focus-visible rect,
+.cc-entity-svg .cc-svg-node:focus-visible ellipse {
+    stroke: var(--cc-accent-deep, #b34a2f);
+    stroke-width: 3px;
+}
