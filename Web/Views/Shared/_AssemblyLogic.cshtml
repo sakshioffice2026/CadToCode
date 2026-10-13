@@ -1,0 +1,167 @@
+@model Web.Models.ProjectResultViewModel
+@using System.Globalization
+@using CadToCode.Models.Dtos
+@using CadToCode.Models.Enums
+
+@{
+    var assembly = Model.Assembly;
+    var tree = assembly.Tree;
+
+    var scale = tree.Unit switch
+    {
+        DrawingUnit.Centimeter => 10.0,
+        DrawingUnit.Meter => 1000.0,
+        DrawingUnit.Inch => 25.4,
+        DrawingUnit.Foot => 304.8,
+        _ => 1.0
+    };
+
+    var semantic = (assembly.Analysis?.Nodes ?? new List<NodeSemanticName>())
+        .Where(n => !string.IsNullOrWhiteSpace(n.NodeId) && !string.IsNullOrWhiteSpace(n.Name))
+        .GroupBy(n => n.NodeId, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(g => g.Key, g => g.First().Name, StringComparer.OrdinalIgnoreCase);
+
+    var names = tree.Nodes.ToDictionary(
+        n => n.Id,
+        n => semantic.TryGetValue(n.Id, out var name) ? name : n.Name,
+        StringComparer.OrdinalIgnoreCase);
+
+    string NameOf(string id) => names.TryGetValue(id, out var value) ? value : id;
+    string Mm(double value) => (value * scale).ToString("0.##", CultureInfo.InvariantCulture);
+    string Percent(decimal value) => (value * 100m).ToString("0", CultureInfo.InvariantCulture) + "%";
+
+    var insights = (assembly.Analysis?.Relationships ?? new List<RelationshipInsight>())
+        .Where(r => !string.IsNullOrWhiteSpace(r.Summary))
+        .ToList();
+}
+
+<section class="cc-panel" aria-labelledby="cc-logic-title">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title" id="cc-logic-title">Assembly logic</h2>
+
+        <div class="cc-code-actions">
+            <span class="cc-chip @(Model.UsedAi ? string.Empty : "cc-chip-muted")">
+                @(Model.UsedAi ? "AI assisted" : "Rule based")
+                @if (Model.HasAssembly)
+                {
+                    <text>&nbsp;|&nbsp;@Percent(assembly.Confidence)</text>
+                }
+            </span>
+
+            @if (Model.HasAssembly && !Model.UsedAi)
+            {
+                <form asp-controller="Project" asp-action="RefineWithAi" asp-route-id="@Model.Project.Id" method="post"
+                      onsubmit="var b=this.querySelector('button');b.disabled=true;b.textContent='Running AI...';">
+                    <button type="submit" class="cc-btn cc-btn-small">Refine with AI</button>
+                </form>
+            }
+        </div>
+    </div>
+
+    <div class="cc-panel-body">
+        @if (!Model.HasAssembly)
+        {
+            <div class="cc-empty">
+                <p class="cc-empty-title">No assembly logic available</p>
+                <p class="mb-0">@(assembly.Error ?? "Relationships appear once sub-components are detected.")</p>
+            </div>
+        }
+        else
+        {
+            @if (!Model.UsedAi && !string.IsNullOrWhiteSpace(assembly.FallbackReason))
+            {
+                <div class="cc-alert cc-alert-note">
+                    Measurements come from the drawing. AI naming was not used: @assembly.FallbackReason
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(assembly.Analysis?.AssemblyName) || !string.IsNullOrWhiteSpace(assembly.Analysis?.Summary))
+            {
+                <div class="cc-logic-block">
+                    @if (!string.IsNullOrWhiteSpace(assembly.Analysis?.AssemblyName))
+                    {
+                        <p class="cc-logic-heading">@assembly.Analysis!.AssemblyName</p>
+                    }
+                    @if (!string.IsNullOrWhiteSpace(assembly.Analysis?.Summary))
+                    {
+                        <p class="mb-0">@assembly.Analysis!.Summary</p>
+                    }
+                </div>
+            }
+
+            @if (tree.Relations.Count > 0)
+            {
+                <h3 class="cc-logic-subtitle">Relationships</h3>
+                <ul class="cc-logic-list">
+                    @foreach (var relation in tree.Relations)
+                    {
+                        <li>
+                            <strong>@NameOf(relation.FromId)</strong>
+                            <span class="cc-logic-arrow" aria-hidden="true">&rarr;</span>
+                            <strong>@NameOf(relation.ToId)</strong>
+                            <span class="cc-chip cc-chip-muted">@relation.Type</span>
+                            @if (Math.Abs(relation.Gap) > 1e-9)
+                            {
+                                <span class="cc-logic-detail">gap @Mm(relation.Gap) mm</span>
+                            }
+                            @if (Math.Abs(relation.OffsetX) > 1e-9 || Math.Abs(relation.OffsetY) > 1e-9)
+                            {
+                                <span class="cc-logic-detail">offset @Mm(relation.OffsetX), @Mm(relation.OffsetY) mm</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if (tree.Arrays.Count > 0)
+            {
+                <h3 class="cc-logic-subtitle">Repeated groups</h3>
+                <ul class="cc-logic-list">
+                    @foreach (var group in tree.Arrays)
+                    {
+                        <li>
+                            <span class="cc-chip cc-chip-muted">@group.Kind</span>
+                            <strong>@group.Count</strong> parts:
+                            @string.Join(", ", group.MemberIds.Select(NameOf))
+                            @if (group.Kind == AssemblyArrayKind.Polar)
+                            {
+                                <span class="cc-logic-detail">radius @Mm(group.Radius) mm, step @group.AngleStepDegrees.ToString("0.##", CultureInfo.InvariantCulture)&deg;</span>
+                            }
+                            else
+                            {
+                                <span class="cc-logic-detail">spacing @Mm(group.Spacing) mm</span>
+                            }
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if (insights.Count > 0)
+            {
+                <h3 class="cc-logic-subtitle">AI notes</h3>
+                <ul class="cc-logic-list">
+                    @foreach (var insight in insights)
+                    {
+                        <li>
+                            <strong>@NameOf(insight.FromId)</strong>
+                            <span class="cc-logic-arrow" aria-hidden="true">&rarr;</span>
+                            <strong>@NameOf(insight.ToId)</strong>
+                            <span class="cc-logic-detail">@insight.Summary</span>
+                        </li>
+                    }
+                </ul>
+            }
+
+            @if (assembly.Warnings.Count > 0)
+            {
+                <h3 class="cc-logic-subtitle">Warnings</h3>
+                <ul class="cc-logic-list">
+                    @foreach (var warning in assembly.Warnings)
+                    {
+                        <li>@warning</li>
+                    }
+                </ul>
+            }
+        }
+    </div>
+</section>

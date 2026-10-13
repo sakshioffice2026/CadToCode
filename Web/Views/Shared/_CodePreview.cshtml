@@ -1,15 +1,62 @@
-@model string
+@model Web.Models.ProjectResultViewModel
+
+@{
+    var assembly = Model.Assembly;
+    var showAssemblyCode = Model.HasAssembly && !string.IsNullOrWhiteSpace(assembly.Code);
+}
+
+@if (showAssemblyCode)
+{
+    <section class="cc-code-panel" aria-labelledby="cc-assembly-code-title">
+        <div class="cc-code-header">
+            <h2 class="cc-code-title" id="cc-assembly-code-title">
+                Generated assembly C#
+                <span class="cc-code-source">@(Model.UsedAi ? "AI assisted" : "Rule based")</span>
+            </h2>
+
+            <div class="cc-code-actions">
+                <button type="button"
+                        class="cc-btn cc-btn-small cc-copy-btn"
+                        data-cc-copy-target="#cc-assembly-code"
+                        data-cc-copy-label="Copy code">
+                    Copy code
+                </button>
+            </div>
+        </div>
+
+        <pre class="cc-code-body" tabindex="0"><code id="cc-assembly-code" class="language-csharp" data-cc-highlight>@assembly.Code</code></pre>
+    </section>
+}
 
 <section class="cc-code-panel" aria-labelledby="cc-code-title">
     <div class="cc-code-header">
         <h2 class="cc-code-title" id="cc-code-title">Generated C# classes</h2>
-        <button type="button"
-                class="cc-btn cc-btn-small cc-copy-btn"
-                data-cc-copy-target="#cc-code"
-                data-cc-copy-label="Copy code">
-            Copy code
-        </button>
+
+        <div class="cc-code-actions">
+            <button type="button"
+                    class="cc-btn cc-btn-small cc-copy-btn"
+                    data-cc-copy-target="#cc-code"
+                    data-cc-copy-label="Copy code">
+                Copy code
+            </button>
+        </div>
     </div>
 
-    <pre class="cc-code-body" tabindex="0"><code id="cc-code" class="language-csharp" data-cc-highlight>@Model</code></pre>
+    <pre class="cc-code-body" tabindex="0"><code id="cc-code" class="language-csharp" data-cc-highlight>@Model.GeneratedCode</code></pre>
+</section>
+
+<section class="cc-panel cc-confirm-panel" aria-labelledby="cc-confirm-title">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title" id="cc-confirm-title">Teach the workbench</h2>
+    </div>
+
+    <div class="cc-panel-body">
+        <p class="cc-confirm-text">
+            Once the component values above look right, save them. Similar drawings will then be matched against this definition.
+        </p>
+
+        <form asp-controller="Project" asp-action="ConfirmDefinition" asp-route-id="@Model.Project.Id" method="post">
+            <button type="submit" class="cc-btn cc-btn-primary">Confirm and save definition</button>
+        </form>
+    </div>
 </section>

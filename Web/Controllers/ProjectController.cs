@@ -1,5 +1,6 @@
 ﻿using CadToCode.Business.Interfaces;
 using CadToCode.Models.Dtos;
+using CadToCode.Models.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Web.Models;
 
@@ -12,13 +13,16 @@ public class ProjectController : Controller
 
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
+    private readonly IDefinitionLearningService _learningService;
 
     public ProjectController(
         IProjectProcessingService processingService,
-        ICodeGenerationService codeGenerationService)
+        ICodeGenerationService codeGenerationService,
+        IDefinitionLearningService learningService)
     {
         _processingService = processingService;
         _codeGenerationService = codeGenerationService;
+        _learningService = learningService;
     }
 
     [HttpGet]
@@ -60,10 +64,15 @@ public class ProjectController : Controller
 
         var code = await _codeGenerationService.GenerateAsync(id, cancellationToken);
 
+        var assembly = project.Status == ProjectStatus.Processed
+            ? await _codeGenerationService.GenerateAssemblyAsync(id, false, cancellationToken)
+            : new AssemblyGenerationResult { ProjectId = id };
+
         return View(DetailsViewPath, new ProjectResultViewModel
         {
             Project = project,
-            GeneratedCode = code
+            GeneratedCode = code,
+            Assembly = assembly
         });
     }
 
@@ -85,6 +94,56 @@ public class ProjectController : Controller
 
         TempData["Success"] = "Component updated.";
         return RedirectToAction(nameof(Details), new { id = component.ProjectId });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> RefineWithAi(int id, CancellationToken cancellationToken)
+    {
+        var project = await _processingService.GetProjectAsync(id, cancellationToken);
+        if (project is null)
+        {
+            return NotFound();
+        }
+
+        var result = await _codeGenerationService.GenerateAssemblyAsync(id, true, cancellationToken);
+
+        if (result.Success && result.Source == AssemblyCodeSource.Ai)
+        {
+            TempData["Success"] = "AI refinement complete.";
+        }
+        else
+        {
+            TempData["Error"] = "AI refinement was not used: " + (result.FallbackReason ?? result.Error ?? "unknown reason") + ".";
+        }
+
+        return RedirectToAction(nameof(Details), new { id });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ConfirmDefinition(int id, CancellationToken cancellationToken)
+    {
+        var project = await _processingService.GetProjectAsync(id, cancellationToken);
+        if (project is null)
+        {
+            return NotFound();
+        }
+
+        var learned = await _learningService.ConfirmAsync(id, cancellationToken);
+
+        if (learned > 0)
+        {
+            TempData["Success"] = learned == 1
+                ? "Definition saved. Similar drawings will now be recognized faster."
+                : $"{learned} definitions saved. Similar drawings will now be recognized faster.";
+        }
+        else
+        {
+            TempData["Error"] = "Nothing could be saved for this drawing.";
+        }
+
+        return RedirectToAction(nameof(Details), new { id });
     }
 
     [HttpGet]

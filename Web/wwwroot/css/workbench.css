@@ -1,0 +1,74 @@
+.cc-logic-block {
+    margin-bottom: 1rem;
+    padding: 0.85rem 1rem;
+    border: 1px solid var(--cc-line);
+    border-radius: var(--cc-radius-sm);
+    background: var(--cc-surface-raised);
+}
+
+.cc-logic-heading {
+    margin: 0 0 0.35rem;
+    font-weight: 600;
+    color: var(--cc-ink);
+}
+
+.cc-logic-subtitle {
+    margin: 1.1rem 0 0.5rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--cc-ink-soft);
+}
+
+.cc-logic-list {
+    margin: 0;
+    padding: 0;
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.cc-logic-list li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.45rem 0.65rem;
+    border: 1px solid var(--cc-line);
+    border-radius: var(--cc-radius-sm);
+    background: var(--cc-surface-raised);
+    font-size: 0.9rem;
+}
+
+.cc-logic-arrow {
+    color: var(--cc-ink-faint);
+}
+
+.cc-logic-detail {
+    color: var(--cc-ink-soft);
+    font-size: 0.85rem;
+}
+
+.cc-code-actions {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.cc-code-source {
+    margin-left: 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: var(--cc-ink-faint);
+}
+
+.cc-code-panel + .cc-code-panel {
+    margin-top: var(--cc-gap);
+}
+
+.cc-confirm-text {
+    margin: 0 0 0.85rem;
+    color: var(--cc-ink-soft);
+}

@@ -1,0 +1,96 @@
+@model Web.Models.ProjectResultViewModel
+@using System.Globalization
+@using CadToCode.Models.Enums
+
+@{
+    var tree = Model.Assembly.Tree;
+
+    var scale = tree.Unit switch
+    {
+        DrawingUnit.Centimeter => 10.0,
+        DrawingUnit.Meter => 1000.0,
+        DrawingUnit.Inch => 25.4,
+        DrawingUnit.Foot => 304.8,
+        _ => 1.0
+    };
+
+    var semantic = (Model.Assembly.Analysis?.Nodes ?? new List<CadToCode.Models.Dtos.NodeSemanticName>())
+        .Where(n => !string.IsNullOrWhiteSpace(n.NodeId))
+        .GroupBy(n => n.NodeId, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+    var names = tree.Nodes.ToDictionary(n => n.Id, n => n.Name, StringComparer.OrdinalIgnoreCase);
+
+    string Mm(double value) => (value * scale).ToString("0.##", CultureInfo.InvariantCulture);
+
+    string DisplayName(CadToCode.Models.Dtos.AssemblyNode node) =>
+        semantic.TryGetValue(node.Id, out var item) && !string.IsNullOrWhiteSpace(item.Name) ? item.Name : node.Name;
+}
+
+<section class="cc-panel" aria-labelledby="cc-breakdown-title">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title" id="cc-breakdown-title">Component breakdown</h2>
+        <span class="cc-chip cc-chip-muted">@tree.Nodes.Count parts, mm</span>
+    </div>
+
+    <div class="cc-panel-body">
+        @if (!Model.HasAssembly)
+        {
+            <div class="cc-empty">
+                <p class="cc-empty-title">No sub-components detected</p>
+                <p class="mb-0">@(Model.Assembly.Error ?? "The drawing did not contain separable parts.")</p>
+            </div>
+        }
+        else
+        {
+            <div class="cc-table-wrap">
+                <table class="cc-stats-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Part</th>
+                            <th scope="col">Shape</th>
+                            <th scope="col" class="cc-num">Width</th>
+                            <th scope="col" class="cc-num">Height</th>
+                            <th scope="col" class="cc-num">X</th>
+                            <th scope="col" class="cc-num">Y</th>
+                            <th scope="col">Labels</th>
+                            <th scope="col">Inside</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var node in tree.Nodes)
+                        {
+                            var role = semantic.TryGetValue(node.Id, out var item) ? item.Role : null;
+
+                            <tr>
+                                <th scope="row">
+                                    <span>@DisplayName(node)</span>
+                                    @if (!string.IsNullOrWhiteSpace(role))
+                                    {
+                                        <span class="cc-chip cc-chip-muted">@role</span>
+                                    }
+                                </th>
+                                <td>@node.Shape</td>
+                                <td class="cc-num">@Mm(node.Bounds.Width)</td>
+                                <td class="cc-num">@Mm(node.Bounds.Height)</td>
+                                <td class="cc-num">@Mm(node.Bounds.MinX - tree.Bounds.MinX)</td>
+                                <td class="cc-num">@Mm(node.Bounds.MinY - tree.Bounds.MinY)</td>
+                                <td>@(node.Labels.Count > 0 ? string.Join(", ", node.Labels) : "-")</td>
+                                <td>
+                                    @if (!string.IsNullOrWhiteSpace(node.ParentId) && names.TryGetValue(node.ParentId, out var parentName))
+                                    {
+                                        @parentName
+                                    }
+                                    else
+                                    {
+                                        <span>-</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</section>

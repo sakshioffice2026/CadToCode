@@ -44,6 +44,7 @@ builder.Services.AddSingleton<IPatternMemoryService, PatternMemoryService>();
 builder.Services.AddSingleton<ILLMGenerationService, LLamaGenerationService>();
 builder.Services.AddScoped<IAiComponentClassifier, AiComponentClassifier>();
 builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
+builder.Services.AddScoped<IDefinitionLearningService, DefinitionLearningService>();
 builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();
 
 var app = builder.Build();
