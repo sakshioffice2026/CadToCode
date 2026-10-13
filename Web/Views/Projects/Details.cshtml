@@ -19,7 +19,7 @@
     double Widest(ComponentDto c) => (double)Math.Max(c.Width ?? 0m, Math.Max(c.Diameter ?? 0m, Math.Max(c.TopDiameter ?? 0m, c.BottomDiameter ?? 0m)));
 
     string SvgLabel(double x, double y, string content) =>
-        $"<text x=\"{N(x)}\" y=\"{N(y)}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-size=\"14\" font-weight=\"600\" fill=\"#2a3439\" stroke=\"#ffffff\" stroke-width=\"4\" paint-order=\"stroke\">{content}</text>";
+        $"<text x=\"{N(x)}\" y=\"{N(y)}\" text-anchor=\"middle\" dominant-baseline=\"middle\" font-size=\"14\" font-weight=\"600\" font-family=\"JetBrains Mono, Cascadia Code, Consolas, monospace\" fill=\"#e8eefb\" stroke=\"#0a0e18\" stroke-width=\"4\" paint-order=\"stroke\">{content}</text>";
 
     const double canvasWidth = 400;
     const double canvasHeight = 420;
@@ -100,7 +100,7 @@
                         <svg class="cc-entity-svg" viewBox="0 0 @P(tViewWidth) @P(tViewHeight)" width="100%" style="max-width: 36rem;" role="img" aria-label="Schematic of the detected assemblies">
                             <defs>
                                 <pattern id="cc-tree-hatch" width="@P(tHatchStep)" height="@P(tHatchStep)" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                                    <line x1="0" y1="0" x2="0" y2="@P(tHatchStep)" stroke="#2a3439" stroke-width="@P(tHatchStep / 8.0)" />
+                                    <line x1="0" y1="0" x2="0" y2="@P(tHatchStep)" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="@P(tHatchStep / 8.0)" />
                                 </pattern>
                             </defs>
 
@@ -181,11 +181,11 @@
                         <svg viewBox="0 0 @N(canvasWidth) @N(canvasHeight)" width="100%" style="max-width: 26rem;" role="img" aria-label="Schematic of the recognized components">
                             <defs>
                                 <pattern id="cc-hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
-                                    <line x1="0" y1="0" x2="0" y2="6" stroke="#2a3439" stroke-width="1" />
+                                    <line x1="0" y1="0" x2="0" y2="6" stroke="#38bdf8" stroke-opacity="0.55" stroke-width="1" />
                                 </pattern>
                             </defs>
 
-                            <line x1="@N(centerX)" y1="10" x2="@N(centerX)" y2="@N(canvasHeight - 10)" stroke="#8c9aa0" stroke-width="1" stroke-dasharray="8 4 2 4" />
+                            <line x1="@N(centerX)" y1="10" x2="@N(centerX)" y2="@N(canvasHeight - 10)" stroke="#64748b" stroke-width="1" stroke-dasharray="8 4 2 4" />
 
                             @foreach (var part in parts)
                             {
@@ -197,7 +197,7 @@
                                     var x = centerX - w / 2;
                                     var cylinderLabel = "&#8960;" + N((double)(part.Diameter ?? 0m)) + " x " + N((double)(part.Height ?? 0m));
 
-                                    <rect x="@N(x)" y="@N(cursorY)" width="@N(w)" height="@N(h)" style="fill: var(--cc-accent-soft);" stroke="#2a3439" stroke-width="2" />
+                                    <rect x="@N(x)" y="@N(cursorY)" width="@N(w)" height="@N(h)" style="fill: var(--cc-part-fill);" stroke="#38bdf8" stroke-width="2" />
                                     if (part.HasHatch)
                                     {
                                         <rect x="@N(x)" y="@N(cursorY)" width="@N(w)" height="@N(h)" fill="url(#cc-hatch)" stroke="none" />
@@ -210,7 +210,7 @@
                                     var rx = centerX - rw / 2;
                                     var rectLabel = N((double)(part.Width ?? 0m)) + " x " + N((double)(part.Height ?? 0m));
 
-                                    <rect x="@N(rx)" y="@N(cursorY)" width="@N(rw)" height="@N(h)" style="fill: var(--cc-accent-soft);" stroke="#2a3439" stroke-width="2" />
+                                    <rect x="@N(rx)" y="@N(cursorY)" width="@N(rw)" height="@N(h)" style="fill: var(--cc-part-fill);" stroke="#38bdf8" stroke-width="2" />
                                     if (part.HasHatch)
                                     {
                                         <rect x="@N(rx)" y="@N(cursorY)" width="@N(rw)" height="@N(h)" fill="url(#cc-hatch)" stroke="none" />
@@ -224,7 +224,7 @@
                                     var points = $"{N(centerX - top / 2)},{N(cursorY)} {N(centerX + top / 2)},{N(cursorY)} {N(centerX + bottom / 2)},{N(cursorY + h)} {N(centerX - bottom / 2)},{N(cursorY + h)}";
                                     var coneLabel = N((double)(part.Angle ?? 0m)) + "&deg; cone";
 
-                                    <polygon points="@points" style="fill: var(--cc-accent-soft);" stroke="#2a3439" stroke-width="2" stroke-linejoin="round" />
+                                    <polygon points="@points" style="fill: var(--cc-part-fill);" stroke="#38bdf8" stroke-width="2" stroke-linejoin="round" />
                                     if (part.HasHatch)
                                     {
                                         <polygon points="@points" fill="url(#cc-hatch)" stroke="none" />
@@ -260,7 +260,6 @@
     </div>
 
     <div class="cc-pane">
-        <partial name="_AssemblyLogic" model="Model" />
         <partial name="_CodePreview" model="Model" />
     </div>
 </div>
