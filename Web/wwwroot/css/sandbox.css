@@ -1,0 +1,332 @@
+/* ==========================================================================
+   CadToCode - sandbox (editor, run toolbar, console, 3D viewer)
+   ========================================================================== */
+
+/* ---------- Toolbar buttons ---------- */
+
+.cc-code-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.cc-run-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: linear-gradient(180deg, #4ade80 0%, #22c55e 100%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #052e16;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    box-shadow: 0 6px 18px -8px rgba(34, 197, 94, 0.7);
+}
+
+.cc-run-btn:hover:not(:disabled) {
+    background: linear-gradient(180deg, #86efac 0%, #4ade80 100%);
+    border-color: rgba(255, 255, 255, 0.3);
+    color: #052e16;
+    box-shadow: 0 0 14px rgba(74, 222, 128, 0.55);
+}
+
+.cc-run-btn:active:not(:disabled) {
+    transform: translateY(1px);
+}
+
+.cc-run-icon {
+    font-size: 0.78em;
+    line-height: 1;
+}
+
+.cc-run-btn.is-busy {
+    cursor: progress;
+}
+
+.cc-run-btn.is-busy .cc-run-icon {
+    animation: cc-run-pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes cc-run-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+}
+
+.cc-download-btn,
+.cc-reset-btn {
+    background: transparent;
+    border: 1px solid var(--cc-line-strong, #34425f);
+    color: var(--cc-ink, #e8eefb);
+}
+
+.cc-download-btn {
+    border-color: rgba(56, 189, 248, 0.55);
+    color: var(--cc-cyan, #38bdf8);
+}
+
+.cc-download-btn:hover:not(:disabled) {
+    background: rgba(56, 189, 248, 0.12);
+    border-color: var(--cc-cyan, #38bdf8);
+    color: #ffffff;
+}
+
+.cc-reset-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff;
+}
+
+.cc-sandbox .cc-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* ---------- Editor ---------- */
+
+.cc-editor {
+    position: relative;
+    height: 30rem;
+    min-height: 14rem;
+    max-height: 80vh;
+    resize: vertical;
+    overflow: hidden;
+    background: #080c14;
+}
+
+.cc-editor .cc-editor-highlight,
+.cc-editor .cc-editor-input {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    padding: 1rem 1.1rem 2rem 1.1rem;
+    border: 0;
+    border-radius: 0;
+    box-sizing: border-box;
+    font-family: var(--cc-font-mono, Consolas, monospace);
+    font-size: 0.84rem;
+    line-height: 1.7;
+    letter-spacing: 0;
+    tab-size: 4;
+    white-space: pre;
+    word-wrap: normal;
+    overflow-wrap: normal;
+    overflow: auto;
+    scrollbar-width: thin;
+    font-variant-ligatures: none;
+}
+
+.cc-editor .cc-editor-highlight {
+    pointer-events: none;
+    background: transparent;
+    color: var(--cc-code-text, #e8f0f3);
+    scrollbar-color: transparent transparent;
+}
+
+.cc-editor .cc-editor-highlight::-webkit-scrollbar {
+    background: transparent;
+}
+
+.cc-editor .cc-editor-highlight::-webkit-scrollbar-thumb {
+    background: transparent;
+}
+
+.cc-editor .cc-editor-highlight code {
+    display: block;
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    padding: 0;
+    white-space: inherit;
+}
+
+.cc-editor .cc-editor-input {
+    resize: none;
+    background: transparent;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    caret-color: var(--cc-code-text, #e8f0f3);
+    outline: none;
+}
+
+.cc-editor .cc-editor-input::selection {
+    background: rgba(56, 189, 248, 0.35);
+    -webkit-text-fill-color: transparent;
+}
+
+.cc-editor:focus-within {
+    box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.45);
+}
+
+/* ---------- Console ---------- */
+
+.cc-sandbox-console {
+    max-height: 14rem;
+    overflow: auto;
+    padding: 0.7rem 1rem 0.8rem;
+    border-top: 1px solid var(--cc-line, #243047);
+    border-left: 3px solid var(--cc-line-strong, #34425f);
+    background: #060910;
+    color: var(--cc-code-text, #e8f0f3);
+    font-family: var(--cc-font-mono, Consolas, monospace);
+    font-size: 0.78rem;
+    line-height: 1.6;
+}
+
+.cc-sandbox-console[hidden] {
+    display: none;
+}
+
+.cc-sandbox-console.is-ok {
+    border-left-color: var(--cc-ok, #34d399);
+}
+
+.cc-sandbox-console.is-error {
+    border-left-color: #f87171;
+}
+
+.cc-console-head {
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.cc-sandbox-console.is-ok .cc-console-head {
+    color: var(--cc-ok, #34d399);
+}
+
+.cc-sandbox-console.is-error .cc-console-head {
+    color: #f87171;
+}
+
+.cc-console-warn {
+    color: var(--cc-warn, #fbbf24);
+}
+
+.cc-console-out {
+    color: var(--cc-ink-soft, #a6b3cc);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.cc-console-diag {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0.1rem 0;
+    border: 0;
+    background: transparent;
+    color: #fca5a5;
+    font: inherit;
+    text-align: left;
+    white-space: pre-wrap;
+    word-break: break-word;
+    cursor: pointer;
+}
+
+.cc-console-diag.is-warning {
+    color: var(--cc-warn, #fbbf24);
+}
+
+.cc-console-diag.is-info {
+    color: var(--cc-cyan, #38bdf8);
+}
+
+.cc-console-diag:hover {
+    text-decoration: underline;
+}
+
+/* ---------- 3D viewer ---------- */
+
+.cc-viewer-panel .cc-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+
+.cc-viewer {
+    position: relative;
+    height: 22rem;
+    overflow: hidden;
+    border: 1px solid var(--cc-line, #243047);
+    border-radius: var(--cc-radius-sm, 0.3rem);
+    background:
+        radial-gradient(520px 320px at 50% 0%, rgba(56, 189, 248, 0.10), transparent 70%),
+        #080c14;
+    touch-action: none;
+}
+
+.cc-viewer-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: grab;
+    outline: none;
+}
+
+.cc-viewer-canvas:active {
+    cursor: grabbing;
+}
+
+.cc-viewer-empty {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    text-align: center;
+    color: var(--cc-ink-soft, #a6b3cc);
+    pointer-events: none;
+}
+
+.cc-viewer-empty[hidden] {
+    display: none;
+}
+
+.cc-viewer-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.cc-viewer-toolbar .cc-btn {
+    background: transparent;
+    border: 1px solid var(--cc-line-strong, #34425f);
+    color: var(--cc-ink, #e8eefb);
+}
+
+.cc-viewer-toolbar .cc-btn:hover {
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff;
+}
+
+.cc-viewer-toolbar .cc-btn.is-active {
+    background: rgba(56, 189, 248, 0.16);
+    border-color: var(--cc-cyan, #38bdf8);
+    color: #ffffff;
+}
+
+.cc-viewer-hint {
+    margin-left: auto;
+    color: var(--cc-ink-faint, #6f7f9b);
+    font-size: 0.72rem;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 767.98px) {
+    .cc-editor {
+        height: 22rem;
+    }
+
+    .cc-viewer {
+        height: 18rem;
+    }
+
+    .cc-viewer-hint {
+        flex-basis: 100%;
+        margin-left: 0;
+    }
+}

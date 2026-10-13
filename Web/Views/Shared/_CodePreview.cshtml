@@ -4,18 +4,32 @@
     var assembly = Model.Assembly;
     var showAssemblyCode = Model.HasAssembly && !string.IsNullOrWhiteSpace(assembly.Code);
     var hasEntityMarkers = showAssemblyCode && assembly.Code.Contains("// id:", StringComparison.Ordinal);
+    var runUrl = Url.Action("RunCode", "Project");
 }
+
+@Html.AntiForgeryToken()
 
 @if (showAssemblyCode)
 {
-    <section class="cc-code-panel" aria-labelledby="cc-assembly-code-title">
+    <section class="cc-code-panel cc-sandbox"
+             data-cc-sandbox
+             data-cc-run-url="@runUrl"
+             data-cc-source="#cc-assembly-source"
+             data-cc-readonly="true"
+             aria-labelledby="cc-assembly-code-title">
         <div class="cc-code-header">
             <h2 class="cc-code-title" id="cc-assembly-code-title">
-                Generated netDxf script (assembly parts)
+                Generated STEP script (assembly parts)
                 <span class="cc-code-source">@(Model.UsedAi ? "AI assisted" : "Rule based")</span>
             </h2>
 
             <div class="cc-code-actions">
+                <button type="button" class="cc-btn cc-btn-small cc-run-btn" data-cc-run>
+                    <span class="cc-run-icon" aria-hidden="true">&#9654;</span> Run
+                </button>
+                <button type="button" class="cc-btn cc-btn-small cc-download-btn" data-cc-download>
+                    Download STEP
+                </button>
                 <button type="button"
                         class="cc-btn cc-btn-small cc-copy-btn"
                         data-cc-copy-target="#cc-assembly-code"
@@ -25,6 +39,8 @@
             </div>
         </div>
 
+        <textarea id="cc-assembly-source" hidden>@assembly.Code</textarea>
+
         @if (hasEntityMarkers)
         {
             <pre class="cc-code-body cc-entity-code" tabindex="0"><code id="cc-assembly-code" class="language-csharp">@Html.Raw(CadToCode.Business.Services.AssemblyCodeBuilder.ToEntityHtml(assembly.Code))</code></pre>
@@ -33,14 +49,29 @@
         {
             <pre class="cc-code-body" tabindex="0"><code id="cc-assembly-code" class="language-csharp" data-cc-highlight>@assembly.Code</code></pre>
         }
+
+        <div class="cc-sandbox-console" data-cc-console hidden aria-live="polite"></div>
     </section>
 }
 
-<section class="cc-code-panel" aria-labelledby="cc-code-title">
+<section class="cc-code-panel cc-sandbox"
+         data-cc-sandbox
+         data-cc-run-url="@runUrl"
+         data-cc-source="#cc-code-input"
+         aria-labelledby="cc-code-title">
     <div class="cc-code-header">
-        <h2 class="cc-code-title" id="cc-code-title">Generated netDxf script (full drawing)</h2>
+        <h2 class="cc-code-title" id="cc-code-title">Try it yourself &mdash; STEP script (full drawing)</h2>
 
         <div class="cc-code-actions">
+            <button type="button" class="cc-btn cc-btn-small cc-run-btn" data-cc-run>
+                <span class="cc-run-icon" aria-hidden="true">&#9654;</span> Run
+            </button>
+            <button type="button" class="cc-btn cc-btn-small cc-download-btn" data-cc-download>
+                Download STEP
+            </button>
+            <button type="button" class="cc-btn cc-btn-small cc-reset-btn" data-cc-reset>
+                Reset
+            </button>
             <button type="button"
                     class="cc-btn cc-btn-small cc-copy-btn"
                     data-cc-copy-target="#cc-code"
@@ -50,7 +81,18 @@
         </div>
     </div>
 
-    <pre class="cc-code-body" tabindex="0"><code id="cc-code" class="language-csharp" data-cc-highlight>@Model.GeneratedCode</code></pre>
+    <div class="cc-editor" data-cc-editor>
+        <pre class="cc-editor-highlight cc-code-body" aria-hidden="true"><code id="cc-code" class="language-csharp"></code></pre>
+        <textarea id="cc-code-input"
+                  class="cc-editor-input cc-code-body"
+                  spellcheck="false"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  wrap="off"
+                  aria-label="STEP script editor">@Model.GeneratedCode</textarea>
+    </div>
+
+    <div class="cc-sandbox-console" data-cc-console hidden aria-live="polite"></div>
 </section>
 
 <section class="cc-panel cc-confirm-panel" aria-labelledby="cc-confirm-title">

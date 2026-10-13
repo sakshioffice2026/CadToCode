@@ -52,6 +52,11 @@
         $"<text x=\"{P(lx)}\" y=\"{P(ly)}\" class=\"cc-svg-assembly-label\" font-size=\"{P(tFont)}\">{System.Net.WebUtility.HtmlEncode(content)}</text>";
 }
 
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Quantico:wght@400;700&amp;display=swap" />
+<link rel="stylesheet" href="~/css/sandbox.css" asp-append-version="true" />
+
 <div class="cc-topbar">
     <div>
         <h1 class="cc-page-title">@project.Title</h1>
@@ -85,14 +90,38 @@
     </div>
 }
 
-<div class="cc-panes">
-    <div class="cc-pane">
-        <section class="cc-panel" aria-labelledby="cc-preview-title">
-            <div class="cc-panel-header">
-                <h2 class="cc-panel-title" id="cc-preview-title">Design preview</h2>
-                <span class="cc-chip cc-chip-muted">Drawn from recognized values</span>
-            </div>
+<nav class="cc-toolbar" aria-label="Workspace views">
+    <button type="button" class="cc-tool-btn" data-cc-open="cc-modal-design" aria-haspopup="dialog" aria-controls="cc-modal-design">
+        <span class="cc-tool-icon" aria-hidden="true">&#128065;&#65039;</span>
+        <span class="cc-tool-label">View Design Preview</span>
+    </button>
+    <button type="button" class="cc-tool-btn" data-cc-open="cc-modal-3d" aria-haspopup="dialog" aria-controls="cc-modal-3d">
+        <span class="cc-tool-icon" aria-hidden="true">&#129482;</span>
+        <span class="cc-tool-label">Open 3D Preview</span>
+    </button>
+    <button type="button" class="cc-tool-btn" data-cc-open="cc-modal-components" aria-haspopup="dialog" aria-controls="cc-modal-components">
+        <span class="cc-tool-icon" aria-hidden="true">&#128202;</span>
+        <span class="cc-tool-label">Recognized Components</span>
+    </button>
+    <button type="button" class="cc-tool-btn" data-cc-open="cc-modal-breakdown" aria-haspopup="dialog" aria-controls="cc-modal-breakdown">
+        <span class="cc-tool-icon" aria-hidden="true">&#128194;</span>
+        <span class="cc-tool-label">Component Breakdown</span>
+    </button>
+</nav>
 
+<div class="cc-workspace">
+    <partial name="_CodePreview" model="Model" />
+</div>
+
+<dialog class="cc-modal" id="cc-modal-design" aria-labelledby="cc-modal-design-title">
+    <div class="cc-modal-shell">
+        <header class="cc-modal-header">
+            <h2 class="cc-modal-title" id="cc-modal-design-title">Design Preview</h2>
+            <span class="cc-chip cc-chip-muted">Drawn from recognized values</span>
+            <button type="button" class="cc-modal-close" data-cc-close aria-label="Close design preview">&times;</button>
+        </header>
+
+        <div class="cc-modal-body">
             <div class="cc-panel-body">
                 <div class="cc-preview-frame">
                     @if (useTree)
@@ -253,17 +282,66 @@
                          alt="Original uploaded drawing" />
                 }
             </div>
-        </section>
-
-        <partial name="_ComponentStatsTable" model="Model" />
-        <partial name="_AssemblyBreakdown" model="Model" />
+        </div>
     </div>
+</dialog>
 
-    <div class="cc-pane">
-        <partial name="_CodePreview" model="Model" />
+<dialog class="cc-modal" id="cc-modal-3d" aria-labelledby="cc-modal-3d-title">
+    <div class="cc-modal-shell">
+        <header class="cc-modal-header">
+            <h2 class="cc-modal-title" id="cc-modal-3d-title">3D Preview</h2>
+            <span class="cc-chip cc-chip-muted" data-cc-viewer-status>Press Run to build the solid</span>
+            <button type="button" class="cc-modal-close" data-cc-close aria-label="Close 3D preview">&times;</button>
+        </header>
+
+        <div class="cc-modal-body">
+            <div class="cc-panel-body">
+                <div class="cc-viewer" id="cc-viewer" data-cc-viewer>
+                    <div class="cc-viewer-empty" data-cc-viewer-empty>
+                        <p class="cc-empty-title">No 3D model yet</p>
+                        <p class="mb-0">Press <strong>Run &#9654;</strong> on the script to see the STEP solid here.</p>
+                    </div>
+                </div>
+
+                <div class="cc-viewer-toolbar">
+                    <button type="button" class="cc-btn cc-btn-small cc-btn-ghost" data-cc-viewer-fit>Fit view</button>
+                    <button type="button" class="cc-btn cc-btn-small cc-btn-ghost" data-cc-viewer-wire>Wireframe</button>
+                    <span class="cc-viewer-hint">Drag to rotate &middot; right-drag to pan &middot; scroll to zoom</span>
+                </div>
+            </div>
+        </div>
     </div>
-</div>
+</dialog>
+
+<dialog class="cc-modal cc-modal-wide" id="cc-modal-components" aria-labelledby="cc-modal-components-title">
+    <div class="cc-modal-shell">
+        <header class="cc-modal-header">
+            <h2 class="cc-modal-title" id="cc-modal-components-title">Recognized Components</h2>
+            <button type="button" class="cc-modal-close" data-cc-close aria-label="Close recognized components">&times;</button>
+        </header>
+
+        <div class="cc-modal-body">
+            <partial name="_ComponentStatsTable" model="Model" />
+        </div>
+    </div>
+</dialog>
+
+<dialog class="cc-modal cc-modal-wide" id="cc-modal-breakdown" aria-labelledby="cc-modal-breakdown-title">
+    <div class="cc-modal-shell">
+        <header class="cc-modal-header">
+            <h2 class="cc-modal-title" id="cc-modal-breakdown-title">Component Breakdown</h2>
+            <button type="button" class="cc-modal-close" data-cc-close aria-label="Close component breakdown">&times;</button>
+        </header>
+
+        <div class="cc-modal-body">
+            <partial name="_AssemblyBreakdown" model="Model" />
+        </div>
+    </div>
+</dialog>
 
 @section Scripts {
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="~/js/entity-hover.js" asp-append-version="true"></script>
+    <script src="~/js/sandbox.js" asp-append-version="true"></script>
+    <script src="~/js/workspace.js" asp-append-version="true"></script>
 }

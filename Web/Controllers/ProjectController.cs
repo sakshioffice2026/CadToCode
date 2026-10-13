@@ -6,6 +6,11 @@ using Web.Models;
 
 namespace Web.Controllers;
 
+public class RunCodeRequest
+{
+    public string? Code { get; set; }
+}
+
 public class ProjectController : Controller
 {
     private const string UploadViewPath = "~/Views/Projects/Upload.cshtml";
@@ -14,15 +19,18 @@ public class ProjectController : Controller
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
     private readonly IDefinitionLearningService _learningService;
+    private readonly IStepScriptRunner _stepScriptRunner;
 
     public ProjectController(
         IProjectProcessingService processingService,
         ICodeGenerationService codeGenerationService,
-        IDefinitionLearningService learningService)
+        IDefinitionLearningService learningService,
+        IStepScriptRunner stepScriptRunner)
     {
         _processingService = processingService;
         _codeGenerationService = codeGenerationService;
         _learningService = learningService;
+        _stepScriptRunner = stepScriptRunner;
     }
 
     [HttpGet]
@@ -74,6 +82,15 @@ public class ProjectController : Controller
             GeneratedCode = code,
             Assembly = assembly
         });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(262_144)]
+    public async Task<IActionResult> RunCode([FromBody] RunCodeRequest? request, CancellationToken cancellationToken)
+    {
+        var result = await _stepScriptRunner.RunAsync(request?.Code, cancellationToken);
+        return Json(result);
     }
 
     [HttpPost]
@@ -142,6 +159,7 @@ public class ProjectController : Controller
             ".png" => "image/png",
             ".jpg" or ".jpeg" => "image/jpeg",
             ".dxf" => "application/dxf",
+            ".step" or ".stp" => "model/step",
             _ => "application/octet-stream"
         };
 

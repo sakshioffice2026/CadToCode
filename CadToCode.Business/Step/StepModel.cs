@@ -19,7 +19,11 @@ public sealed class StepDocument
 
     internal IReadOnlyList<Solid> Solids => _solids;
 
-    public StepDocument Add(Solid solid)
+    private StepAdder? _adder;
+
+    public StepAdder Add => _adder ??= new StepAdder(this);
+
+    internal StepDocument AddSolid(Solid solid)
     {
         if (solid is null)
         {
@@ -28,21 +32,6 @@ public sealed class StepDocument
 
         SandboxSession.Current?.RegisterSolid();
         _solids.Add(solid);
-        return this;
-    }
-
-    public StepDocument Add(IEnumerable<Solid> solids)
-    {
-        if (solids is null)
-        {
-            throw new ArgumentNullException(nameof(solids));
-        }
-
-        foreach (var solid in solids)
-        {
-            Add(solid);
-        }
-
         return this;
     }
 
@@ -321,5 +310,146 @@ internal sealed class CylinderSolid : Solid
         {
             return (Cx - Radius, Cy - Radius, Z, Cx + Radius, Cy + Radius, Z + Height);
         }
+    }
+}
+public sealed class CustomProfile
+{
+    private readonly (double X, double Y)[] _outline;
+    private readonly (double X, double Y)[][] _holes;
+
+    public CustomProfile(
+        string name,
+        string layer,
+        (double X, double Y)[] outline,
+        (double X, double Y)[][]? holes = null)
+    {
+        if (outline is null)
+        {
+            throw new ArgumentNullException(nameof(outline));
+        }
+
+        Name = string.IsNullOrWhiteSpace(name) ? "Profile" : name.Trim();
+        Layer = string.IsNullOrWhiteSpace(layer) ? "0" : layer.Trim();
+        _outline = outline;
+        _holes = holes ?? Array.Empty<(double X, double Y)[]>();
+    }
+
+    private CustomProfile(string name, string layer, double x, double y, double radius)
+    {
+        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(radius) || radius <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(radius), "A circle profile needs a finite position and a radius greater than zero.");
+        }
+
+        Name = string.IsNullOrWhiteSpace(name) ? "Circle" : name.Trim();
+        Layer = string.IsNullOrWhiteSpace(layer) ? "0" : layer.Trim();
+        _outline = Array.Empty<(double X, double Y)>();
+        _holes = Array.Empty<(double X, double Y)[]>();
+        IsCircle = true;
+        CenterX = x;
+        CenterY = y;
+        Radius = radius;
+    }
+
+    public string Name { get; }
+
+    public string Layer { get; }
+
+    public bool IsCircle { get; }
+
+    public double CenterX { get; }
+
+    public double CenterY { get; }
+
+    public double Radius { get; }
+
+    public double Z { get; private set; }
+
+    public int HoleCount => _holes.Length;
+
+    public (double X, double Y)[] Outline => _outline;
+
+    public (double X, double Y)[][] Holes => _holes;
+
+    public static CustomProfile Circle(string name, string layer, double x, double y, double radius)
+    {
+        return new CustomProfile(name, layer, x, y, radius);
+    }
+
+    public CustomProfile AtZ(double z)
+    {
+        if (!double.IsFinite(z))
+        {
+            throw new ArgumentOutOfRangeException(nameof(z), "The Z value must be a finite number.");
+        }
+
+        Z = z;
+        return this;
+    }
+
+    internal Solid ToSolid(double depth)
+    {
+        var solid = IsCircle
+            ? Solid.Cylinder(CenterX, CenterY, Radius, depth)
+            : Solid.Extrude(_outline, _holes, depth);
+
+        solid.Named(Name);
+
+        if (Z != 0)
+        {
+            solid.AtZ(Z);
+        }
+
+        return solid;
+    }
+}
+
+public sealed class StepAdder
+{
+    private readonly StepDocument _document;
+
+    internal StepAdder(StepDocument document)
+    {
+        _document = document;
+    }
+
+    public StepDocument Extrude(CustomProfile profile, double depth)
+    {
+        if (profile is null)
+        {
+            throw new ArgumentNullException(nameof(profile));
+        }
+
+        return _document.AddSolid(profile.ToSolid(depth));
+    }
+
+    public StepDocument Extrude(IEnumerable<CustomProfile> profiles, double depth)
+    {
+        if (profiles is null)
+        {
+            throw new ArgumentNullException(nameof(profiles));
+        }
+
+        foreach (var profile in profiles)
+        {
+            Extrude(profile, depth);
+        }
+
+        return _document;
+    }
+
+    public StepDocument Cylinder(string name, double x, double y, double radius, double height)
+    {
+        return _document.AddSolid(Solid.Cylinder(x, y, radius, height).Named(name));
+    }
+
+    public StepDocument Box(string name, double x, double y, double width, double height, double depth)
+    {
+        return _document.AddSolid(Solid.Box(x, y, width, height, depth).Named(name));
+    }
+
+    public StepDocument Part(Solid solid)
+    {
+        return _document.AddSolid(solid);
     }
 }
