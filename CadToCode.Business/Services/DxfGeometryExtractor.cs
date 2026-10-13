@@ -330,6 +330,30 @@ public class DxfGeometryExtractor : IGeometryExtractor
                     ProcessInsert(insert, matrix, context, depth, blockStack);
                     break;
 
+                case DxfSolid solid:
+                    AddFilledPolygon(context, matrix, entity,
+                        (solid.FirstCorner.X, solid.FirstCorner.Y),
+                        (solid.SecondCorner.X, solid.SecondCorner.Y),
+                        (solid.FourthCorner.X, solid.FourthCorner.Y),
+                        (solid.ThirdCorner.X, solid.ThirdCorner.Y));
+                    break;
+
+                case DxfTrace trace:
+                    AddFilledPolygon(context, matrix, entity,
+                        (trace.FirstCorner.X, trace.FirstCorner.Y),
+                        (trace.SecondCorner.X, trace.SecondCorner.Y),
+                        (trace.FourthCorner.X, trace.FourthCorner.Y),
+                        (trace.ThirdCorner.X, trace.ThirdCorner.Y));
+                    break;
+
+                case Dxf3DFace face:
+                    AddFilledPolygon(context, matrix, entity,
+                        (face.FirstCorner.X, face.FirstCorner.Y),
+                        (face.SecondCorner.X, face.SecondCorner.Y),
+                        (face.ThirdCorner.X, face.ThirdCorner.Y),
+                        (face.FourthCorner.X, face.FourthCorner.Y));
+                    break;
+
                 case DxfSeqend:
                 case DxfVertex:
                 case DxfAttribute:
@@ -450,6 +474,20 @@ public class DxfGeometryExtractor : IGeometryExtractor
         {
             context.Result.Polylines.Add(record);
         }
+    }
+
+    private static void AddFilledPolygon(
+        ExtractionContext context,
+        Matrix2D matrix,
+        DxfEntity entity,
+        params (double X, double Y)[] corners)
+    {
+        AddPolylineRecord(
+            context,
+            matrix,
+            corners.Select(c => (c.X, c.Y, 0.0)),
+            true,
+            entity);
     }
 
     private static void AddLine(
@@ -820,10 +858,12 @@ public class DxfGeometryExtractor : IGeometryExtractor
             switch (path)
             {
                 case DxfHatch.PolylineBoundaryPath polylinePath:
-                    foreach (var vertex in polylinePath.Vertices)
-                    {
-                        AddHatchPoint(points, matrix, vertex.Location.X, vertex.Location.Y);
-                    }
+                    AddHatchPolyline(
+                        points,
+                        matrix,
+                        polylinePath.Vertices
+                            .Select(v => (X: v.Location.X, Y: v.Location.Y, Bulge: (double)v.Bulge))
+                            .ToList());
                     break;
 
                 case DxfHatch.NonPolylineBoundaryPath edgePath:
@@ -871,14 +911,66 @@ public class DxfGeometryExtractor : IGeometryExtractor
             end += 360.0;
         }
 
-        for (var i = 0; i <= 2; i++)
+        var steps = Math.Max(2, (int)Math.Ceiling((end - start) / ArcStepDegrees));
+        var sampled = new List<(double X, double Y)>(steps + 1);
+
+        for (var i = 0; i <= steps; i++)
         {
-            var angle = (start + (end - start) * i / 2.0) * Math.PI / 180.0;
-            AddHatchPoint(
-                points,
-                matrix,
+            var angle = (start + (end - start) * i / steps) * Math.PI / 180.0;
+            sampled.Add((
                 arcEdge.Center.X + arcEdge.Radius * Math.Cos(angle),
-                arcEdge.Center.Y + arcEdge.Radius * Math.Sin(angle));
+                arcEdge.Center.Y + arcEdge.Radius * Math.Sin(angle)));
+        }
+
+        if (!arcEdge.IsCounterClockwise)
+        {
+            sampled.Reverse();
+        }
+
+        foreach (var (x, y) in sampled)
+        {
+            AddHatchPoint(points, matrix, x, y);
+        }
+    }
+
+    private static void AddHatchPolyline(
+        List<GeometryPoint> points,
+        Matrix2D matrix,
+        List<(double X, double Y, double Bulge)> vertices)
+    {
+        for (var i = 0; i < vertices.Count; i++)
+        {
+            var current = vertices[i];
+            AddHatchPoint(points, matrix, current.X, current.Y);
+
+            if (Math.Abs(current.Bulge) <= 1e-9 || vertices.Count < 2)
+            {
+                continue;
+            }
+
+            var next = vertices[(i + 1) % vertices.Count];
+            var dx = next.X - current.X;
+            var dy = next.Y - current.Y;
+            var chord = Math.Sqrt(dx * dx + dy * dy);
+
+            if (chord < 1e-12)
+            {
+                continue;
+            }
+
+            var offset = chord / 2.0 * (1.0 - current.Bulge * current.Bulge) / (2.0 * current.Bulge);
+            var centerX = (current.X + next.X) / 2.0 + (-dy / chord) * offset;
+            var centerY = (current.Y + next.Y) / 2.0 + (dx / chord) * offset;
+            var radius = Math.Sqrt(offset * offset + chord * chord / 4.0);
+            var sweep = 4.0 * Math.Atan(current.Bulge);
+            var first = Math.Atan2(current.Y - centerY, current.X - centerX);
+            var steps = Math.Max(2, (int)Math.Ceiling(Math.Abs(sweep) / (ArcStepDegrees * Math.PI / 180.0)));
+
+            for (var k = 1; k < steps; k++)
+            {
+                var angle = first + sweep * k / steps;
+                AddHatchPoint(points, matrix, centerX + radius * Math.Cos(angle), centerY + radius * Math.Sin(angle));
+            }
         }
     }
 
