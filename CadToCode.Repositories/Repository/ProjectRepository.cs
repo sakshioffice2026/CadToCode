@@ -26,6 +26,7 @@ public class ProjectRepository : IProjectRepository
             SourceFileType = project.SourceFileType.ToString(),
             OriginalFileName = project.OriginalFileName,
             StoredFilePath = storedFilePath,
+            FileSizeBytes = project.FileSizeBytes,
             DetectedUnit = project.DetectedUnit?.ToString(),
             Unit = project.Unit.ToString(),
             ScaleMmPerPixel = project.ScaleMmPerPixel,
@@ -82,6 +83,60 @@ public class ProjectRepository : IProjectRepository
         return entities.Select(ToDto).ToList();
     }
 
+    public async Task<List<ProjectHistoryItemDto>> ListHistoryAsync(int? take = null, CancellationToken cancellationToken = default)
+    {
+        IQueryable<Project> query = _context.Projects
+            .AsNoTracking()
+            .OrderByDescending(p => p.CreatedAt)
+            .ThenByDescending(p => p.Id);
+
+        if (take.HasValue && take.Value > 0)
+        {
+            query = query.Take(take.Value);
+        }
+
+        var rows = await query
+            .Select(p => new
+            {
+                p.Id,
+                p.Title,
+                p.OriginalFileName,
+                p.SourceFileType,
+                p.FileSizeBytes,
+                p.Status,
+                p.ErrorMessage,
+                ComponentCount = p.DrawingComponents.Count,
+                p.CreatedAt,
+                p.LastOpenedAt
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(r => new ProjectHistoryItemDto
+        {
+            Id = r.Id,
+            Title = r.Title,
+            OriginalFileName = r.OriginalFileName,
+            SourceFileType = Enum.Parse<SourceFileType>(r.SourceFileType, true),
+            FileSizeBytes = r.FileSizeBytes,
+            Status = Enum.Parse<ProjectStatus>(r.Status, true),
+            ErrorMessage = r.ErrorMessage,
+            ComponentCount = r.ComponentCount,
+            CreatedAt = r.CreatedAt,
+            LastOpenedAt = r.LastOpenedAt
+        }).ToList();
+    }
+
+    public async Task TouchLastOpenedAsync(int id, CancellationToken cancellationToken = default)
+    {
+        var entity = await _context.Projects.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+        if (entity is null)
+        {
+            return;
+        }
+
+        entity.LastOpenedAt = DateTime.UtcNow;
+    }
+
     public async Task UpdateStatusAsync(int id, ProjectStatus status, string? errorMessage = null, CancellationToken cancellationToken = default)
     {
         var entity = await _context.Projects.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
@@ -134,6 +189,7 @@ public class ProjectRepository : IProjectRepository
             Title = entity.Title,
             SourceFileType = Enum.Parse<SourceFileType>(entity.SourceFileType, true),
             OriginalFileName = entity.OriginalFileName,
+            FileSizeBytes = entity.FileSizeBytes,
             DetectedUnit = string.IsNullOrWhiteSpace(entity.DetectedUnit)
                 ? null
                 : Enum.Parse<DrawingUnit>(entity.DetectedUnit, true),
@@ -141,7 +197,8 @@ public class ProjectRepository : IProjectRepository
             ScaleMmPerPixel = entity.ScaleMmPerPixel,
             Status = Enum.Parse<ProjectStatus>(entity.Status, true),
             ErrorMessage = entity.ErrorMessage,
-            CreatedAt = entity.CreatedAt
+            CreatedAt = entity.CreatedAt,
+            LastOpenedAt = entity.LastOpenedAt
         };
     }
 

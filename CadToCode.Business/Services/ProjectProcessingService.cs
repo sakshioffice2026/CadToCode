@@ -55,6 +55,8 @@ public class ProjectProcessingService : IProjectProcessingService
             return new UploadResultDto { Success = false, ErrorMessage = ex.Message };
         }
 
+        var fileSize = await GetStoredFileSizeAsync(storedPath, cancellationToken);
+
         UploadResultDto result;
 
         try
@@ -68,6 +70,7 @@ public class ProjectProcessingService : IProjectProcessingService
                     Title = Truncate(title, MaxTitleLength),
                     SourceFileType = fileType,
                     OriginalFileName = Truncate(fileName, MaxFileNameLength),
+                    FileSizeBytes = fileSize,
                     Unit = DrawingUnit.Millimeter,
                     Status = ProjectStatus.Processing
                 },
@@ -129,6 +132,40 @@ public class ProjectProcessingService : IProjectProcessingService
         return _unitOfWork.Projects.GetByIdAsync(projectId, cancellationToken);
     }
 
+    public Task<List<ProjectHistoryItemDto>> GetHistoryAsync(int? take = null, CancellationToken cancellationToken = default)
+    {
+        return _unitOfWork.Projects.ListHistoryAsync(take, cancellationToken);
+    }
+
+    public async Task MarkOpenedAsync(int projectId, CancellationToken cancellationToken = default)
+    {
+        await _unitOfWork.Projects.TouchLastOpenedAsync(projectId, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+    }
+
+    public async Task<bool> DeleteProjectAsync(int projectId, CancellationToken cancellationToken = default)
+    {
+        var storedPath = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+        if (storedPath is null)
+        {
+            return false;
+        }
+
+        await _unitOfWork.Projects.DeleteAsync(projectId, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        try
+        {
+            await _storage.DeleteAsync(storedPath, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Project {ProjectId} was removed but its stored file could not be deleted.", projectId);
+        }
+
+        return true;
+    }
+
     public async Task<bool> UpdateComponentAsync(ComponentDto component, CancellationToken cancellationToken = default)
     {
         var existing = await _unitOfWork.Components.GetByIdAsync(component.Id, cancellationToken);
@@ -152,6 +189,20 @@ public class ProjectProcessingService : IProjectProcessingService
         }
 
         return await _storage.OpenReadAsync(path, cancellationToken);
+    }
+
+    private async Task<long> GetStoredFileSizeAsync(string storedPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var stream = await _storage.OpenReadAsync(storedPath, cancellationToken);
+            return stream is { CanSeek: true } ? stream.Length : 0L;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Could not read the size of stored file {StoredPath}.", storedPath);
+            return 0L;
+        }
     }
 
     private async Task RunAssemblyAnalysisAsync(int projectId, CancellationToken cancellationToken)

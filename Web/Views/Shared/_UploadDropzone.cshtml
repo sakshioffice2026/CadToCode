@@ -1,11 +1,12 @@
 <div class="cc-dropzone" data-cc-dropzone>
     <input type="file"
-           id="file"
-           name="file"
+           id="files"
+           name="files"
            class="cc-dropzone-input"
            accept=".dxf,.png,.jpg,.jpeg"
-           aria-label="Drawing file"
+           aria-label="Drawing files"
            data-cc-dropzone-input
+           multiple
            required />
 
     <span class="cc-dropzone-icon" aria-hidden="true">
@@ -16,7 +17,8 @@
         </svg>
     </span>
 
-    <p class="cc-dropzone-title">Drop a drawing here, or click to browse</p>
-    <p class="cc-dropzone-hint">DXF, PNG or JPG, up to 20 MB</p>
+    <p class="cc-dropzone-title">Drop drawings here, or click to browse</p>
+    <p class="cc-dropzone-hint">DXF, PNG or JPG, up to 20 MB each. Select several files to upload them together.</p>
     <p class="cc-file-name" data-cc-file-name hidden></p>
+    <ul class="cc-file-list" data-cc-file-list hidden></ul>
 </div>

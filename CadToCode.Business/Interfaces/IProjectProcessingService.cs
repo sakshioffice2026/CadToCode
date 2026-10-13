@@ -8,6 +8,12 @@ public interface IProjectProcessingService
 
     Task<ProjectResultDto?> GetProjectAsync(int projectId, CancellationToken cancellationToken = default);
 
+    Task<List<ProjectHistoryItemDto>> GetHistoryAsync(int? take = null, CancellationToken cancellationToken = default);
+
+    Task MarkOpenedAsync(int projectId, CancellationToken cancellationToken = default);
+
+    Task<bool> DeleteProjectAsync(int projectId, CancellationToken cancellationToken = default);
+
     Task<bool> UpdateComponentAsync(ComponentDto component, CancellationToken cancellationToken = default);
 
     Task<Stream?> OpenSourceFileAsync(int projectId, CancellationToken cancellationToken = default);

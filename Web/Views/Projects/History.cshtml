@@ -1,0 +1,176 @@
+@model List<CadToCode.Models.Dtos.ProjectHistoryItemDto>
+@using System.Globalization
+@using CadToCode.Models.Enums
+
+@{
+    ViewData["Title"] = "Drawing history";
+
+    string Size(long bytes)
+    {
+        if (bytes <= 0) return "-";
+        if (bytes < 1024) return bytes.ToString(CultureInfo.InvariantCulture) + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024d).ToString("0.#", CultureInfo.InvariantCulture) + " KB";
+        return (bytes / 1024d / 1024d).ToString("0.##", CultureInfo.InvariantCulture) + " MB";
+    }
+
+    string Iso(DateTime value) =>
+        DateTime.SpecifyKind(value, DateTimeKind.Utc).ToString("o", CultureInfo.InvariantCulture);
+
+    string Plain(DateTime value) =>
+        value.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
+
+    string StatusClass(ProjectStatus status) => status switch
+    {
+        ProjectStatus.Processed => "cc-status-ok",
+        ProjectStatus.Failed => "cc-status-bad",
+        _ => "cc-status-warn"
+    };
+}
+
+<link rel="stylesheet" href="~/css/history.css" asp-append-version="true" />
+
+<div class="cc-topbar">
+    <div>
+        <h1 class="cc-page-title">Drawing history</h1>
+        <p class="cc-page-meta">@Model.Count saved @(Model.Count == 1 ? "drawing" : "drawings"). Open any one to continue where you left off.</p>
+    </div>
+
+    <div class="d-flex gap-2">
+        <a class="cc-btn cc-btn-primary" asp-controller="Project" asp-action="Upload">Upload drawing</a>
+    </div>
+</div>
+
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="cc-alert cc-alert-error" role="alert">@errorMessage</div>
+}
+
+@if (TempData["Success"] is string successMessage)
+{
+    <div class="cc-alert cc-alert-success" role="status">@successMessage</div>
+}
+
+@if (Model.Count == 0)
+{
+    <div class="cc-history-empty">
+        <h2>Nothing saved yet</h2>
+        <p>Every drawing you upload is stored here so you can come back to it later.</p>
+        <a class="cc-btn cc-btn-primary" asp-controller="Project" asp-action="Upload">Upload your first drawing</a>
+    </div>
+}
+else
+{
+    <section class="cc-panel cc-history" aria-labelledby="cc-history-title">
+        <div class="cc-panel-header">
+            <h2 class="cc-panel-title" id="cc-history-title">Saved drawings</h2>
+
+            <input type="search"
+                   class="cc-history-search"
+                   placeholder="Filter by name"
+                   aria-label="Filter drawings by name"
+                   data-cc-history-filter />
+        </div>
+
+        <div class="cc-panel-body cc-table-wrap">
+            <table class="cc-stats-table cc-history-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Drawing</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">Status</th>
+                        <th scope="col" class="cc-num">Parts</th>
+                        <th scope="col" class="cc-num">Size</th>
+                        <th scope="col">Uploaded</th>
+                        <th scope="col">Last opened</th>
+                        <th scope="col"><span class="visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in Model)
+                    {
+                        <tr data-cc-history-row data-cc-history-name="@((item.Title + " " + item.OriginalFileName).ToLowerInvariant())">
+                            <td>
+                                <a class="cc-history-name" asp-controller="Project" asp-action="Details" asp-route-id="@item.Id">@item.Title</a>
+                                <span class="cc-history-file">@item.OriginalFileName</span>
+                                @if (item.Status == ProjectStatus.Failed && !string.IsNullOrWhiteSpace(item.ErrorMessage))
+                                {
+                                    <span class="cc-history-error" title="@item.ErrorMessage">@item.ErrorMessage</span>
+                                }
+                            </td>
+                            <td>@(item.SourceFileType == SourceFileType.Dxf ? "DXF" : "Image")</td>
+                            <td><span class="cc-status @StatusClass(item.Status)">@item.Status</span></td>
+                            <td class="cc-num">@item.ComponentCount</td>
+                            <td class="cc-num">@Size(item.FileSizeBytes)</td>
+                            <td><time datetime="@Iso(item.CreatedAt)" data-cc-local-time>@Plain(item.CreatedAt)</time></td>
+                            <td>
+                                @if (item.LastOpenedAt.HasValue)
+                                {
+                                    <time datetime="@Iso(item.LastOpenedAt.Value)" data-cc-local-time>@Plain(item.LastOpenedAt.Value)</time>
+                                }
+                                else
+                                {
+                                    <span class="cc-history-never">Never</span>
+                                }
+                            </td>
+                            <td class="cc-history-actions">
+                                <a class="cc-btn cc-btn-primary cc-btn-small" asp-controller="Project" asp-action="Details" asp-route-id="@item.Id">Open</a>
+
+                                <a class="cc-btn cc-btn-ghost cc-btn-small" asp-controller="Project" asp-action="Download" asp-route-id="@item.Id">Download</a>
+
+                                <form asp-controller="Project" asp-action="Delete" asp-route-id="@item.Id" method="post" class="d-inline" data-cc-confirm="Remove &quot;@item.Title&quot; from history? The stored file will be deleted.">
+                                    <button type="submit" class="cc-btn cc-btn-ghost cc-btn-small cc-btn-danger">Delete</button>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <p class="cc-history-noresults" data-cc-history-noresults hidden>No drawings match your filter.</p>
+        </div>
+    </section>
+}
+
+@section Scripts {
+    <script>
+        (function () {
+            var formatter = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+
+            document.querySelectorAll('[data-cc-local-time]').forEach(function (el) {
+                var date = new Date(el.getAttribute('datetime'));
+                if (!isNaN(date.getTime())) {
+                    el.textContent = formatter.format(date);
+                }
+            });
+
+            document.querySelectorAll('form[data-cc-confirm]').forEach(function (form) {
+                form.addEventListener('submit', function (event) {
+                    if (!window.confirm(form.getAttribute('data-cc-confirm'))) {
+                        event.preventDefault();
+                    }
+                });
+            });
+
+            var filter = document.querySelector('[data-cc-history-filter]');
+            var rows = document.querySelectorAll('[data-cc-history-row]');
+            var empty = document.querySelector('[data-cc-history-noresults]');
+
+            if (filter) {
+                filter.addEventListener('input', function () {
+                    var term = filter.value.trim().toLowerCase();
+                    var visible = 0;
+
+                    rows.forEach(function (row) {
+                        var match = !term || row.getAttribute('data-cc-history-name').indexOf(term) !== -1;
+                        row.hidden = !match;
+                        if (match) { visible++; }
+                    });
+
+                    if (empty) {
+                        empty.hidden = visible !== 0;
+                    }
+                });
+            }
+        })();
+    </script>
+}

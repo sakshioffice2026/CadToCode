@@ -1,0 +1,209 @@
+/* ==========================================================================
+   CadToCode - project history
+   Sidebar recent list and history management table.
+   ========================================================================== */
+
+/* ---------- Sidebar: recent drawings ---------- */
+
+.cc-sidebar-section {
+    min-height: 0;
+}
+
+.cc-recent-link {
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+}
+
+.cc-recent-title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.cc-recent-empty {
+    margin: 0;
+    padding: 0.4rem 0.75rem;
+    color: var(--cc-ink-faint);
+    font-size: 0.85rem;
+}
+
+.cc-recent-all {
+    display: block;
+    margin-top: 0.4rem;
+    padding: 0.3rem 0.75rem;
+    color: var(--cc-accent-deep);
+    font-size: 0.82rem;
+    text-decoration: none;
+}
+
+.cc-recent-all:hover {
+    color: #ffffff;
+    text-decoration: underline;
+}
+
+.cc-dot {
+    flex: 0 0 auto;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: var(--cc-ink-faint);
+}
+
+.cc-dot-ok {
+    background: var(--cc-ok);
+    box-shadow: 0 0 6px var(--cc-ok);
+}
+
+.cc-dot-warn {
+    background: var(--cc-warn);
+}
+
+.cc-dot-bad {
+    background: var(--cc-bad);
+}
+
+/* ---------- History page ---------- */
+
+.cc-history .cc-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+}
+
+.cc-history-search {
+    width: 14rem;
+    max-width: 100%;
+    padding: 0.35rem 0.7rem;
+    border: 1px solid var(--cc-line-strong, var(--cc-line));
+    border-radius: var(--cc-radius-sm);
+    background: var(--cc-surface-sunken, var(--cc-surface));
+    color: var(--cc-ink);
+    font-size: 0.88rem;
+}
+
+.cc-history-search:focus {
+    outline: none;
+    border-color: var(--cc-accent);
+    box-shadow: 0 0 0 2px var(--cc-accent-soft);
+}
+
+.cc-history-table td {
+    vertical-align: middle;
+}
+
+.cc-history-name {
+    display: block;
+    color: var(--cc-ink);
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.cc-history-name:hover {
+    color: var(--cc-accent-deep);
+    text-decoration: underline;
+}
+
+.cc-history-file {
+    display: block;
+    max-width: 22rem;
+    overflow: hidden;
+    color: var(--cc-ink-faint);
+    font-family: var(--cc-font-mono);
+    font-size: 0.78rem;
+    text-overflow: ellipsis;
+}
+
+.cc-history-error {
+    display: block;
+    max-width: 22rem;
+    overflow: hidden;
+    color: var(--cc-bad);
+    font-size: 0.78rem;
+    text-overflow: ellipsis;
+}
+
+.cc-history-never {
+    color: var(--cc-ink-faint);
+}
+
+.cc-history-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 0.4rem;
+}
+
+.cc-history-noresults {
+    margin: 0;
+    padding: 1rem 0.75rem;
+    color: var(--cc-ink-soft);
+}
+
+.cc-btn-danger {
+    color: var(--cc-bad);
+}
+
+.cc-btn-danger:hover {
+    border-color: var(--cc-bad);
+    color: var(--cc-bad);
+}
+
+/* ---------- Status pill ---------- */
+
+.cc-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.6rem;
+    border: 1px solid currentColor;
+    border-radius: 999px;
+    font-size: 0.76rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.cc-status-ok {
+    color: var(--cc-ok);
+}
+
+.cc-status-warn {
+    color: var(--cc-warn);
+}
+
+.cc-status-bad {
+    color: var(--cc-bad);
+}
+
+/* ---------- Empty state ---------- */
+
+.cc-history-empty {
+    max-width: 32rem;
+    padding: 2.5rem 1.5rem;
+    border: 1px dashed var(--cc-line-strong, var(--cc-line));
+    border-radius: var(--cc-radius);
+    text-align: center;
+}
+
+.cc-history-empty h2 {
+    margin: 0 0 0.4rem;
+    color: var(--cc-ink);
+    font-size: 1.15rem;
+}
+
+.cc-history-empty p {
+    margin: 0 0 1.25rem;
+    color: var(--cc-ink-soft);
+}
+
+@media (max-width: 900px) {
+    .cc-history-search {
+        width: 100%;
+    }
+
+    .cc-history-actions {
+        justify-content: flex-start;
+    }
+}

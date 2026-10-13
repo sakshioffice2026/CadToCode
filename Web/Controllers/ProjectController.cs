@@ -15,6 +15,10 @@ public class ProjectController : Controller
 {
     private const string UploadViewPath = "~/Views/Projects/Upload.cshtml";
     private const string DetailsViewPath = "~/Views/Projects/Details.cshtml";
+    private const string HistoryViewPath = "~/Views/Projects/History.cshtml";
+
+    private const int MaxFilesPerBatch = 20;
+    private const long MaxBatchBytes = 524_288_000;
 
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
@@ -41,24 +45,109 @@ public class ProjectController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> Upload(IFormFile? file, CancellationToken cancellationToken)
+    [RequestSizeLimit(MaxBatchBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxBatchBytes)]
+    public async Task<IActionResult> Upload(List<IFormFile>? files, CancellationToken cancellationToken)
     {
-        if (file is null || file.Length == 0)
+        var selected = (files ?? new List<IFormFile>())
+            .Where(f => f is not null && f.Length > 0)
+            .ToList();
+
+        if (selected.Count == 0)
         {
-            ModelState.AddModelError(string.Empty, "Please choose a file to upload.");
+            ModelState.AddModelError(string.Empty, "Please choose at least one file to upload.");
             return View(UploadViewPath);
         }
 
-        await using var stream = file.OpenReadStream();
-        var result = await _processingService.ProcessUploadAsync(stream, file.FileName, cancellationToken);
-
-        if (result.ProjectId.HasValue)
+        if (selected.Count > MaxFilesPerBatch)
         {
-            return RedirectToAction(nameof(Details), new { id = result.ProjectId.Value });
+            ModelState.AddModelError(string.Empty, $"You can upload up to {MaxFilesPerBatch} files at a time.");
+            return View(UploadViewPath);
         }
 
-        ModelState.AddModelError(string.Empty, result.ErrorMessage ?? "The upload failed.");
-        return View(UploadViewPath);
+        var succeededIds = new List<int>();
+        var failures = new List<string>();
+
+        foreach (var file in selected)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var fileName = Path.GetFileName(file.FileName);
+
+            try
+            {
+                await using var stream = file.OpenReadStream();
+                var result = await _processingService.ProcessUploadAsync(stream, fileName, cancellationToken);
+
+                if (result.ProjectId.HasValue)
+                {
+                    succeededIds.Add(result.ProjectId.Value);
+                }
+
+                if (!result.Success)
+                {
+                    failures.Add($"{fileName}: {result.ErrorMessage ?? "The upload failed."}");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception)
+            {
+                failures.Add($"{fileName}: The upload could not be processed.");
+            }
+        }
+
+        if (selected.Count == 1)
+        {
+            if (succeededIds.Count == 1)
+            {
+                return RedirectToAction(nameof(Details), new { id = succeededIds[0] });
+            }
+
+            foreach (var failure in failures)
+            {
+                ModelState.AddModelError(string.Empty, failure);
+            }
+
+            return View(UploadViewPath);
+        }
+
+        if (succeededIds.Count == 0 && failures.Count > 0)
+        {
+            foreach (var failure in failures)
+            {
+                ModelState.AddModelError(string.Empty, failure);
+            }
+
+            return View(UploadViewPath);
+        }
+
+        var analyzedCount = selected.Count - failures.Count;
+
+        if (analyzedCount > 0)
+        {
+            TempData["Success"] = analyzedCount == 1
+                ? "1 drawing uploaded and analyzed."
+                : $"{analyzedCount} drawings uploaded and analyzed.";
+        }
+
+        if (failures.Count > 0)
+        {
+            TempData["Error"] = failures.Count == 1
+                ? "1 drawing could not be analyzed. " + failures[0]
+                : $"{failures.Count} drawings could not be analyzed. " + string.Join(" | ", failures);
+        }
+
+        return RedirectToAction(nameof(History));
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> History(CancellationToken cancellationToken)
+    {
+        var history = await _processingService.GetHistoryAsync(null, cancellationToken);
+        return View(HistoryViewPath, history);
     }
 
     [HttpGet]
@@ -69,6 +158,8 @@ public class ProjectController : Controller
         {
             return NotFound();
         }
+
+        await _processingService.MarkOpenedAsync(id, cancellationToken);
 
         var code = await _codeGenerationService.GenerateAsync(id, cancellationToken);
 
@@ -82,6 +173,24 @@ public class ProjectController : Controller
             GeneratedCode = code,
             Assembly = assembly
         });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Delete(int id, CancellationToken cancellationToken)
+    {
+        var deleted = await _processingService.DeleteProjectAsync(id, cancellationToken);
+
+        if (deleted)
+        {
+            TempData["Success"] = "Drawing removed from history.";
+        }
+        else
+        {
+            TempData["Error"] = "That drawing no longer exists.";
+        }
+
+        return RedirectToAction(nameof(History));
     }
 
     [HttpPost]

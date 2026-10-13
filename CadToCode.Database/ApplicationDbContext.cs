@@ -21,6 +21,7 @@ public class ApplicationDbContext : DbContext
         {
             entity.HasIndex(p => p.Status);
             entity.HasIndex(p => p.CreatedAt);
+            entity.HasIndex(p => p.LastOpenedAt);
         });
 
         modelBuilder.Entity<DrawingComponent>(entity =>

@@ -1,5 +1,6 @@
-﻿@model Web.Models.ProjectResultViewModel
+@model Web.Models.ProjectResultViewModel
 @using System.Globalization
+@using System.Text
 @using CadToCode.Models.Dtos
 @using CadToCode.Models.Enums
 
@@ -50,12 +51,232 @@
 
     string TreeLabel(double lx, double ly, string content) =>
         $"<text x=\"{P(lx)}\" y=\"{P(ly)}\" class=\"cc-svg-assembly-label\" font-size=\"{P(tFont)}\">{System.Net.WebUtility.HtmlEncode(content)}</text>";
+
+    string Pt(double x, double y) => P(Tx(x)) + " " + P(Ty(y));
+
+    string ArcTo(double radius, bool large, bool clockwise, double x, double y) =>
+        "A" + P(radius) + " " + P(radius) + " 0 " + (large ? "1" : "0") + " " + (clockwise ? "1" : "0") + " " + Pt(x, y);
+
+    void AppendCircle(StringBuilder sb, double cx, double cy, double r)
+    {
+        if (r <= 0)
+        {
+            return;
+        }
+
+        sb.Append('M').Append(Pt(cx - r, cy))
+          .Append(ArcTo(r, true, false, cx + r, cy))
+          .Append(ArcTo(r, true, false, cx - r, cy))
+          .Append('Z');
+    }
+
+    void AppendArc(StringBuilder sb, GeometryArc arc)
+    {
+        if (arc.Radius <= 0)
+        {
+            return;
+        }
+
+        var sweep = (arc.EndAngle - arc.StartAngle) % 360.0;
+        if (sweep <= 0)
+        {
+            sweep += 360.0;
+        }
+
+        if (sweep >= 359.99)
+        {
+            AppendCircle(sb, arc.Center.X, arc.Center.Y, arc.Radius);
+            return;
+        }
+
+        var a0 = arc.StartAngle * Math.PI / 180.0;
+        var a1 = a0 + sweep * Math.PI / 180.0;
+
+        sb.Append('M').Append(Pt(arc.Center.X + arc.Radius * Math.Cos(a0), arc.Center.Y + arc.Radius * Math.Sin(a0)))
+          .Append(ArcTo(arc.Radius, sweep > 180.0, false, arc.Center.X + arc.Radius * Math.Cos(a1), arc.Center.Y + arc.Radius * Math.Sin(a1)));
+    }
+
+    void AppendPolyline(StringBuilder sb, GeometryPolyline poly)
+    {
+        var v = poly.Vertices;
+        if (v.Count < 2)
+        {
+            return;
+        }
+
+        sb.Append('M').Append(Pt(v[0].X, v[0].Y));
+
+        var segments = poly.IsClosed ? v.Count : v.Count - 1;
+        for (var i = 0; i < segments; i++)
+        {
+            var a = v[i];
+            var b = v[(i + 1) % v.Count];
+
+            if (Math.Abs(a.Bulge) <= 1e-9)
+            {
+                sb.Append('L').Append(Pt(b.X, b.Y));
+                continue;
+            }
+
+            var dx = b.X - a.X;
+            var dy = b.Y - a.Y;
+            var chord = Math.Sqrt(dx * dx + dy * dy);
+            if (chord <= 1e-12)
+            {
+                continue;
+            }
+
+            var radius = chord * (1.0 + a.Bulge * a.Bulge) / (4.0 * Math.Abs(a.Bulge));
+            sb.Append(ArcTo(radius, Math.Abs(a.Bulge) > 1.0, a.Bulge < 0, b.X, b.Y));
+        }
+
+        if (poly.IsClosed)
+        {
+            sb.Append('Z');
+        }
+    }
+
+    string NodeGeometrySvg(AssemblyNode node)
+    {
+        var geo = node.Geometry;
+        var b = node.Bounds;
+        var output = new StringBuilder();
+
+        output.Append("<rect class=\"cc-svg-hit\" x=\"").Append(P(Tx(b.MinX)))
+              .Append("\" y=\"").Append(P(Ty(b.MaxY)))
+              .Append("\" width=\"").Append(P(b.Width))
+              .Append("\" height=\"").Append(P(b.Height)).Append("\" />");
+
+        var hatch = new StringBuilder();
+        foreach (var h in geo.Hatches)
+        {
+            foreach (var path in h.BoundaryPaths)
+            {
+                if (path.Count < 3)
+                {
+                    continue;
+                }
+
+                hatch.Append('M').Append(Pt(path[0].X, path[0].Y));
+                for (var i = 1; i < path.Count; i++)
+                {
+                    hatch.Append('L').Append(Pt(path[i].X, path[i].Y));
+                }
+                hatch.Append('Z');
+            }
+        }
+
+        var stroke = new StringBuilder();
+
+        foreach (var line in geo.Lines)
+        {
+            stroke.Append('M').Append(Pt(line.Start.X, line.Start.Y))
+                  .Append('L').Append(Pt(line.End.X, line.End.Y));
+        }
+
+        foreach (var poly in geo.Polylines)
+        {
+            AppendPolyline(stroke, poly);
+        }
+
+        foreach (var arc in geo.Arcs)
+        {
+            AppendArc(stroke, arc);
+        }
+
+        foreach (var circle in geo.Circles)
+        {
+            AppendCircle(stroke, circle.Center.X, circle.Center.Y, circle.Radius);
+        }
+
+        if (stroke.Length == 0 && hatch.Length == 0)
+        {
+            var round = node.Shape == PartShape.Circular || node.Shape == PartShape.Annular;
+            if (round)
+            {
+                output.Append("<ellipse class=\"cc-svg-fallback\" cx=\"").Append(P(Tx(b.CenterX)))
+                      .Append("\" cy=\"").Append(P(Ty(b.CenterY)))
+                      .Append("\" rx=\"").Append(P(b.Width / 2.0))
+                      .Append("\" ry=\"").Append(P(b.Height / 2.0)).Append("\" />");
+            }
+            else
+            {
+                output.Append("<rect class=\"cc-svg-fallback\" x=\"").Append(P(Tx(b.MinX)))
+                      .Append("\" y=\"").Append(P(Ty(b.MaxY)))
+                      .Append("\" width=\"").Append(P(b.Width))
+                      .Append("\" height=\"").Append(P(b.Height)).Append("\" />");
+            }
+
+            return output.ToString();
+        }
+
+        if (hatch.Length > 0)
+        {
+            output.Append("<path class=\"cc-svg-hatch-fill\" fill=\"url(#cc-tree-hatch)\" fill-rule=\"evenodd\" d=\"")
+                  .Append(hatch).Append("\" />");
+        }
+
+        if (stroke.Length > 0)
+        {
+            output.Append("<path class=\"cc-svg-geo\" d=\"").Append(stroke).Append("\" />");
+        }
+
+        return output.ToString();
+    }
 }
 
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Quantico:wght@400;700&amp;display=swap" />
 <link rel="stylesheet" href="~/css/sandbox.css" asp-append-version="true" />
+
+<style>
+    .cc-entity-svg .cc-svg-geo {
+        fill: none;
+        stroke: var(--cc-part-stroke, #38bdf8);
+        stroke-width: 1.4px;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        vector-effect: non-scaling-stroke;
+        pointer-events: none;
+        transition: stroke 0.12s ease, stroke-width 0.12s ease;
+    }
+
+    .cc-entity-svg .cc-svg-hatch-fill {
+        stroke: none;
+        pointer-events: none;
+    }
+
+    .cc-entity-svg .cc-svg-node rect.cc-svg-hit {
+        fill: transparent !important;
+        stroke: none !important;
+        pointer-events: all;
+    }
+
+    .cc-entity-svg .cc-svg-node:hover rect.cc-svg-hit {
+        fill: rgba(56, 189, 248, 0.08) !important;
+    }
+
+    .cc-entity-svg .cc-svg-node:hover .cc-svg-geo {
+        stroke: #7dd3fc;
+        stroke-width: 2px;
+    }
+
+    .cc-entity-svg g.cc-entity-active rect.cc-svg-hit {
+        fill: rgba(255, 122, 89, 0.12) !important;
+        stroke: none !important;
+    }
+
+    .cc-entity-svg g.cc-entity-active .cc-svg-geo {
+        stroke: var(--cc-accent-deep, #ff9d84);
+        stroke-width: 2.6px;
+    }
+
+    .cc-entity-svg .cc-svg-node:focus-visible .cc-svg-geo {
+        stroke: var(--cc-accent-deep, #ff9d84);
+        stroke-width: 2.6px;
+    }
+</style>
 
 <div class="cc-topbar">
     <div>
@@ -158,22 +379,7 @@
                                                data-profile-id="@node.SharedProfileId"
                                                tabindex="0">
                                                 <title>@node.Name</title>
-                                                @if (round)
-                                                {
-                                                    <ellipse cx="@P(Tx(node.Bounds.CenterX))" cy="@P(Ty(node.Bounds.CenterY))" rx="@P(node.Bounds.Width / 2.0)" ry="@P(node.Bounds.Height / 2.0)" />
-                                                    if (hatched)
-                                                    {
-                                                        <ellipse class="cc-svg-hatch" cx="@P(Tx(node.Bounds.CenterX))" cy="@P(Ty(node.Bounds.CenterY))" rx="@P(node.Bounds.Width / 2.0)" ry="@P(node.Bounds.Height / 2.0)" fill="url(#cc-tree-hatch)" />
-                                                    }
-                                                }
-                                                else
-                                                {
-                                                    <rect x="@P(Tx(node.Bounds.MinX))" y="@P(Ty(node.Bounds.MaxY))" width="@P(node.Bounds.Width)" height="@P(node.Bounds.Height)" />
-                                                    if (hatched)
-                                                    {
-                                                        <rect class="cc-svg-hatch" x="@P(Tx(node.Bounds.MinX))" y="@P(Ty(node.Bounds.MaxY))" width="@P(node.Bounds.Width)" height="@P(node.Bounds.Height)" fill="url(#cc-tree-hatch)" />
-                                                    }
-                                                }
+                                                @Html.Raw(NodeGeometrySvg(node))
                                             </g>
                                         }
                                     </g>
@@ -188,18 +394,7 @@
 
                                     <g class="cc-svg-node" data-entity-id="@node.Id" data-profile-id="@node.SharedProfileId" tabindex="0">
                                         <title>@node.Name</title>
-                                        @if (round)
-                                        {
-                                            <ellipse cx="@P(Tx(node.Bounds.CenterX))" cy="@P(Ty(node.Bounds.CenterY))" rx="@P(node.Bounds.Width / 2.0)" ry="@P(node.Bounds.Height / 2.0)" />
-                                        }
-                                        else
-                                        {
-                                            <rect x="@P(Tx(node.Bounds.MinX))" y="@P(Ty(node.Bounds.MaxY))" width="@P(node.Bounds.Width)" height="@P(node.Bounds.Height)" />
-                                        }
-                                        @if (hatched)
-                                        {
-                                            <rect class="cc-svg-hatch" x="@P(Tx(node.Bounds.MinX))" y="@P(Ty(node.Bounds.MaxY))" width="@P(node.Bounds.Width)" height="@P(node.Bounds.Height)" fill="url(#cc-tree-hatch)" />
-                                        }
+                                        @Html.Raw(NodeGeometrySvg(node))
                                     </g>
                                 }
                             }

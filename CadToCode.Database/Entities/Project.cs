@@ -21,6 +21,9 @@ public class Project
     [Required, MaxLength(500), Column("StoredFilePath")]
     public string StoredFilePath { get; set; } = string.Empty;
 
+    [Column("FileSizeBytes")]
+    public long FileSizeBytes { get; set; }
+
     [MaxLength(20), Column("DetectedUnit")]
     public string? DetectedUnit { get; set; }
 
@@ -38,6 +41,9 @@ public class Project
 
     [Column("CreatedAt")]
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    [Column("LastOpenedAt")]
+    public DateTime? LastOpenedAt { get; set; }
 
     public ICollection<DrawingComponent> DrawingComponents { get; set; } = new List<DrawingComponent>();
 }

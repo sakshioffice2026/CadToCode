@@ -1,8 +1,9 @@
-﻿(function () {
+(function () {
     "use strict";
 
     var ALLOWED_EXTENSIONS = [".dxf", ".png", ".jpg", ".jpeg"];
     var MAX_FILE_SIZE_MB = 20;
+    var MAX_FILES_PER_BATCH = 20;
     var toastTimer = null;
 
     window.CadToCode = window.CadToCode || {};
@@ -61,32 +62,111 @@
 
         var input = zone.querySelector("[data-cc-dropzone-input]");
         var nameLabel = zone.querySelector("[data-cc-file-name]");
+        var fileList = zone.querySelector("[data-cc-file-list]");
         var form = zone.closest("form");
         var submit = form ? form.querySelector("[data-cc-submit]") : null;
+        var submitLabel = submit ? submit.textContent : "";
 
         function clearSelection() {
             input.value = "";
             zone.classList.remove("has-file");
             nameLabel.hidden = true;
             nameLabel.textContent = "";
+
+            if (fileList) {
+                fileList.hidden = true;
+                fileList.innerHTML = "";
+            }
+
+            updateSubmitLabel(0);
         }
 
-        function showSelection(file) {
-            var error = validateFile(file);
-            if (error) {
-                clearSelection();
-                window.CadToCode.showToast(error, 3200);
+        function updateSubmitLabel(count) {
+            if (!submit) {
                 return;
             }
 
-            nameLabel.textContent = file.name + " (" + formatSize(file.size) + ")";
+            submit.textContent = count > 1
+                ? "Upload and analyze " + count + " drawings"
+                : submitLabel;
+        }
+
+        function applyFiles(files) {
+            var accepted = [];
+            var skipped = [];
+
+            Array.prototype.forEach.call(files, function (file) {
+                var error = validateFile(file);
+                if (error) {
+                    skipped.push(file.name + ": " + error);
+                } else {
+                    accepted.push(file);
+                }
+            });
+
+            if (accepted.length > MAX_FILES_PER_BATCH) {
+                skipped.push("Only the first " + MAX_FILES_PER_BATCH + " files were kept.");
+                accepted = accepted.slice(0, MAX_FILES_PER_BATCH);
+            }
+
+            if (accepted.length === 0) {
+                clearSelection();
+                if (skipped.length > 0) {
+                    window.CadToCode.showToast(skipped[0], 3600);
+                }
+                return;
+            }
+
+            try {
+                var transfer = new DataTransfer();
+                accepted.forEach(function (file) {
+                    transfer.items.add(file);
+                });
+                input.files = transfer.files;
+            } catch (e) {
+                window.CadToCode.showToast("Could not update the selection. Please click to browse.", 3200);
+                return;
+            }
+
+            showSelection(accepted);
+
+            if (skipped.length > 0) {
+                window.CadToCode.showToast(skipped.length + " file(s) skipped. " + skipped[0], 4200);
+            }
+        }
+
+        function showSelection(files) {
+            var total = files.reduce(function (sum, file) {
+                return sum + file.size;
+            }, 0);
+
+            nameLabel.textContent = files.length === 1
+                ? files[0].name + " (" + formatSize(files[0].size) + ")"
+                : files.length + " files selected (" + formatSize(total) + ")";
             nameLabel.hidden = false;
             zone.classList.add("has-file");
+
+            if (fileList) {
+                fileList.innerHTML = "";
+
+                if (files.length > 1) {
+                    files.forEach(function (file) {
+                        var item = document.createElement("li");
+                        item.textContent = file.name + " (" + formatSize(file.size) + ")";
+                        fileList.appendChild(item);
+                    });
+                    fileList.hidden = false;
+                } else {
+                    fileList.hidden = true;
+                }
+            }
+
+            updateSubmitLabel(files.length);
         }
 
         input.addEventListener("change", function () {
             if (input.files && input.files.length > 0) {
-                showSelection(input.files[0]);
+                applyFiles(input.files);
             } else {
                 clearSelection();
             }
@@ -114,36 +194,37 @@
                 return;
             }
 
-            try {
-                var transfer = new DataTransfer();
-                transfer.items.add(files[0]);
-                input.files = transfer.files;
-            } catch (e) {
-                window.CadToCode.showToast("Drag and drop is not supported here. Please click to browse.", 3200);
-                return;
-            }
-
-            showSelection(files[0]);
+            applyFiles(files);
         });
 
         if (form) {
             form.addEventListener("submit", function (event) {
                 if (!input.files || input.files.length === 0) {
                     event.preventDefault();
-                    window.CadToCode.showToast("Please choose a file first.", 2600);
+                    window.CadToCode.showToast("Please choose at least one file first.", 2600);
                     return;
                 }
 
-                var error = validateFile(input.files[0]);
-                if (error) {
+                if (input.files.length > MAX_FILES_PER_BATCH) {
                     event.preventDefault();
-                    window.CadToCode.showToast(error, 3200);
+                    window.CadToCode.showToast("You can upload up to " + MAX_FILES_PER_BATCH + " files at a time.", 3200);
                     return;
+                }
+
+                for (var i = 0; i < input.files.length; i++) {
+                    var error = validateFile(input.files[i]);
+                    if (error) {
+                        event.preventDefault();
+                        window.CadToCode.showToast(input.files[i].name + ": " + error, 3600);
+                        return;
+                    }
                 }
 
                 if (submit) {
                     submit.disabled = true;
-                    submit.textContent = "Analyzing...";
+                    submit.textContent = input.files.length > 1
+                        ? "Analyzing " + input.files.length + " drawings..."
+                        : "Analyzing...";
                 }
             });
         }

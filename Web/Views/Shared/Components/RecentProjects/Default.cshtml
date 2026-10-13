@@ -1,0 +1,50 @@
+@model List<CadToCode.Models.Dtos.ProjectHistoryItemDto>
+@using CadToCode.Models.Enums
+
+@{
+    var controller = ViewContext.RouteData.Values["controller"]?.ToString() ?? string.Empty;
+    var action = ViewContext.RouteData.Values["action"]?.ToString() ?? string.Empty;
+    var onDetails = string.Equals(controller, "Project", StringComparison.OrdinalIgnoreCase)
+        && string.Equals(action, "Details", StringComparison.OrdinalIgnoreCase);
+
+    var currentId = onDetails ? ViewData["CurrentProjectId"]?.ToString() : null;
+
+    string StatusClass(ProjectStatus status) => status switch
+    {
+        ProjectStatus.Processed => "cc-dot-ok",
+        ProjectStatus.Failed => "cc-dot-bad",
+        _ => "cc-dot-warn"
+    };
+}
+
+<div class="cc-sidebar-section">
+    <p class="cc-sidebar-heading">Recent drawings</p>
+
+    @if (Model.Count == 0)
+    {
+        <p class="cc-recent-empty">No drawings yet.</p>
+    }
+    else
+    {
+        <ul class="cc-recent">
+            @foreach (var item in Model)
+            {
+                var isActive = currentId == item.Id.ToString();
+
+                <li>
+                    <a class="cc-recent-link @(isActive ? "active" : string.Empty)"
+                       asp-controller="Project"
+                       asp-action="Details"
+                       asp-route-id="@item.Id"
+                       title="@item.OriginalFileName"
+                       aria-current="@(isActive ? "page" : null)">
+                        <span class="cc-dot @StatusClass(item.Status)" aria-hidden="true"></span>
+                        <span class="cc-recent-title">@item.Title</span>
+                    </a>
+                </li>
+            }
+        </ul>
+
+        <a class="cc-recent-all" asp-controller="Project" asp-action="History">View all history</a>
+    }
+</div>
