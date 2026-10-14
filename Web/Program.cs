@@ -31,6 +31,8 @@ builder.Services.PostConfigure<UploadOptions>(options =>
 builder.Services.Configure<ExtractionOptions>(builder.Configuration.GetSection(ExtractionOptions.SectionName));
 builder.Services.Configure<LlmOptions>(builder.Configuration.GetSection(LlmOptions.SectionName));
 builder.Services.Configure<LocalAiOptions>(builder.Configuration.GetSection(LocalAiOptions.SectionName));
+builder.Services.Configure<QdrantOptions>(builder.Configuration.GetSection(QdrantOptions.SectionName));
+builder.Services.Configure<GeminiEmbeddingOptions>(builder.Configuration.GetSection(GeminiEmbeddingOptions.SectionName));
 
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
@@ -56,6 +58,11 @@ builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
 builder.Services.AddScoped<IDefinitionLearningService, DefinitionLearningService>();
 builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();
 builder.Services.AddSingleton<IStepScriptRunner, StepScriptRunner>();
+
+builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>();
+builder.Services.AddSingleton<IVectorStoreService, QdrantVectorStoreService>();
+builder.Services.AddScoped<ICadRagRetriever, CadRagRetriever>();
+builder.Services.AddScoped<ICadLibraryService, CadLibraryService>();
 
 var app = builder.Build();
 

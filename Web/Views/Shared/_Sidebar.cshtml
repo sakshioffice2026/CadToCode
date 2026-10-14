@@ -6,6 +6,7 @@
     var isUpload = isProject && string.Equals(action, "Upload", StringComparison.OrdinalIgnoreCase);
     var isHistory = isProject && string.Equals(action, "History", StringComparison.OrdinalIgnoreCase);
     var isDetails = isProject && string.Equals(action, "Details", StringComparison.OrdinalIgnoreCase);
+    var isLibrary = string.Equals(controller, "Library", StringComparison.OrdinalIgnoreCase);
 
     var projectId = isDetails ? ViewContext.RouteData.Values["id"]?.ToString() : null;
 }
@@ -32,6 +33,14 @@
                    asp-action="History"
                    aria-current="@(isHistory ? "page" : null)">
                     History
+                </a>
+            </li>
+            <li>
+                <a class="cc-nav-link @(isLibrary ? "active" : string.Empty)"
+                   asp-controller="Library"
+                   asp-action="Index"
+                   aria-current="@(isLibrary ? "page" : null)">
+                    CAD Library
                 </a>
             </li>
         </ul>
