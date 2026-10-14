@@ -30,6 +30,7 @@ builder.Services.PostConfigure<UploadOptions>(options =>
 });
 builder.Services.Configure<ExtractionOptions>(builder.Configuration.GetSection(ExtractionOptions.SectionName));
 builder.Services.Configure<LlmOptions>(builder.Configuration.GetSection(LlmOptions.SectionName));
+builder.Services.Configure<LocalAiOptions>(builder.Configuration.GetSection(LocalAiOptions.SectionName));
 
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 
@@ -48,6 +49,8 @@ builder.Services.AddSingleton<IAssemblyTopologyMapper, AssemblyTopologyMapper>()
 builder.Services.AddSingleton<GeometryEmbedder>();
 builder.Services.AddSingleton<IPatternMemoryService, PatternMemoryService>();
 builder.Services.AddSingleton<ILLMGenerationService, LLamaGenerationService>();
+builder.Services.AddSingleton<IChatMemoryStore, ChatMemoryStore>();
+builder.Services.AddSingleton<ILocalAiService, LocalAiService>();
 builder.Services.AddScoped<IAiComponentClassifier, AiComponentClassifier>();
 builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
 builder.Services.AddScoped<IDefinitionLearningService, DefinitionLearningService>();

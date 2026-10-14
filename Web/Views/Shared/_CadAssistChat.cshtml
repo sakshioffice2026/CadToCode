@@ -1,0 +1,87 @@
+@model Web.Models.ProjectResultViewModel
+
+@{
+    var projectId = Model.Project.Id;
+    var drawingTypes = new[]
+    {
+        "Auto-detect",
+        "Mechanical part",
+        "Assembly drawing",
+        "Door / window profile",
+        "Duct / piping",
+        "Structural profile"
+    };
+}
+
+<aside class="ca-panel"
+       id="cc-assist"
+       data-ca-root
+       data-ca-project="@projectId"
+       data-ca-chat-url="@Url.Action("Chat", "CadAssist")"
+       data-ca-history-url="@Url.Action("History", "CadAssist")"
+       data-ca-reset-url="@Url.Action("Reset", "CadAssist")"
+       data-ca-status-url="@Url.Action("Status", "CadAssist")"
+       data-ca-max-text="4000"
+       data-ca-max-files="5"
+       data-ca-max-bytes="10485760"
+       aria-label="CadAssist chat"
+       aria-hidden="true">
+
+    <header class="ca-header">
+        <span class="ca-mark" aria-hidden="true">&#9889;</span>
+        <div class="ca-header-text">
+            <h2 class="ca-title">CadAssist</h2>
+            <span class="ca-chip ca-chip-muted" data-ca-status>Checking model&hellip;</span>
+        </div>
+        <button type="button" class="ca-icon-btn" data-ca-reset title="Start a new chat" aria-label="Start a new chat">&#8635;</button>
+        <button type="button" class="ca-icon-btn" data-ca-close title="Close" aria-label="Close CadAssist">&times;</button>
+    </header>
+
+    <div class="ca-thread" data-ca-thread role="log" aria-live="polite">
+        <div class="ca-empty" data-ca-empty>
+            <p class="ca-empty-title">Ask about this drawing</p>
+            <p class="ca-empty-text">Runs fully offline on your local model. Refine the STEP script by chatting.</p>
+            <div class="ca-suggest">
+                <button type="button" class="ca-suggest-btn" data-ca-suggest="Explain the detected parts of this drawing.">Explain detected parts</button>
+                <button type="button" class="ca-suggest-btn" data-ca-suggest="Generate a clean STEP script for the whole drawing.">Generate STEP script</button>
+                <button type="button" class="ca-suggest-btn" data-ca-suggest="Change the extrusion thickness to 12 mm.">Set thickness 12 mm</button>
+                <button type="button" class="ca-suggest-btn" data-ca-suggest="Only include the outer contour and skip small details.">Outer contour only</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="ca-composer" data-ca-composer>
+        <div class="ca-drop" data-ca-drop hidden>Drop files to attach</div>
+
+        <div class="ca-options">
+            <select class="ca-select" data-ca-drawing-type aria-label="Drawing type">
+                @foreach (var type in drawingTypes)
+                {
+                    <option value="@(type == "Auto-detect" ? string.Empty : type)">@type</option>
+                }
+            </select>
+            <input type="text" class="ca-input" data-ca-filter maxlength="400" placeholder="Filter instructions (optional)" aria-label="Filter instructions" />
+        </div>
+
+        <label class="ca-check">
+            <input type="checkbox" data-ca-include-code checked />
+            <span>Send current editor script</span>
+        </label>
+
+        <div class="ca-attachments" data-ca-attachments></div>
+
+        <div class="ca-row">
+            <textarea class="ca-textarea"
+                      data-ca-input
+                      rows="1"
+                      maxlength="4000"
+                      placeholder="Ask CadAssist. Drop or paste files here."
+                      aria-label="Message"></textarea>
+            <input type="file" data-ca-file multiple hidden accept=".dxf,.txt,.cs,.json,.csv,.step,.stp,.png,.jpg,.jpeg" />
+            <button type="button" class="ca-icon-btn" data-ca-attach title="Attach files" aria-label="Attach files">&#128206;</button>
+            <button type="button" class="ca-send" data-ca-send>Send</button>
+        </div>
+
+        <p class="ca-hint">Enter to send &middot; Shift+Enter for a new line</p>
+    </div>
+</aside>
