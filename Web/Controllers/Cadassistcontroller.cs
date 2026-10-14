@@ -22,6 +22,10 @@ public class CadAssistController : Controller
     private const int MaxFileNameChars = 120;
     private const int MaxFieldChars = 400;
 
+    private const string DraftGeometryContext =
+        "No drawing has been processed yet. The user is on the upload page. "
+        + "Only the attached file names, sizes and readable contents are available.";
+
     private readonly ILocalAiService _ai;
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
@@ -54,7 +58,7 @@ public class CadAssistController : Controller
     [HttpGet]
     public IActionResult History(int projectId, string? sessionId)
     {
-        if (projectId <= 0 || string.IsNullOrWhiteSpace(sessionId))
+        if (projectId < 0 || string.IsNullOrWhiteSpace(sessionId))
         {
             return Json(new CadAssistHistoryResponse { SessionId = string.Empty });
         }
@@ -71,7 +75,7 @@ public class CadAssistController : Controller
     [RequestSizeLimit(MaxRequestBytes)]
     public IActionResult Reset([FromBody] CadAssistResetRequest? request)
     {
-        if (request is null || request.ProjectId <= 0)
+        if (request is null || request.ProjectId < 0)
         {
             return BadRequest();
         }
@@ -89,7 +93,7 @@ public class CadAssistController : Controller
     [RequestSizeLimit(MaxRequestBytes)]
     public async Task<IActionResult> Chat([FromBody] CadAssistChatRequest? request, CancellationToken cancellationToken)
     {
-        if (request is null || request.ProjectId <= 0)
+        if (request is null || request.ProjectId < 0)
         {
             return BadRequest(new CadAssistChatResponse { Error = "The request was not valid." });
         }
@@ -109,29 +113,38 @@ public class CadAssistController : Controller
             });
         }
 
-        var project = await _processingService.GetProjectAsync(request.ProjectId, cancellationToken);
-        if (project is null)
-        {
-            return NotFound(new CadAssistChatResponse { SessionId = sessionId, Error = "That drawing no longer exists." });
-        }
+        var projectId = 0;
+        var geometryContext = DraftGeometryContext;
 
-        AssemblyTree? tree = null;
-
-        if (project.Status == ProjectStatus.Processed)
+        if (request.ProjectId > 0)
         {
-            var assembly = await _codeGenerationService.GenerateAssemblyAsync(project.Id, false, cancellationToken);
-            tree = assembly.Tree;
+            var project = await _processingService.GetProjectAsync(request.ProjectId, cancellationToken);
+            if (project is null)
+            {
+                return NotFound(new CadAssistChatResponse { SessionId = sessionId, Error = "That drawing no longer exists." });
+            }
+
+            AssemblyTree? tree = null;
+
+            if (project.Status == ProjectStatus.Processed)
+            {
+                var assembly = await _codeGenerationService.GenerateAssemblyAsync(project.Id, false, cancellationToken);
+                tree = assembly.Tree;
+            }
+
+            projectId = project.Id;
+            geometryContext = GeometryContextBuilder.Build(project, tree, _options.MaxGeometryChars);
         }
 
         var generation = new LocalAiGenerationRequest
         {
-            ProjectId = project.Id,
+            ProjectId = projectId,
             SessionId = sessionId,
             Prompt = request.Prompt ?? string.Empty,
             DrawingType = Limit(request.DrawingType, MaxFieldChars),
             FilterInstructions = Limit(request.FilterInstructions, MaxFieldChars),
             CurrentCode = request.CurrentCode,
-            GeometryContext = GeometryContextBuilder.Build(project, tree, _options.MaxGeometryChars),
+            GeometryContext = geometryContext,
             Attachments = CleanAttachments(request.Attachments)
         };
 

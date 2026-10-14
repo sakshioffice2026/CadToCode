@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/workbench.css" asp-append-version="true" />
     <link rel="stylesheet" href="~/css/history.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/cadassistant.css" asp-append-version="true" />
 </head>
 <body>
     <div class="cc-shell">
@@ -18,6 +19,8 @@
         </main>
     </div>
 
+    <partial name="_CadAssistantChat" />
+
     <div id="cc-toast" class="cc-toast" role="status" aria-live="polite" hidden></div>
 
     <script src="~/lib/jquery/dist/jquery.min.js"></script>
@@ -25,5 +28,6 @@
     <script src="~/js/site.js" asp-append-version="true"></script>
     <script src="~/js/copy-code.js" asp-append-version="true"></script>
     @await RenderSectionAsync("Scripts", required: false)
+    <script src="~/js/cadassistant.js" asp-append-version="true"></script>
 </body>
 </html>

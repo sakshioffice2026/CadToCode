@@ -229,7 +229,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Quantico:wght@400;700&amp;display=swap" />
 <link rel="stylesheet" href="~/css/sandbox.css" asp-append-version="true" />
-<link rel="stylesheet" href="~/css/cadassist.css" asp-append-version="true" />
 
 <style>
     .cc-entity-svg .cc-svg-geo {
@@ -331,7 +330,7 @@
     </button>
     <button type="button" class="cc-tool-btn ca-toggle" data-ca-toggle aria-controls="cc-assist" aria-expanded="false">
         <span class="cc-tool-icon" aria-hidden="true">&#9889;</span>
-        <span class="cc-tool-label">CadAssist Chat</span>
+        <span class="cc-tool-label">CAD Assistant</span>
     </button>
 </nav>
 
@@ -339,7 +338,6 @@
     <partial name="_CodePreview" model="Model" />
 </div>
 
-<partial name="_CadAssistChat" model="Model" />
 
 <dialog class="cc-modal" id="cc-modal-design" aria-labelledby="cc-modal-design-title">
     <div class="cc-modal-shell">
@@ -546,5 +544,4 @@
     <script src="~/js/entity-hover.js" asp-append-version="true"></script>
     <script src="~/js/sandbox.js" asp-append-version="true"></script>
     <script src="~/js/workspace.js" asp-append-version="true"></script>
-    <script src="~/js/cadassist.js" asp-append-version="true"></script>
 }
