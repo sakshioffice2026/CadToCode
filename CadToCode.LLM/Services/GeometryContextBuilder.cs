@@ -4,6 +4,19 @@ using CadToCode.Models.Dtos;
 
 namespace CadToCode.LLM.Services;
 
+public sealed class GeometryFeatureContext
+{
+    public IReadOnlyList<string> Profiles { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> Features { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> Parameters { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<string> KindCounts { get; init; } = Array.Empty<string>();
+
+    public bool IsEmpty => Profiles.Count == 0 && Features.Count == 0 && Parameters.Count == 0;
+}
+
 public static class GeometryContextBuilder
 {
     private static readonly int[] DetailLevels = { 24, 14, 8, 4, 2 };
@@ -13,9 +26,10 @@ public static class GeometryContextBuilder
         AssemblyTree? tree,
         int maxChars,
         IReadOnlyList<VectorSearchHit>? templates,
-        int maxTemplateChars)
+        int maxTemplateChars,
+        GeometryFeatureContext? features = null)
     {
-        var geometry = Build(project, tree, maxChars);
+        var geometry = Build(project, tree, maxChars, features);
         var section = BuildTemplatesSection(templates, maxTemplateChars);
 
         return section.Length == 0
@@ -23,13 +37,22 @@ public static class GeometryContextBuilder
             : geometry + Environment.NewLine + section;
     }
 
-    public static string BuildRetrievalQuery(ProjectResultDto? project, AssemblyTree? tree, string? prompt)
+    public static string BuildRetrievalQuery(
+        ProjectResultDto? project,
+        AssemblyTree? tree,
+        string? prompt,
+        GeometryFeatureContext? features = null)
     {
         var sb = new StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(prompt))
         {
             sb.AppendLine("Request: " + Clean(prompt, 800));
+        }
+
+        if (features is { KindCounts.Count: > 0 })
+        {
+            sb.AppendLine("Features: " + string.Join(", ", features.KindCounts.Take(6).Select(k => Clean(k, 40))));
         }
 
         if (project is not null)
@@ -149,14 +172,14 @@ public static class GeometryContextBuilder
         return text.Length > maxChars ? text[..maxChars] : text;
     }
 
-    public static string Build(ProjectResultDto project, AssemblyTree? tree, int maxChars)
+    public static string Build(ProjectResultDto project, AssemblyTree? tree, int maxChars, GeometryFeatureContext? features = null)
     {
         var limit = Math.Max(400, maxChars);
         var text = string.Empty;
 
         foreach (var detail in DetailLevels)
         {
-            text = BuildCore(project, tree, detail);
+            text = BuildCore(project, tree, detail, features);
             if (text.Length <= limit)
             {
                 return text;
@@ -166,7 +189,7 @@ public static class GeometryContextBuilder
         return text.Length > limit ? text[..limit] : text;
     }
 
-    private static string BuildCore(ProjectResultDto project, AssemblyTree? tree, int detail)
+    private static string BuildCore(ProjectResultDto project, AssemblyTree? tree, int detail, GeometryFeatureContext? features)
     {
         var sb = new StringBuilder();
 
@@ -214,6 +237,8 @@ public static class GeometryContextBuilder
                     + (parts.Count > 0 ? ": " + string.Join(", ", parts) : string.Empty));
             }
         }
+
+        AppendFeatures(sb, features, detail);
 
         if (tree is null || tree.Nodes.Count == 0)
         {
@@ -316,6 +341,57 @@ public static class GeometryContextBuilder
         }
 
         return sb.ToString();
+    }
+
+    private static void AppendFeatures(StringBuilder sb, GeometryFeatureContext? features, int detail)
+    {
+        if (features is null || features.IsEmpty)
+        {
+            return;
+        }
+
+        if (features.Profiles.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("2D profiles found in the drawing (closed loops, millimeters):");
+
+            foreach (var line in features.Profiles.Take(Math.Max(2, detail / 4)))
+            {
+                sb.AppendLine("- " + Clean(line, 200));
+            }
+
+            if (features.Profiles.Count > Math.Max(2, detail / 4))
+            {
+                sb.AppendLine("- ... " + (features.Profiles.Count - Math.Max(2, detail / 4)) + " more profiles not listed");
+            }
+        }
+
+        if (features.Features.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Detected features (each one becomes a solid in the script):");
+
+            foreach (var line in features.Features.Take(Math.Max(3, detail / 2)))
+            {
+                sb.AppendLine("- " + Clean(line, 240));
+            }
+
+            if (features.Features.Count > Math.Max(3, detail / 2))
+            {
+                sb.AppendLine("- ... " + (features.Features.Count - Math.Max(3, detail / 2)) + " more features not listed");
+            }
+        }
+
+        if (features.Parameters.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Named parameters (declare each as const double and reuse the name; assumed values are not in the drawing):");
+
+            foreach (var line in features.Parameters.Take(Math.Max(4, detail)))
+            {
+                sb.AppendLine("- " + Clean(line, 160));
+            }
+        }
     }
 
     private static void Add(List<string> parts, string name, decimal? value)

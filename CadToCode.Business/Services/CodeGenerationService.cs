@@ -6,6 +6,7 @@ using CadToCode.Business.Interfaces;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
 using CadToCode.LLM.Prompts;
+using CadToCode.LLM.Services;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using CadToCode.Models.Options;
@@ -91,11 +92,190 @@ public class CodeGenerationService : ICodeGenerationService
 
         var components = await _unitOfWork.Components.GetByProjectIdAsync(projectId, cancellationToken);
         var notes = DescribeComponents(components);
+        var scriptName = AssemblyPromptTemplates.ToIdentifier(project.Title, "Drawing");
 
-        return AssemblyCodeBuilder.BuildGeometryScript(
-            geometry,
-            AssemblyPromptTemplates.ToIdentifier(project.Title, "Drawing"),
-            notes);
+        try
+        {
+            var recognition = Analyze(geometry).Recognition;
+
+            if (recognition.HasFeatures)
+            {
+                return ScriptEmitter.Emit(
+                    recognition,
+                    scriptName,
+                    new ScriptEmitterOptions
+                    {
+                        Scale = ScaleToMillimeter(geometry.DetectedUnit),
+                        OriginX = geometry.Bounds?.MinX ?? 0.0,
+                        OriginY = geometry.Bounds?.MinY ?? 0.0,
+                        Notes = notes
+                    });
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            _logger.LogWarning(ex, "Feature recognition failed for project {ProjectId}. Using the contour script.", projectId);
+        }
+
+        return AssemblyCodeBuilder.BuildGeometryScript(geometry, scriptName, notes);
+    }
+
+    public static GeometryFeatureContext DescribeFeatures(ExtractedGeometry geometry)
+    {
+        if (geometry is null)
+        {
+            throw new ArgumentNullException(nameof(geometry));
+        }
+
+        var (profiles, recognition) = Analyze(geometry);
+        var scale = ScaleToMillimeter(geometry.DetectedUnit);
+
+        var profileLines = new List<string>();
+
+        for (var i = 0; i < profiles.Profiles.Count; i++)
+        {
+            var profile = profiles.Profiles[i];
+            var b = profile.Bounds;
+
+            profileLines.Add(
+                "Profile" + (i + 1).ToString(CultureInfo.InvariantCulture) + ": "
+                + FormatNumber((b.MaxX - b.MinX) * scale) + " x " + FormatNumber((b.MaxY - b.MinY) * scale)
+                + ", " + (profile.IsCircle ? "circle" : profile.HasArcs ? "lines and arcs" : "straight lines")
+                + ", " + profile.HoleCount + (profile.HoleCount == 1 ? " hole" : " holes")
+                + ", area " + FormatNumber(profile.Area * scale * scale));
+        }
+
+        if (profiles.OpenChains.Count > 0 || profiles.AxisEntities.Count > 0)
+        {
+            profileLines.Add(
+                profiles.OpenChains.Count + " open chains, " + profiles.AxisEntities.Count + " centrelines");
+        }
+
+        var featureLines = new List<string>();
+        var parameterLines = new List<string>();
+
+        foreach (var feature in recognition.Features)
+        {
+            featureLines.Add(DescribeFeature(feature, scale));
+
+            foreach (var parameter in feature.Parameters)
+            {
+                parameterLines.Add(DescribeParameter(parameter.Name, parameter.Value * scale, parameter.IsAssumed));
+            }
+
+            for (var h = 0; h < feature.Holes.Count; h++)
+            {
+                parameterLines.Add(DescribeParameter(
+                    char.ToLowerInvariant(feature.Name[0]) + feature.Name[1..] + "Hole"
+                    + (h + 1).ToString(CultureInfo.InvariantCulture) + "Diameter",
+                    feature.Holes[h].Diameter * scale,
+                    false));
+            }
+        }
+
+        var kinds = recognition.Features
+            .GroupBy(f => f.Kind)
+            .OrderBy(g => g.Key)
+            .Select(g => g.Key + " x" + g.Count().ToString(CultureInfo.InvariantCulture))
+            .ToList();
+
+        return new GeometryFeatureContext
+        {
+            Profiles = profileLines,
+            Features = featureLines,
+            Parameters = parameterLines,
+            KindCounts = kinds
+        };
+    }
+
+    private static (ProfileBuildResult Profiles, FeatureRecognitionResult Recognition) Analyze(ExtractedGeometry geometry)
+    {
+        var profiles = ProfileBuilder.Build(DrawingEntity.FromGeometry(geometry));
+        var recognition = FeatureRecognizer.Recognize(profiles);
+
+        if (!recognition.HasFeatures && geometry.Hatches.Count > 0)
+        {
+            var withHatches = ProfileBuilder.Build(DrawingEntity.FromGeometry(geometry, includeHatchBoundaries: true));
+            var hatchRecognition = FeatureRecognizer.Recognize(withHatches);
+
+            if (hatchRecognition.HasFeatures)
+            {
+                return (withHatches, hatchRecognition);
+            }
+        }
+
+        return (profiles, recognition);
+    }
+
+    private static string DescribeFeature(RecognizedFeature feature, double scale)
+    {
+        var text = feature.Name + ": ";
+
+        switch (feature.Kind)
+        {
+            case RecognizedFeatureKind.Extrusion:
+            {
+                var b = feature.Profile!.Bounds;
+
+                text += "extrusion of a closed profile " + FormatNumber((b.MaxX - b.MinX) * scale) + " x "
+                    + FormatNumber((b.MaxY - b.MinY) * scale) + " mm";
+
+                if (feature.Holes.Count > 0)
+                {
+                    text += ", " + feature.Holes.Count + " round holes (diameters "
+                        + string.Join(", ", feature.Holes.Select(h => FormatNumber(h.Diameter * scale))) + ")";
+                }
+
+                if (feature.OtherHoleCount > 0)
+                {
+                    text += ", " + feature.OtherHoleCount + " other cut-outs";
+                }
+
+                return text + ", depth parameter " + feature.DepthParameter!.Name;
+            }
+
+            case RecognizedFeatureKind.Cylinder:
+            {
+                var diameter = feature.Profile!.Outer.CircleArc!.Radius * 2.0 * scale;
+
+                return text + "cylinder of diameter " + FormatNumber(diameter) + " mm, height parameter " + feature.DepthParameter!.Name;
+            }
+
+            case RecognizedFeatureKind.Revolve:
+            {
+                var b = feature.Profile!.Bounds;
+
+                return text + "revolve of a half-section, max radius " + FormatNumber(b.MaxX * scale)
+                    + " mm, axial length " + FormatNumber((b.MaxY - b.MinY) * scale) + " mm";
+            }
+
+            default:
+            {
+                var length = feature.Centerline.Sum(s => s.Length) * scale;
+
+                return text + "pipe along a centreline of " + feature.Centerline.Count + " segments, length " + FormatNumber(length)
+                    + " mm, outer diameter " + FormatNumber(feature.OuterDiameterParameter!.Value * scale)
+                    + " mm, wall " + FormatNumber(feature.WallParameter!.Value * scale)
+                    + (feature.WallParameter.IsAssumed ? " mm (assumed)" : " mm");
+            }
+        }
+    }
+
+    private static string DescribeParameter(string name, double value, bool isAssumed)
+    {
+        return name + " = " + FormatNumber(value) + (isAssumed ? " (assumed)" : " (measured)");
+    }
+
+    private static double ScaleToMillimeter(DrawingUnit unit)
+    {
+        return unit switch
+        {
+            DrawingUnit.Centimeter => 10.0,
+            DrawingUnit.Meter => 1000.0,
+            DrawingUnit.Inch => 25.4,
+            DrawingUnit.Foot => 304.8,
+            _ => 1.0
+        };
     }
 
     public async Task<AssemblyGenerationResult> GenerateAssemblyAsync(int projectId, bool useAi, CancellationToken cancellationToken = default)
