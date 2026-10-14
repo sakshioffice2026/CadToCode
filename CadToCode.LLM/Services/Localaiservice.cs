@@ -17,6 +17,7 @@ public sealed class LocalAiService : ILocalAiService, IDisposable
 {
     private const int MinTokens = 16;
     private const int CharsPerTokenCap = 8;
+    private const int GateWaitSeconds = 20;
 
     private readonly LocalAiOptions _options;
     private readonly IChatMemoryStore _memory;
@@ -146,24 +147,30 @@ public sealed class LocalAiService : ILocalAiService, IDisposable
             history,
             userText);
 
-        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(10, _options.InferenceTimeoutSeconds)));
+        using (var gateTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+        {
+            gateTimeout.CancelAfter(TimeSpan.FromSeconds(GateWaitSeconds));
 
-        try
-        {
-            await _gate.WaitAsync(timeout.Token).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-        {
-            return Fail(clock, "The model is busy with another request. Try again in a moment.");
+            try
+            {
+                await _gate.WaitAsync(gateTimeout.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                return Fail(clock, "The model is busy with another request. Try again in a moment.");
+            }
         }
 
         string raw;
 
         try
         {
-            await Task.Run(() => EnsureModelLoaded(modelPath), timeout.Token).ConfigureAwait(false);
-            raw = await GenerateAsync(fullPrompt, timeout.Token).ConfigureAwait(false);
+            await Task.Run(() => EnsureModelLoaded(modelPath), cancellationToken).ConfigureAwait(false);
+
+            using var inferenceTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            inferenceTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(10, _options.InferenceTimeoutSeconds)));
+
+            raw = await GenerateAsync(fullPrompt, inferenceTimeout.Token).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {

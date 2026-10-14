@@ -6,7 +6,7 @@ namespace CadToCode.LLM.Services;
 
 public static class GeometryContextBuilder
 {
-    private static readonly int[] DetailLevels = { 60, 30, 15, 8, 4 };
+    private static readonly int[] DetailLevels = { 24, 14, 8, 4, 2 };
 
     public static string Build(
         ProjectResultDto project,

@@ -10,9 +10,25 @@ public static class CadAssistPromptTemplates
     private const int TokenReserve = 96;
     private const int CharsPerToken = 2;
     private const int MinTotalChars = 3000;
+    private const int QuestionHistoryTurnsCap = 2;
 
     private static readonly Regex SpecialToken = new(@"<\|[^|>\r\n]{1,40}\|>", RegexOptions.Compiled);
     private static readonly Regex FencedBlock = new(@"```[^\r\n]*\r?\n.*?(?:```|\z)", RegexOptions.Compiled | RegexOptions.Singleline);
+
+    private static readonly Regex ActionIntent = new(
+        @"\b(generate|create|make|write|build|modify|change|update|edit|add|remove|delete|fix|replace|regenerate|rewrite|increase|decrease|resize|script|code)\b",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    private static readonly Regex QuestionIntent = new(
+        @"^\s*(explain|what|why|how|which|describe|list|tell|summari[sz]e|show|is|are|does|do|can|where|who)\b|\?",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    public const string QuestionSystemPrompt =
+        "You are CadAssist, an offline engineering assistant inside CadToCode. "
+        + "Answer the question using only the drawing data below. "
+        + "All measurements are computed by code, are final and are in millimeters. "
+        + "Never invent a dimension or a part that is not in the data. "
+        + "Answer in plain text, in at most five short sentences, and do not write any code.";
 
     public const string DefaultSystemPrompt =
         "You are CadAssist, an offline engineering assistant inside CadToCode. "
@@ -46,6 +62,25 @@ public static class CadAssistPromptTemplates
             "plain" => new[] { "### User:", "### System:" },
             _ => new[] { "<|im_end|>", "<|im_start|>", "<|endoftext|>" }
         };
+    }
+
+    public static bool IsQuestionOnly(string? userText)
+    {
+        if (string.IsNullOrWhiteSpace(userText))
+        {
+            return false;
+        }
+
+        var text = userText.Trim();
+        var split = text.LastIndexOf("\n\n", StringComparison.Ordinal);
+        var request = split >= 0 ? text[(split + 2)..] : text;
+
+        if (ActionIntent.IsMatch(request))
+        {
+            return false;
+        }
+
+        return QuestionIntent.IsMatch(request);
     }
 
     public static string BuildUserText(
@@ -102,17 +137,20 @@ public static class CadAssistPromptTemplates
         IReadOnlyList<CadAssistMessageDto> history,
         string userText)
     {
+        var questionOnly = IsQuestionOnly(userText);
+
         var total = (int)Math.Max(MinTotalChars, ((long)options.ContextSize - options.MaxTokens - TokenReserve) * CharsPerToken);
-        var system = string.IsNullOrWhiteSpace(options.SystemPromptOverride)
-            ? DefaultSystemPrompt
-            : options.SystemPromptOverride!;
+
+        var system = !string.IsNullOrWhiteSpace(options.SystemPromptOverride)
+            ? options.SystemPromptOverride!
+            : questionOnly ? QuestionSystemPrompt : DefaultSystemPrompt;
 
         var remaining = Math.Max(800, total - system.Length - 300);
 
         var user = Truncate(userText, (int)(remaining * 0.35));
         var geometry = Truncate(Sanitize(geometryContext, int.MaxValue), Math.Min(options.MaxGeometryChars, (int)(remaining * 0.35)));
 
-        var hasCode = !string.IsNullOrWhiteSpace(currentCode);
+        var hasCode = !questionOnly && !string.IsNullOrWhiteSpace(currentCode);
         var code = hasCode
             ? Truncate(Sanitize(currentCode!, int.MaxValue), Math.Min(options.MaxCurrentCodeChars, (int)(remaining * 0.30)))
             : string.Empty;
@@ -132,12 +170,12 @@ public static class CadAssistPromptTemplates
         }
 
         var historyBudget = Math.Max(0, remaining - geometry.Length - code.Length - user.Length);
-        var turns = SelectHistory(history, historyBudget);
+        var turns = SelectHistory(history, historyBudget, questionOnly ? QuestionHistoryTurnsCap : int.MaxValue);
 
         return Render(Normalize(options.ChatTemplate), systemBlock.ToString().TrimEnd(), turns, user);
     }
 
-    private static List<(string Role, string Text)> SelectHistory(IReadOnlyList<CadAssistMessageDto> history, int budget)
+    private static List<(string Role, string Text)> SelectHistory(IReadOnlyList<CadAssistMessageDto> history, int budget, int maxMessages)
     {
         var picked = new List<(string Role, string Text)>();
         var used = 0;
@@ -154,6 +192,11 @@ public static class CadAssistPromptTemplates
 
         for (var i = history.Count - 1; i >= 0; i--)
         {
+            if (picked.Count >= maxMessages)
+            {
+                break;
+            }
+
             var message = history[i];
 
             if (message.Role != CadAssistRole.User && message.Role != CadAssistRole.Assistant)

@@ -1,5 +1,6 @@
 ﻿using CadToCode.Business.Interfaces;
 using CadToCode.LLM.Interfaces;
+using CadToCode.LLM.Prompts;
 using CadToCode.LLM.Services;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
@@ -22,6 +23,7 @@ public class CadAssistController : Controller
     private const int MaxFileNameChars = 120;
     private const int MaxFieldChars = 400;
     private const int MaxTemplateChars = 3000;
+    private const int MinGeometryChars = 1200;
 
     private const string DraftGeometryContext =
         "No drawing has been processed yet. The user is on the upload page. "
@@ -117,6 +119,10 @@ public class CadAssistController : Controller
             });
         }
 
+        var questionOnly = CadAssistPromptTemplates.IsQuestionOnly(request.Prompt);
+        var templateChars = ResolveTemplateChars(questionOnly);
+        var geometryChars = Math.Max(MinGeometryChars, _options.MaxGeometryChars - templateChars);
+
         var projectId = 0;
         var geometryContext = DraftGeometryContext;
 
@@ -138,21 +144,26 @@ public class CadAssistController : Controller
 
             projectId = project.Id;
 
-            var query = GeometryContextBuilder.BuildRetrievalQuery(project, tree, request.Prompt);
-            var templates = await _rag.RetrieveAsync(query, null, CadLibraryFileType.CSharp, cancellationToken);
+            IReadOnlyList<VectorSearchHit>? templates = null;
+
+            if (templateChars > 0)
+            {
+                var query = GeometryContextBuilder.BuildRetrievalQuery(project, tree, request.Prompt);
+                templates = await _rag.RetrieveAsync(query, null, CadLibraryFileType.CSharp, cancellationToken);
+            }
 
             geometryContext = GeometryContextBuilder.Build(
                 project,
                 tree,
-                Math.Max(400, _options.MaxGeometryChars - MaxTemplateChars),
+                geometryChars,
                 templates,
-                MaxTemplateChars);
+                templateChars);
         }
-        else
+        else if (templateChars > 0)
         {
             var query = BuildDraftQuery(request);
             var templates = await _rag.RetrieveAsync(query, null, CadLibraryFileType.CSharp, cancellationToken);
-            var section = GeometryContextBuilder.BuildTemplatesSection(templates, MaxTemplateChars);
+            var section = GeometryContextBuilder.BuildTemplatesSection(templates, templateChars);
 
             if (section.Length > 0)
             {
@@ -199,6 +210,16 @@ public class CadAssistController : Controller
             Model = result.Model,
             ElapsedMs = result.ElapsedMs
         });
+    }
+
+    private int ResolveTemplateChars(bool questionOnly)
+    {
+        if (questionOnly)
+        {
+            return 0;
+        }
+
+        return Math.Min(MaxTemplateChars, Math.Max(0, _options.MaxGeometryChars / 3));
     }
 
     private async Task<string?> VerifyAsync(CadAssistMessageDto message, CancellationToken cancellationToken)
