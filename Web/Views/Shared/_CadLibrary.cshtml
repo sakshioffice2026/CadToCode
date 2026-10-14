@@ -1,0 +1,227 @@
+@model CadToCode.Models.Dtos.CadLibraryIndexViewModel
+@using System.Globalization
+@using CadToCode.Models.Dtos
+
+@{
+    string Size(long bytes)
+    {
+        if (bytes <= 0) return "-";
+        if (bytes < 1024) return bytes.ToString(CultureInfo.InvariantCulture) + " B";
+        if (bytes < 1024 * 1024) return (bytes / 1024d).ToString("0.#", CultureInfo.InvariantCulture) + " KB";
+        return (bytes / 1024d / 1024d).ToString("0.##", CultureInfo.InvariantCulture) + " MB";
+    }
+
+    string StatusClass(string status) => status switch
+    {
+        CadLibrarySyncStatus.Synced => "cc-status-ok",
+        CadLibrarySyncStatus.Failed => "cc-status-bad",
+        _ => "cc-status-warn"
+    };
+
+    string TypeLabel(string fileType) => fileType switch
+    {
+        CadLibraryFileType.Dxf => "DXF",
+        CadLibraryFileType.Step => "STEP",
+        CadLibraryFileType.CSharp => "C# template",
+        _ => fileType
+    };
+
+    var defaultCategories = new[] { "General", "Brackets", "Flanges", "Shafts", "Plates", "Housings", "Fasteners", "Assemblies" };
+    var categories = Model.Stats.Categories
+        .Concat(defaultCategories)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .OrderBy(c => c, StringComparer.OrdinalIgnoreCase)
+        .ToList();
+}
+
+<link rel="stylesheet" href="~/css/library.css" asp-append-version="true" />
+
+<section class="cc-panel cc-library-upload" aria-labelledby="cc-library-upload-title">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title" id="cc-library-upload-title">Add reference files</h2>
+    </div>
+
+    <div class="cc-panel-body">
+        <form asp-controller="Library" asp-action="Upload" method="post" enctype="multipart/form-data" class="cc-library-form">
+            <div class="cc-library-field cc-library-field-wide">
+                <label for="cc-library-files">Files (.dxf, .step, .stp, .cs)</label>
+                <input id="cc-library-files" type="file" name="files" class="form-control" multiple accept=".dxf,.step,.stp,.cs" required />
+            </div>
+
+            <div class="cc-library-field">
+                <label for="cc-library-title">Title (single file only)</label>
+                <input id="cc-library-title" type="text" name="title" class="form-control" maxlength="200" placeholder="Defaults to the file name" />
+            </div>
+
+            <div class="cc-library-field">
+                <label for="cc-library-category">Category</label>
+                <input id="cc-library-category" type="text" name="category" class="form-control" maxlength="100" list="cc-library-categories" value="General" />
+                <datalist id="cc-library-categories">
+                    @foreach (var c in categories)
+                    {
+                        <option value="@c"></option>
+                    }
+                </datalist>
+            </div>
+
+            <div class="cc-library-field">
+                <label for="cc-library-tags">Tags (comma separated)</label>
+                <input id="cc-library-tags" type="text" name="tags" class="form-control" maxlength="500" placeholder="flange, bolt circle, 4 holes" />
+            </div>
+
+            <div class="cc-library-field cc-library-field-wide">
+                <label for="cc-library-description">Description</label>
+                <textarea id="cc-library-description" name="description" class="form-control" rows="2" maxlength="1000" placeholder="What this reference shows and when to use it"></textarea>
+            </div>
+
+            <div class="cc-library-field cc-library-field-wide">
+                <button type="submit" class="cc-btn cc-btn-primary">Add and sync to cloud</button>
+            </div>
+        </form>
+    </div>
+</section>
+
+<section class="cc-panel cc-library" aria-labelledby="cc-library-title">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title" id="cc-library-title">Library items</h2>
+
+        <div class="cc-library-stats">
+            <span class="cc-chip">@Model.Stats.TotalItems total</span>
+            <span class="cc-chip">@Model.Stats.SyncedItems synced</span>
+            <span class="cc-chip cc-chip-muted">@Model.Stats.PendingItems pending</span>
+            <span class="cc-chip cc-chip-muted">@Model.Stats.FailedItems failed</span>
+        </div>
+    </div>
+
+    <div class="cc-panel-body">
+        <div class="cc-library-toolbar">
+            <form asp-controller="Library" asp-action="Index" method="get" class="cc-library-filter">
+                <input type="search" name="search" value="@Model.SearchText" class="form-control" placeholder="Search title, tag or description" aria-label="Search library" />
+
+                <select name="category" class="form-select" aria-label="Filter by category">
+                    <option value="">All categories</option>
+                    @foreach (var c in categories)
+                    {
+                        <option value="@c" selected="@string.Equals(c, Model.CategoryFilter, StringComparison.OrdinalIgnoreCase)">@c</option>
+                    }
+                </select>
+
+                <select name="fileType" class="form-select" aria-label="Filter by file type">
+                    <option value="">All types</option>
+                    <option value="@CadLibraryFileType.Dxf" selected="@(Model.FileTypeFilter == CadLibraryFileType.Dxf)">DXF</option>
+                    <option value="@CadLibraryFileType.Step" selected="@(Model.FileTypeFilter == CadLibraryFileType.Step)">STEP</option>
+                    <option value="@CadLibraryFileType.CSharp" selected="@(Model.FileTypeFilter == CadLibraryFileType.CSharp)">C# template</option>
+                </select>
+
+                <button type="submit" class="cc-btn cc-btn-ghost">Filter</button>
+            </form>
+
+            <div class="cc-library-sync-actions">
+                <form asp-controller="Library" asp-action="SyncAll" method="post" class="d-inline">
+                    <input type="hidden" name="pendingOnly" value="true" />
+                    <button type="submit" class="cc-btn cc-btn-primary cc-btn-small">Sync pending</button>
+                </form>
+
+                <form asp-controller="Library" asp-action="SyncAll" method="post" class="d-inline"
+                      data-cc-confirm="Re-embed every item and update the cloud vector library?">
+                    <input type="hidden" name="pendingOnly" value="false" />
+                    <button type="submit" class="cc-btn cc-btn-ghost cc-btn-small">Re-sync all</button>
+                </form>
+            </div>
+        </div>
+
+        @if (Model.Items.Count == 0)
+        {
+            <div class="cc-history-empty">
+                <h2>No reference files yet</h2>
+                <p>Add DXF drawings, STEP models and C# procedural templates. The assistant retrieves the closest C# templates when you describe or upload a drawing.</p>
+            </div>
+        }
+        else
+        {
+            <div class="cc-table-wrap">
+                <table class="cc-stats-table cc-history-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Item</th>
+                            <th scope="col">Type</th>
+                            <th scope="col">Category</th>
+                            <th scope="col" class="cc-num">Size</th>
+                            <th scope="col">Cloud sync</th>
+                            <th scope="col"><span class="visually-hidden">Actions</span></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var item in Model.Items)
+                        {
+                            <tr>
+                                <td>
+                                    <span class="cc-history-name">@item.Title</span>
+                                    <span class="cc-history-file">@item.OriginalFileName</span>
+
+                                    @if (!string.IsNullOrWhiteSpace(item.Description))
+                                    {
+                                        <span class="cc-library-description">@item.Description</span>
+                                    }
+
+                                    @if (item.Tags.Count > 0)
+                                    {
+                                        <span class="cc-library-tags">
+                                            @foreach (var tag in item.Tags)
+                                            {
+                                                <span class="cc-chip cc-chip-muted">@tag</span>
+                                            }
+                                        </span>
+                                    }
+
+                                    @if (item.SyncStatus == CadLibrarySyncStatus.Failed && !string.IsNullOrWhiteSpace(item.SyncError))
+                                    {
+                                        <span class="cc-history-error" title="@item.SyncError">@item.SyncError</span>
+                                    }
+
+                                    <details class="cc-library-edit">
+                                        <summary>Edit tags and details</summary>
+
+                                        <form asp-controller="Library" asp-action="Update" method="post" class="cc-library-edit-form">
+                                            <input type="hidden" name="Id" value="@item.Id" />
+
+                                            <label for="cc-edit-title-@item.Id">Title</label>
+                                            <input id="cc-edit-title-@item.Id" type="text" name="Title" value="@item.Title" class="form-control" maxlength="200" required />
+
+                                            <label for="cc-edit-category-@item.Id">Category</label>
+                                            <input id="cc-edit-category-@item.Id" type="text" name="Category" value="@item.Category" class="form-control" maxlength="100" list="cc-library-categories" />
+
+                                            <label for="cc-edit-tags-@item.Id">Tags</label>
+                                            <input id="cc-edit-tags-@item.Id" type="text" name="Tags" value="@string.Join(", ", item.Tags)" class="form-control" maxlength="500" />
+
+                                            <label for="cc-edit-description-@item.Id">Description</label>
+                                            <textarea id="cc-edit-description-@item.Id" name="Description" class="form-control" rows="2" maxlength="1000">@item.Description</textarea>
+
+                                            <button type="submit" class="cc-btn cc-btn-primary cc-btn-small">Save and re-sync</button>
+                                        </form>
+                                    </details>
+                                </td>
+                                <td>@TypeLabel(item.FileType)</td>
+                                <td>@item.Category</td>
+                                <td class="cc-num">@Size(item.FileSizeBytes)</td>
+                                <td><span class="cc-status @StatusClass(item.SyncStatus)">@item.SyncStatus</span></td>
+                                <td class="cc-history-actions">
+                                    <form asp-controller="Library" asp-action="Sync" asp-route-id="@item.Id" method="post" class="d-inline">
+                                        <button type="submit" class="cc-btn cc-btn-primary cc-btn-small">Sync</button>
+                                    </form>
+
+                                    <a class="cc-btn cc-btn-ghost cc-btn-small" asp-controller="Library" asp-action="Download" asp-route-id="@item.Id">Download</a>
+
+                                    <form asp-controller="Library" asp-action="Delete" asp-route-id="@item.Id" method="post" class="d-inline"
+                                          data-cc-confirm="Delete &quot;@item.Title&quot; from the library and the cloud vector store?">
+                                        <button type="submit" class="cc-btn cc-btn-ghost cc-btn-small cc-btn-danger">Delete</button>
+                                    </form>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </div>
+</section>

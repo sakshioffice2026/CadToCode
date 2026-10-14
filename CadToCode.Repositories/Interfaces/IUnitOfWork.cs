@@ -6,6 +6,8 @@ public interface IUnitOfWork : IAsyncDisposable
 
     IDrawingComponentRepository Components { get; }
 
+    ICadLibraryRepository CadLibrary { get; }
+
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 
     Task BeginTransactionAsync(CancellationToken cancellationToken = default);

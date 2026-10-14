@@ -8,6 +8,147 @@ public static class GeometryContextBuilder
 {
     private static readonly int[] DetailLevels = { 60, 30, 15, 8, 4 };
 
+    public static string Build(
+        ProjectResultDto project,
+        AssemblyTree? tree,
+        int maxChars,
+        IReadOnlyList<VectorSearchHit>? templates,
+        int maxTemplateChars)
+    {
+        var geometry = Build(project, tree, maxChars);
+        var section = BuildTemplatesSection(templates, maxTemplateChars);
+
+        return section.Length == 0
+            ? geometry
+            : geometry + Environment.NewLine + section;
+    }
+
+    public static string BuildRetrievalQuery(ProjectResultDto? project, AssemblyTree? tree, string? prompt)
+    {
+        var sb = new StringBuilder();
+
+        if (!string.IsNullOrWhiteSpace(prompt))
+        {
+            sb.AppendLine("Request: " + Clean(prompt, 800));
+        }
+
+        if (project is not null)
+        {
+            sb.AppendLine("Drawing: " + Clean(project.Title, 80));
+            sb.AppendLine("Source: " + project.SourceFileType);
+
+            var kinds = project.Components
+                .GroupBy(c => c.ComponentType.ToString())
+                .OrderByDescending(g => g.Count())
+                .Take(8)
+                .Select(g => g.Key + " x" + g.Count())
+                .ToList();
+
+            if (kinds.Count > 0)
+            {
+                sb.AppendLine("Components: " + string.Join(", ", kinds));
+            }
+        }
+
+        if (tree is not null && tree.Nodes.Count > 0)
+        {
+            var shapes = tree.Nodes
+                .GroupBy(n => n.Shape.ToString())
+                .OrderByDescending(g => g.Count())
+                .Take(6)
+                .Select(g => g.Key + " x" + g.Count())
+                .ToList();
+
+            if (shapes.Count > 0)
+            {
+                sb.AppendLine("Shapes: " + string.Join(", ", shapes));
+            }
+
+            var assemblies = tree.Assemblies
+                .Select(a => Clean(a.AssemblyName, 40) + " (" + a.Category + ")")
+                .Take(6)
+                .ToList();
+
+            if (assemblies.Count > 0)
+            {
+                sb.AppendLine("Assemblies: " + string.Join(", ", assemblies));
+            }
+
+            var labels = tree.Nodes
+                .SelectMany(n => n.Labels)
+                .Where(l => !string.IsNullOrWhiteSpace(l))
+                .Select(l => Clean(l, 40))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(8)
+                .ToList();
+
+            if (labels.Count > 0)
+            {
+                sb.AppendLine("Texts: " + string.Join(" | ", labels));
+            }
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    public static string BuildTemplatesSection(IReadOnlyList<VectorSearchHit>? templates, int maxChars)
+    {
+        if (templates is null || templates.Count == 0 || maxChars < 200)
+        {
+            return string.Empty;
+        }
+
+        var perTemplate = Math.Max(150, maxChars / templates.Count);
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Reference templates from the CAD library (most similar first, adapt rather than copy):");
+
+        var index = 1;
+
+        foreach (var t in templates)
+        {
+            sb.AppendLine();
+            sb.AppendLine("[" + index + "] " + Clean(t.Title, 60) + " (" + Clean(t.Category, 30) + ", " + t.FileType
+                + ", similarity " + Num(t.Score) + ")");
+
+            var budget = perTemplate;
+
+            if (!string.IsNullOrWhiteSpace(t.MetadataSummary))
+            {
+                var summary = Clean(t.MetadataSummary, Math.Min(240, budget / 3));
+                sb.AppendLine("Summary: " + summary);
+                budget -= summary.Length;
+            }
+
+            if (!string.IsNullOrWhiteSpace(t.CodeSnippet))
+            {
+                var code = t.CodeSnippet.Replace("\r", string.Empty).Trim();
+
+                if (code.Length > budget)
+                {
+                    code = code[..Math.Max(80, budget)];
+                    var lastBreak = code.LastIndexOf('\n');
+
+                    if (lastBreak > 40)
+                    {
+                        code = code[..lastBreak];
+                    }
+
+                    code += "\n// ... truncated";
+                }
+
+                sb.AppendLine("```csharp");
+                sb.AppendLine(code);
+                sb.AppendLine("```");
+            }
+
+            index++;
+        }
+
+        var text = sb.ToString();
+        return text.Length > maxChars ? text[..maxChars] : text;
+    }
+
     public static string Build(ProjectResultDto project, AssemblyTree? tree, int maxChars)
     {
         var limit = Math.Max(400, maxChars);

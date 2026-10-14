@@ -12,6 +12,7 @@ public class ApplicationDbContext : DbContext
 
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<DrawingComponent> DrawingComponents => Set<DrawingComponent>();
+    public DbSet<CadLibraryItem> CadLibraryItems => Set<CadLibraryItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -32,6 +33,15 @@ public class ApplicationDbContext : DbContext
                   .WithMany(p => p.DrawingComponents)
                   .HasForeignKey(c => c.ProjectId)
                   .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CadLibraryItem>(entity =>
+        {
+            entity.HasIndex(i => i.Category);
+            entity.HasIndex(i => i.FileType);
+            entity.HasIndex(i => i.SyncStatus);
+            entity.HasIndex(i => i.CreatedAt);
+            entity.HasIndex(i => i.VectorPointId).IsUnique();
         });
     }
 }

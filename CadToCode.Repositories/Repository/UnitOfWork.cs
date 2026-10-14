@@ -14,11 +14,14 @@ public class UnitOfWork : IUnitOfWork
         _context = context;
         Projects = new ProjectRepository(_context);
         Components = new DrawingComponentRepository(_context);
+        CadLibrary = new CadLibraryRepository(_context);
     }
 
     public IProjectRepository Projects { get; }
 
     public IDrawingComponentRepository Components { get; }
+
+    public ICadLibraryRepository CadLibrary { get; }
 
     public async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {

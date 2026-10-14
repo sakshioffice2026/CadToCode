@@ -21,6 +21,7 @@ public class CadAssistController : Controller
     private const int MaxRequestBytes = 2_097_152;
     private const int MaxFileNameChars = 120;
     private const int MaxFieldChars = 400;
+    private const int MaxTemplateChars = 3000;
 
     private const string DraftGeometryContext =
         "No drawing has been processed yet. The user is on the upload page. "
@@ -30,6 +31,7 @@ public class CadAssistController : Controller
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
     private readonly IStepScriptRunner _stepScriptRunner;
+    private readonly ICadRagRetriever _rag;
     private readonly LocalAiOptions _options;
     private readonly ILogger<CadAssistController> _logger;
 
@@ -38,6 +40,7 @@ public class CadAssistController : Controller
         IProjectProcessingService processingService,
         ICodeGenerationService codeGenerationService,
         IStepScriptRunner stepScriptRunner,
+        ICadRagRetriever rag,
         IOptions<LocalAiOptions> options,
         ILogger<CadAssistController> logger)
     {
@@ -45,6 +48,7 @@ public class CadAssistController : Controller
         _processingService = processingService;
         _codeGenerationService = codeGenerationService;
         _stepScriptRunner = stepScriptRunner;
+        _rag = rag;
         _options = options.Value;
         _logger = logger;
     }
@@ -133,7 +137,27 @@ public class CadAssistController : Controller
             }
 
             projectId = project.Id;
-            geometryContext = GeometryContextBuilder.Build(project, tree, _options.MaxGeometryChars);
+
+            var query = GeometryContextBuilder.BuildRetrievalQuery(project, tree, request.Prompt);
+            var templates = await _rag.RetrieveAsync(query, null, CadLibraryFileType.CSharp, cancellationToken);
+
+            geometryContext = GeometryContextBuilder.Build(
+                project,
+                tree,
+                Math.Max(400, _options.MaxGeometryChars - MaxTemplateChars),
+                templates,
+                MaxTemplateChars);
+        }
+        else
+        {
+            var query = BuildDraftQuery(request);
+            var templates = await _rag.RetrieveAsync(query, null, CadLibraryFileType.CSharp, cancellationToken);
+            var section = GeometryContextBuilder.BuildTemplatesSection(templates, MaxTemplateChars);
+
+            if (section.Length > 0)
+            {
+                geometryContext = DraftGeometryContext + Environment.NewLine + Environment.NewLine + section;
+            }
         }
 
         var generation = new LocalAiGenerationRequest
@@ -246,6 +270,39 @@ public class CadAssistController : Controller
         }
 
         return cleaned;
+    }
+
+    private static string BuildDraftQuery(CadAssistChatRequest request)
+    {
+        var parts = new List<string>();
+
+        if (!string.IsNullOrWhiteSpace(request.Prompt))
+        {
+            parts.Add("Request: " + request.Prompt.Trim());
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.DrawingType))
+        {
+            parts.Add("Drawing type: " + request.DrawingType.Trim());
+        }
+
+        foreach (var attachment in request.Attachments.Where(a => a is not null).Take(5))
+        {
+            var name = Path.GetFileName(attachment.FileName ?? string.Empty);
+
+            if (!string.IsNullOrWhiteSpace(name))
+            {
+                parts.Add("Attached file: " + name);
+            }
+
+            if (!string.IsNullOrWhiteSpace(attachment.TextContent))
+            {
+                var text = attachment.TextContent.Trim();
+                parts.Add(text.Length > 600 ? text[..600] : text);
+            }
+        }
+
+        return string.Join(Environment.NewLine, parts);
     }
 
     private static string? Limit(string? value, int max)

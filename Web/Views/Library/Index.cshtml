@@ -1,0 +1,28 @@
+@model CadToCode.Models.Dtos.CadLibraryIndexViewModel
+
+@{
+    ViewData["Title"] = "CAD Library";
+}
+
+<div class="cc-topbar">
+    <div>
+        <h1 class="cc-page-title">CAD Library</h1>
+        <p class="cc-page-meta">Reference .dxf, .step and C# procedural templates. Each item is embedded and stored in the cloud vector library, so the CAD Assistant can retrieve the closest C# templates for your drawings and prompts.</p>
+    </div>
+
+    <div class="d-flex gap-2">
+        <a class="cc-btn cc-btn-ghost" asp-controller="Project" asp-action="Upload">Upload drawing</a>
+    </div>
+</div>
+
+@if (TempData["LibraryError"] is string libraryError)
+{
+    <div class="cc-alert cc-alert-error" role="alert">@libraryError</div>
+}
+
+@if (TempData["LibraryMessage"] is string libraryMessage)
+{
+    <div class="cc-alert cc-alert-success" role="status">@libraryMessage</div>
+}
+
+<partial name="_CadLibrary" model="Model" />
