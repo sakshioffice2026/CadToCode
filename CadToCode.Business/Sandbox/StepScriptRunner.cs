@@ -187,13 +187,30 @@ public sealed class StepScriptRunner : IStepScriptRunner
 
         var solids = document.Solids;
 
-        var points = solids.Sum(s => s is PrismSolid prism
-            ? prism.Outline.Count + prism.Holes.Sum(h => h.Count)
-            : 0);
+        var points = solids.Sum(SandboxSolidKind.PointCount);
 
         if (points > MaxTotalPoints)
         {
             return Fail(clock, SandboxStatus.Error, "The model has more than " + MaxTotalPoints + " outline points.", session);
+        }
+
+        var faces = solids.Sum(s => s.FaceCount);
+
+        if (faces > SandboxSession.MaxFaces)
+        {
+            return Fail(clock, SandboxStatus.Error, "The model has more than " + SandboxSession.MaxFaces + " faces.", session);
+        }
+
+        string step;
+
+        try
+        {
+            step = document.ToStep();
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or NotSupportedException)
+        {
+            var reason = "The model could not be written as STEP: " + ex.Message;
+            return Fail(clock, SandboxStatus.Error, reason.Length > 300 ? reason[..300] : reason, session);
         }
 
         var result = new SandboxRunResult
@@ -201,12 +218,15 @@ public sealed class StepScriptRunner : IStepScriptRunner
             Success = true,
             Status = SandboxStatus.Ok,
             SolidCount = solids.Count,
-            FaceCount = solids.Sum(s => s.FaceCount),
+            FaceCount = faces,
             FileName = session.SavedAs ?? ToFileName(document.Name),
-            StepContent = document.ToStep(),
+            StepContent = step,
             Output = session.Output,
             Bounds = BoundsOf(solids)
         };
+
+        var approximated = 0;
+        var previewPoints = 0;
 
         foreach (var solid in solids)
         {
@@ -238,6 +258,14 @@ public sealed class StepScriptRunner : IStepScriptRunner
                         Height = cylinder.Height
                     });
                     break;
+
+                case FramedSolid framed:
+                    if (!AddFramedPreview(result, framed, ref previewPoints))
+                    {
+                        approximated++;
+                    }
+
+                    break;
             }
         }
 
@@ -247,10 +275,98 @@ public sealed class StepScriptRunner : IStepScriptRunner
             + result.FaceCount.ToString(CultureInfo.InvariantCulture)
             + " faces written to "
             + result.FileName
-            + ".";
+            + ". Contains "
+            + SandboxSolidKind.Summary(solids)
+            + "."
+            + (approximated > 0
+                ? " " + approximated.ToString(CultureInfo.InvariantCulture)
+                    + " of them appear as bounding boxes in the preview; the STEP file holds the exact geometry."
+                : string.Empty);
 
         result.ElapsedMs = clock.ElapsedMilliseconds;
         return result;
+    }
+
+    private static bool AddFramedPreview(SandboxRunResult result, FramedSolid solid, ref int previewPoints)
+    {
+        if (solid is ExtrudedProfileSolid extrusion && IsAxisAligned(extrusion.WorldFrame))
+        {
+            var origin = extrusion.WorldFrame.Origin;
+            var profile = extrusion.Profile;
+
+            if (profile.IsCircle && profile.HoleCount == 0)
+            {
+                var arc = profile.Outer.CircleArc!;
+
+                result.Solids.Add(new SandboxSolid
+                {
+                    Type = "cylinder",
+                    Name = extrusion.Name,
+                    Z = origin.Z,
+                    X = origin.X + arc.Center.X,
+                    Y = origin.Y + arc.Center.Y,
+                    Radius = arc.Radius,
+                    Height = extrusion.Depth
+                });
+
+                return true;
+            }
+
+            var bounds = profile.Bounds;
+            var deviation = Math.Max(
+                ProfileLoop.DefaultFlattenDeviation,
+                Math.Max(bounds.MaxX - bounds.MinX, bounds.MaxY - bounds.MinY) / 400.0);
+
+            var outer = profile.FlattenOuter(deviation);
+            var holes = profile.FlattenHoles(deviation);
+            var count = outer.Count + holes.Sum(h => h.Count);
+
+            if (previewPoints + count <= MaxTotalPoints)
+            {
+                previewPoints += count;
+
+                result.Solids.Add(new SandboxSolid
+                {
+                    Type = "prism",
+                    Name = extrusion.Name,
+                    Z = origin.Z,
+                    Depth = extrusion.Depth,
+                    Outer = outer.Select(p => new SandboxPoint { X = p.X + origin.X, Y = p.Y + origin.Y }).ToList(),
+                    Holes = holes
+                        .Select(h => h.Select(p => new SandboxPoint { X = p.X + origin.X, Y = p.Y + origin.Y }).ToList())
+                        .ToList()
+                });
+
+                return true;
+            }
+        }
+
+        var box = solid.Bounds;
+
+        result.Solids.Add(new SandboxSolid
+        {
+            Type = "prism",
+            Name = solid.Name,
+            Z = box.MinZ,
+            Depth = Math.Max(box.MaxZ - box.MinZ, 1e-6),
+            Outer = new List<SandboxPoint>
+            {
+                new() { X = box.MinX, Y = box.MinY },
+                new() { X = box.MaxX, Y = box.MinY },
+                new() { X = box.MaxX, Y = box.MaxY },
+                new() { X = box.MinX, Y = box.MaxY }
+            },
+            Holes = new List<List<SandboxPoint>>()
+        });
+
+        return false;
+    }
+
+    private static bool IsAxisAligned(Frame3D frame)
+    {
+        return frame.XAxis.IsApproximately(Vec3.UnitX, 1e-9)
+            && frame.YAxis.IsApproximately(Vec3.UnitY, 1e-9)
+            && frame.ZAxis.IsApproximately(Vec3.UnitZ, 1e-9);
     }
 
     private SandboxRunResult FailFromException(Stopwatch clock, SandboxSession session, Exception exception)

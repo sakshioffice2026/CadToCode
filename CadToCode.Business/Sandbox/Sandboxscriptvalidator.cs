@@ -69,6 +69,7 @@ public static class SandboxScriptValidator
         ["System.Char"] = null,
         ["System.Decimal"] = null,
         ["System.Math"] = null,
+        ["System.Nullable"] = Set(".ctor", "HasValue", "Value", "GetValueOrDefault"),
         ["System.ValueTuple"] = null,
         ["System.Collections.IEnumerable"] = null,
         ["System.Collections.IEnumerator"] = null,
@@ -83,12 +84,13 @@ public static class SandboxScriptValidator
             "ToUpper", "ToLower", "ToUpperInvariant", "ToLowerInvariant", "Join", "Concat", "IsNullOrEmpty",
             "IsNullOrWhiteSpace", "Equals", "CompareTo", "ToString", "GetHashCode", "Split", "Empty", "Item", "this[]"),
         ["System.Collections.Generic.List"] = Set(
-            ".ctor", "Add", "Count", "Contains", "Clear", "Insert", "RemoveAt", "IndexOf", "Reverse", "ToArray",
-            "GetEnumerator", "Item", "this[]"),
+            ".ctor", "Add", "AddRange", "Count", "Contains", "Clear", "Insert", "Remove", "RemoveAt", "IndexOf",
+            "Reverse", "ToArray", "GetEnumerator", "Item", "this[]"),
         ["System.Linq.Enumerable"] = Set(
-            "Select", "Where", "ToList", "ToArray", "Any", "All", "Count", "Sum", "Min", "Max", "Average",
-            "First", "FirstOrDefault", "Last", "LastOrDefault", "OrderBy", "OrderByDescending", "ThenBy",
-            "ThenByDescending", "Reverse", "Take", "Skip", "Concat", "Distinct", "Contains"),
+            "Select", "SelectMany", "Where", "ToList", "ToArray", "Any", "All", "Count", "Sum", "Min", "Max",
+            "Average", "First", "FirstOrDefault", "Last", "LastOrDefault", "ElementAt", "OrderBy",
+            "OrderByDescending", "ThenBy", "ThenByDescending", "Reverse", "Take", "Skip", "Concat", "Distinct",
+            "Contains", "Range", "Repeat", "Zip"),
         ["System.Console"] = Set("WriteLine"),
         ["System.IO.Path"] = Set("GetFullPath")
     };

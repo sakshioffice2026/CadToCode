@@ -13,6 +13,7 @@ public sealed class SandboxLimitException : Exception
 public sealed class SandboxSession
 {
     public const int MaxSolids = 2000;
+    public const int MaxFaces = 200_000;
     public const int MaxOutputLines = 200;
     public const int MaxOutputLineLength = 500;
 
@@ -149,6 +150,53 @@ public sealed class SandboxSession
         {
             CurrentSession.Value = null;
         }
+    }
+}
+
+public static class SandboxSolidKind
+{
+    public static string Of(Solid solid)
+    {
+        return solid switch
+        {
+            PrismSolid => "prism",
+            CylinderSolid => "cylinder",
+            ExtrudedProfileSolid => "extrusion",
+            RevolveSolid => "revolve",
+            SweepSolid => "sweep",
+            ConeSolid => "cone",
+            SphereSolid => "sphere",
+            TorusSolid => "torus",
+            _ => "solid"
+        };
+    }
+
+    public static int PointCount(Solid solid)
+    {
+        return solid switch
+        {
+            PrismSolid prism => prism.Outline.Count + prism.Holes.Sum(h => h.Count),
+            ExtrudedProfileSolid extrusion => SegmentCount(extrusion.Profile),
+            RevolveSolid revolve => SegmentCount(revolve.Profile),
+            SweepSolid sweep => SegmentCount(sweep.Profile) + sweep.Route.Segments.Count,
+            _ => 0
+        };
+    }
+
+    public static string Summary(IEnumerable<Solid> solids)
+    {
+        var groups = solids
+            .GroupBy(Of)
+            .OrderByDescending(g => g.Count())
+            .ThenBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => g.Count().ToString(System.Globalization.CultureInfo.InvariantCulture) + " " + g.Key);
+
+        return string.Join(", ", groups);
+    }
+
+    private static int SegmentCount(Profile2D profile)
+    {
+        return profile.Outer.Segments.Count + profile.Holes.Sum(h => h.Segments.Count);
     }
 }
 
