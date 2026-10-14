@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text.RegularExpressions;
 using CadToCode.Business.Interfaces;
 using CadToCode.Models.Enums;
@@ -15,6 +15,7 @@ public enum ImageCalloutKind
     Label = 6
 }
 
+/// <summary>A parsed text annotation in the source image's pixel coordinate space.</summary>
 public sealed record ImageCallout(
     ImageCalloutKind Kind,
     string Text,
@@ -32,60 +33,53 @@ public sealed record ImageCallout(
 public sealed class ImageAnnotationResult
 {
     public List<ImageCallout> Callouts { get; } = new();
+    /// <summary>Drawing scale multiplier for a scale written as a:b (b/a).</summary>
     public double? DrawingScale { get; set; }
     public DrawingUnit? DetectedUnit { get; set; }
 }
 
+/// <summary>
+/// Groups OCR words by visual line and recognizes common mechanical-drawing callouts.
+/// Parsing is intentionally conservative: text is never used as proof of a scale by itself;
+/// scale calibration also requires geometric evidence in ImageGeometryExtractor.
+/// </summary>
 public static class ImageAnnotationParser
 {
-    private const double RowTolerance = 0.6;
-    private const double MergeGapFactor = 1.2;
-
+    private const double RowTolerance = 0.60;
+    private const double MergeGapFactor = 1.35;
     private const string Number = @"\d+(?:[.,]\d+)?";
 
-    private static readonly RegexOptions Options =
+    private static readonly RegexOptions RxOptions =
         RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
 
     private static readonly Regex ScaleWord = new(
-        @"scale\s*[:=]?\s*(?<a>\d+(?:\.\d+)?)\s*:\s*(?<b>\d+(?:\.\d+)?)", Options);
-
+        @"\bscale\s*[:=]?\s*(?<a>\d+(?:[.,]\d+)?)\s*:\s*(?<b>\d+(?:[.,]\d+)?)\b", RxOptions);
     private static readonly Regex ScaleBare = new(
-        @"^(?<a>\d+(?:\.\d+)?)\s*:\s*(?<b>\d+(?:\.\d+)?)$", Options);
-
-    private static readonly Regex DiameterSymbol = new(
-        @"^(?:[Øø⌀ϕφΦ@]|%%c)\s*(?<v>" + Number + @")\s*(?:mm)?$", Options);
-
-    private static readonly Regex DiameterWordFirst = new(
-        @"^(?:dia\.?|diameter)\s*(?<v>" + Number + @")\s*(?:mm)?$", Options);
-
-    private static readonly Regex DiameterWordLast = new(
-        @"^(?<v>" + Number + @")\s*(?:mm\s*)?(?:dia\.?|diameter)$", Options);
-
-    private static readonly Regex DiameterLookalike = new(
-        @"^[0O]\s*(?<v>[1-9]\d*(?:[.,]\d+)?)$", Options);
-
+        @"^(?<a>\d+(?:[.,]\d+)?)\s*:\s*(?<b>\d+(?:[.,]\d+)?)$", RxOptions);
+    private static readonly Regex Diameter = new(
+        @"^(?:[Øø⌀ϕφΦ]|%%c|dia(?:meter)?\.?|diam\.?)\s*(?<v>" + Number + @")\s*(?:mm|cm|in|inch(?:es)?)?$", RxOptions);
+    private static readonly Regex DiameterSuffix = new(
+        @"^(?<v>" + Number + @")\s*(?:mm\s*)?(?:dia(?:meter)?\.?|diam\.?)$", RxOptions);
     private static readonly Regex Radius = new(
-        @"^(?:S?R)\s*(?<v>" + Number + @")\s*(?:mm)?$", Options);
-
+        @"^(?:sr|r)\s*(?<v>" + Number + @")\s*(?:mm|cm|in|inch(?:es)?)?$", RxOptions);
     private static readonly Regex Angle = new(
-        @"^(?<v>" + Number + @")\s*[°º˚]$", Options);
+        @"^(?<v>" + Number + @")\s*[°º˚]$", RxOptions);
+    private static readonly Regex LinearWithUnit = new(
+        @"^\s*\(?(?<v>" + Number + @")\)?\s*(?<unit>mm|cm|in|inch(?:es)?)\s*(?:±\s*" + Number + @")?\s*$", RxOptions);
+    private static readonly Regex LinearBare = new(
+        @"^\s*\(?(?<v>" + Number + @")\)?\s*(?:±\s*" + Number + @")?\s*$", RxOptions);
 
-    private static readonly Regex Linear = new(
-        @"^\(?(?<v>" + Number + @")\)?\s*(?:mm|cm)?\s*(?:±\s*" + Number + @")?$", Options);
-
-    private static readonly Regex MillimeterUnit = new(@"\b(?:mm|millimet(?:er|re)s?)\b", Options);
-    private static readonly Regex CentimeterUnit = new(@"\b(?:cm|centimet(?:er|re)s?)\b", Options);
-    private static readonly Regex InchUnit = new(@"\binch(?:es)?\b", Options);
-
-    private static readonly Regex WordToken = new(@"[A-Za-z][A-Za-z0-9]*", RegexOptions.Compiled);
-    private static readonly Regex NumberToken = new(@"(?<![A-Za-z0-9.])\d+(?:\.\d+)?", RegexOptions.Compiled);
+    private static readonly Regex MillimeterUnit = new(@"\b(?:mm|millimet(?:er|re)s?)\b", RxOptions);
+    private static readonly Regex CentimeterUnit = new(@"\b(?:cm|centimet(?:er|re)s?)\b", RxOptions);
+    private static readonly Regex InchUnit = new("\\b(?:in|inch(?:es)?)\\b|\"", RxOptions);
+    private static readonly Regex WordToken = new(@"[A-Za-z][A-Za-z0-9]*", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex NumberToken = new(@"(?<![A-Za-z0-9.])\d+(?:[.,]\d+)?", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private sealed record Phrase(string Text, double X, double Y, double Width, double Height, double Confidence);
 
     public static ImageAnnotationResult Parse(IReadOnlyList<RecognizedWord> words)
     {
         var result = new ImageAnnotationResult();
-
         if (words is null || words.Count == 0)
         {
             return result;
@@ -100,7 +94,6 @@ public static class ImageAnnotationParser
             }
 
             result.DetectedUnit ??= DetectUnit(text);
-
             var callout = Classify(text, phrase, result);
             if (callout is not null)
             {
@@ -115,7 +108,6 @@ public static class ImageAnnotationParser
     {
         var tokens = new List<string>();
         var numbers = new List<double>();
-
         if (string.IsNullOrWhiteSpace(text))
         {
             return (tokens, numbers);
@@ -128,9 +120,9 @@ public static class ImageAnnotationParser
 
         foreach (Match match in NumberToken.Matches(text))
         {
-            if (double.TryParse(match.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var number))
+            if (TryParseNumber(match.Value, out var value))
             {
-                numbers.Add(number);
+                numbers.Add(value);
             }
         }
 
@@ -139,116 +131,126 @@ public static class ImageAnnotationParser
 
     private static ImageCallout? Classify(string text, Phrase phrase, ImageAnnotationResult result)
     {
+        // OCR can separate the scale label and ratio into adjacent tokens; row grouping
+        // normally joins them, while this normalization removes harmless internal spaces.
+        var compact = Regex.Replace(text, @"\s+", string.Empty);
         var scale = ScaleWord.Match(text);
         if (!scale.Success)
         {
-            scale = ScaleBare.Match(text);
+            scale = ScaleBare.Match(compact);
         }
 
         if (scale.Success
-            && double.TryParse(scale.Groups["a"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var a)
-            && double.TryParse(scale.Groups["b"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var b)
-            && a > 0
-            && b > 0)
+            && TryParseNumber(scale.Groups["a"].Value, out var a)
+            && TryParseNumber(scale.Groups["b"].Value, out var b)
+            && a > 0 && b > 0)
         {
-            result.DrawingScale ??= b / a;
-            return Create(ImageCalloutKind.Scale, "SCALE " + Format(a) + ":" + Format(b), b / a, phrase);
-        }
-
-        foreach (var pattern in new[] { DiameterSymbol, DiameterWordFirst, DiameterWordLast, DiameterLookalike })
-        {
-            var match = pattern.Match(text);
-            if (match.Success && TryParse(match.Groups["v"].Value, out var diameter))
+            var multiplier = b / a;
+            if (double.IsFinite(multiplier) && multiplier > 0)
             {
-                return Create(ImageCalloutKind.Diameter, "Ø" + Format(diameter), diameter, phrase);
+                result.DrawingScale ??= multiplier;
+                return Create(ImageCalloutKind.Scale,
+                    "SCALE " + Format(a) + ":" + Format(b), multiplier, phrase);
             }
         }
 
-        var radius = Radius.Match(text);
-        if (radius.Success && TryParse(radius.Groups["v"].Value, out var radiusValue))
+        // Symbols such as Ø can be returned as a separate word by OCR, so try both the
+        // original phrase and a whitespace-free form. Do not turn arbitrary labels into diameters.
+        foreach (var candidateText in new[] { text, compact })
         {
-            return Create(ImageCalloutKind.Radius, "R" + Format(radiusValue), radiusValue, phrase);
+            var diameter = Diameter.Match(candidateText);
+            if (!diameter.Success)
+            {
+                diameter = DiameterSuffix.Match(candidateText);
+            }
+
+            if (diameter.Success && TryParseNumber(diameter.Groups["v"].Value, out var diameterValue)
+                && diameterValue > 0)
+            {
+                return Create(ImageCalloutKind.Diameter, "Ø" + Format(diameterValue), diameterValue, phrase);
+            }
+
+            var radius = Radius.Match(candidateText);
+            if (radius.Success && TryParseNumber(radius.Groups["v"].Value, out var radiusValue) && radiusValue > 0)
+            {
+                return Create(ImageCalloutKind.Radius, "R" + Format(radiusValue), radiusValue, phrase);
+            }
+
+            var angle = Angle.Match(candidateText);
+            if (angle.Success && TryParseNumber(angle.Groups["v"].Value, out var angleValue) && angleValue > 0)
+            {
+                return Create(ImageCalloutKind.Angle, Format(angleValue) + "°", angleValue, phrase);
+            }
+
+            var linearWithUnit = LinearWithUnit.Match(candidateText);
+            if (linearWithUnit.Success && TryParseNumber(linearWithUnit.Groups["v"].Value, out var unitValue) && unitValue > 0)
+            {
+                return Create(ImageCalloutKind.Linear, Format(unitValue), unitValue, phrase);
+            }
+
+            var linearBare = LinearBare.Match(candidateText);
+            if (linearBare.Success && TryParseNumber(linearBare.Groups["v"].Value, out var linearValue) && linearValue > 0)
+            {
+                return Create(ImageCalloutKind.Linear, Format(linearValue), linearValue, phrase);
+            }
         }
 
-        var angle = Angle.Match(text);
-        if (angle.Success && TryParse(angle.Groups["v"].Value, out var angleValue))
-        {
-            return Create(ImageCalloutKind.Angle, Format(angleValue) + "°", angleValue, phrase);
-        }
-
-        var linear = Linear.Match(text);
-        if (linear.Success && TryParse(linear.Groups["v"].Value, out var linearValue))
-        {
-            return Create(ImageCalloutKind.Linear, Format(linearValue), linearValue, phrase);
-        }
-
-        if (text.Any(char.IsLetter))
-        {
-            return Create(ImageCalloutKind.Label, text, null, phrase);
-        }
-
-        return null;
-    }
-
-    private static ImageCallout Create(ImageCalloutKind kind, string text, double? value, Phrase phrase)
-    {
-        return new ImageCallout(kind, text, value, phrase.X, phrase.Y, phrase.Width, phrase.Height, phrase.Confidence);
+        return text.Any(char.IsLetter)
+            ? Create(ImageCalloutKind.Label, text, null, phrase)
+            : null;
     }
 
     private static List<Phrase> BuildPhrases(IReadOnlyList<RecognizedWord> words)
     {
-        var phrases = new List<Phrase>();
-
         var usable = words
-            .Where(IsUsable)
+            .Where(w => !string.IsNullOrWhiteSpace(w.Text) && w.Width > 0 && w.Height > 0
+                        && double.IsFinite(w.Confidence) && w.Confidence >= 0)
             .OrderBy(w => w.CenterY)
             .ThenBy(w => w.X)
             .ToList();
 
         var rows = new List<List<RecognizedWord>>();
-
         foreach (var word in usable)
         {
-            List<RecognizedWord>? target = null;
-
+            List<RecognizedWord>? bestRow = null;
+            var bestDistance = double.MaxValue;
             foreach (var row in rows)
             {
                 var rowCenter = row.Average(w => w.CenterY);
-                var rowHeight = row.Max(w => (double)w.Height);
-
-                if (Math.Abs(word.CenterY - rowCenter) <= RowTolerance * Math.Max(rowHeight, word.Height))
+                var typicalHeight = Math.Max(row.Average(w => (double)w.Height), word.Height);
+                var distance = Math.Abs(word.CenterY - rowCenter);
+                if (distance <= RowTolerance * typicalHeight && distance < bestDistance)
                 {
-                    target = row;
-                    break;
+                    bestRow = row;
+                    bestDistance = distance;
                 }
             }
 
-            if (target is null)
+            if (bestRow is null)
             {
                 rows.Add(new List<RecognizedWord> { word });
             }
             else
             {
-                target.Add(word);
+                bestRow.Add(word);
             }
         }
 
+        var phrases = new List<Phrase>();
         foreach (var row in rows)
         {
             var ordered = row.OrderBy(w => w.X).ToList();
             var current = new List<RecognizedWord>();
-
             foreach (var word in ordered)
             {
                 if (current.Count > 0)
                 {
                     var gap = word.X - current[^1].Right;
-                    var height = Math.Max(current.Average(w => (double)w.Height), word.Height);
-
-                    if (gap > MergeGapFactor * height)
+                    var typicalHeight = Math.Max(current.Average(w => (double)w.Height), word.Height);
+                    if (gap > MergeGapFactor * typicalHeight)
                     {
                         phrases.Add(Flush(current));
-                        current = new List<RecognizedWord>();
+                        current.Clear();
                     }
                 }
 
@@ -264,65 +266,40 @@ public static class ImageAnnotationParser
         return phrases;
     }
 
-    private static Phrase Flush(List<RecognizedWord> words)
+    private static Phrase Flush(IReadOnlyList<RecognizedWord> words)
     {
         var left = words.Min(w => w.X);
         var top = words.Min(w => w.Y);
         var right = words.Max(w => w.Right);
         var bottom = words.Max(w => w.Bottom);
-
         return new Phrase(
-            string.Join(" ", words.Select(w => w.Text)),
+            string.Join(" ", words.OrderBy(w => w.X).Select(w => w.Text.Trim())),
             left,
             top,
             right - left,
             bottom - top,
-            words.Average(w => w.Confidence));
+            words.Average(w => Math.Clamp(w.Confidence, 0.0, 1.0)));
     }
 
-    private static bool IsUsable(RecognizedWord word)
-    {
-        if (string.IsNullOrWhiteSpace(word.Text) || word.Width <= 0 || word.Height <= 0)
-        {
-            return false;
-        }
-
-        return word.Text.Any(c => char.IsLetterOrDigit(c) || c is '@' or '⌀' or '°' or 'º' or '˚' or '±');
-    }
+    private static ImageCallout Create(ImageCalloutKind kind, string text, double? value, Phrase phrase) =>
+        new(kind, text, value, phrase.X, phrase.Y, phrase.Width, phrase.Height, phrase.Confidence);
 
     private static DrawingUnit? DetectUnit(string text)
     {
-        if (MillimeterUnit.IsMatch(text))
-        {
-            return DrawingUnit.Millimeter;
-        }
-
-        if (CentimeterUnit.IsMatch(text))
-        {
-            return DrawingUnit.Centimeter;
-        }
-
-        if (InchUnit.IsMatch(text))
-        {
-            return DrawingUnit.Inch;
-        }
-
+        if (MillimeterUnit.IsMatch(text)) return DrawingUnit.Millimeter;
+        if (CentimeterUnit.IsMatch(text)) return DrawingUnit.Centimeter;
+        if (InchUnit.IsMatch(text)) return DrawingUnit.Inch;
         return null;
     }
 
-    private static bool TryParse(string raw, out double value)
+    private static bool TryParseNumber(string raw, out double value)
     {
-        var ok = double.TryParse(
-            raw.Replace(',', '.'),
-            NumberStyles.Float,
-            CultureInfo.InvariantCulture,
-            out value);
-
-        return ok && value > 0 && !double.IsNaN(value) && !double.IsInfinity(value);
+        // Decimal comma is common in technical drawings. A comma followed by three digits
+        // can be ambiguous (decimal vs thousands separator), so this parser assumes decimal.
+        var normalized = raw.Replace(',', '.');
+        var ok = double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+        return ok && double.IsFinite(value) && value > 0;
     }
 
-    private static string Format(double value)
-    {
-        return value.ToString("0.####", CultureInfo.InvariantCulture);
-    }
+    private static string Format(double value) => value.ToString("0.####", CultureInfo.InvariantCulture);
 }
