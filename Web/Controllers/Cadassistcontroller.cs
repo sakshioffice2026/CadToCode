@@ -25,15 +25,11 @@ public class CadAssistController : Controller
     private const int MaxTemplateChars = 3000;
     private const int MinGeometryChars = 1200;
 
-    private const string DraftGeometryContext =
-        "No drawing has been processed yet. The user is on the upload page. "
-        + "Only the attached file names, sizes and readable contents are available.";
-
     private readonly ILocalAiService _ai;
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
     private readonly IStepScriptRunner _stepScriptRunner;
-    private readonly ICadRagRetriever _rag;
+    private readonly ICadTemplateMatcher _templateMatcher;
     private readonly LocalAiOptions _options;
     private readonly ILogger<CadAssistController> _logger;
 
@@ -42,7 +38,7 @@ public class CadAssistController : Controller
         IProjectProcessingService processingService,
         ICodeGenerationService codeGenerationService,
         IStepScriptRunner stepScriptRunner,
-        ICadRagRetriever rag,
+        ICadTemplateMatcher templateMatcher,
         IOptions<LocalAiOptions> options,
         ILogger<CadAssistController> logger)
     {
@@ -50,7 +46,7 @@ public class CadAssistController : Controller
         _processingService = processingService;
         _codeGenerationService = codeGenerationService;
         _stepScriptRunner = stepScriptRunner;
-        _rag = rag;
+        _templateMatcher = templateMatcher;
         _options = options.Value;
         _logger = logger;
     }
@@ -120,11 +116,12 @@ public class CadAssistController : Controller
         }
 
         var questionOnly = CadAssistPromptTemplates.IsQuestionOnly(request.Prompt);
-        var templateChars = ResolveTemplateChars(questionOnly);
-        var geometryChars = Math.Max(MinGeometryChars, _options.MaxGeometryChars - templateChars);
+        var fewShotChars = ResolveFewShotChars(questionOnly);
+        var geometryChars = Math.Max(MinGeometryChars, _options.MaxGeometryChars - fewShotChars);
 
+        var attachments = CleanAttachments(request.Attachments);
         var projectId = 0;
-        var geometryContext = DraftGeometryContext;
+        var geometryContext = GeometryContextBuilder.BuildDraftContext(attachments, request.DrawingType, geometryChars);
 
         if (request.ProjectId > 0)
         {
@@ -144,30 +141,31 @@ public class CadAssistController : Controller
 
             projectId = project.Id;
 
-            IReadOnlyList<VectorSearchHit>? templates = null;
+            CadTemplateMatch? match = null;
 
-            if (templateChars > 0)
+            if (fewShotChars > 0)
             {
-                var query = GeometryContextBuilder.BuildRetrievalQuery(project, tree, request.Prompt);
-                templates = await _rag.RetrieveAsync(query, null, CadLibraryFileType.CSharp, cancellationToken);
+                match = await _templateMatcher.MatchAsync(
+                    project, tree, request.Prompt, request.DrawingType, attachments, cancellationToken);
             }
 
             geometryContext = GeometryContextBuilder.Build(
                 project,
                 tree,
                 geometryChars,
-                templates,
-                templateChars);
+                match,
+                fewShotChars);
         }
-        else if (templateChars > 0)
+        else if (fewShotChars > 0)
         {
-            var query = BuildDraftQuery(request);
-            var templates = await _rag.RetrieveAsync(query, null, CadLibraryFileType.CSharp, cancellationToken);
-            var section = GeometryContextBuilder.BuildTemplatesSection(templates, templateChars);
+            var match = await _templateMatcher.MatchAsync(
+                null, null, request.Prompt, request.DrawingType, attachments, cancellationToken);
+
+            var section = GeometryContextBuilder.BuildFewShotSection(match, fewShotChars);
 
             if (section.Length > 0)
             {
-                geometryContext = DraftGeometryContext + Environment.NewLine + Environment.NewLine + section;
+                geometryContext = geometryContext + Environment.NewLine + Environment.NewLine + section;
             }
         }
 
@@ -180,7 +178,7 @@ public class CadAssistController : Controller
             FilterInstructions = Limit(request.FilterInstructions, MaxFieldChars),
             CurrentCode = request.CurrentCode,
             GeometryContext = geometryContext,
-            Attachments = CleanAttachments(request.Attachments)
+            Attachments = attachments
         };
 
         var result = await _ai.ChatAsync(generation, cancellationToken);
@@ -212,14 +210,14 @@ public class CadAssistController : Controller
         });
     }
 
-    private int ResolveTemplateChars(bool questionOnly)
+    private int ResolveFewShotChars(bool questionOnly)
     {
         if (questionOnly)
         {
             return 0;
         }
 
-        return Math.Min(MaxTemplateChars, Math.Max(0, _options.MaxGeometryChars / 3));
+        return Math.Min(MaxTemplateChars, Math.Max(0, _options.MaxGeometryChars / 2));
     }
 
     private async Task<string?> VerifyAsync(CadAssistMessageDto message, CancellationToken cancellationToken)

@@ -5,6 +5,7 @@ using CadToCode.Database;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
 using CadToCode.LLM.Services;
+using CadToCode.Models.Dtos;
 using CadToCode.Models.Options;
 using CadToCode.Repositories.Interfaces;
 using CadToCode.Repositories.Repository;
@@ -62,6 +63,8 @@ builder.Services.AddSingleton<IStepScriptRunner, StepScriptRunner>();
 builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>();
 builder.Services.AddSingleton<IVectorStoreService, QdrantVectorStoreService>();
 builder.Services.AddScoped<ICadRagRetriever, CadRagRetriever>();
+builder.Services.AddScoped<ICadTemplateIndexer, CadTemplateIndexer>();
+builder.Services.AddScoped<ICadTemplateMatcher, CadTemplateMatcher>();
 builder.Services.AddScoped<ICadLibraryService, CadLibraryService>();
 
 var app = builder.Build();

@@ -80,11 +80,32 @@ public sealed class QdrantVectorStoreService : IVectorStoreService, IDisposable
                     _options.CollectionName, _options.VectorSize);
             }
 
+            await EnsurePayloadIndexesAsync(client, cancellationToken);
+
             _collectionReady = true;
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private async Task EnsurePayloadIndexesAsync(QdrantClient client, CancellationToken cancellationToken)
+    {
+        foreach (var field in new[] { FieldFileType, FieldCategory })
+        {
+            try
+            {
+                await client.CreatePayloadIndexAsync(
+                    _options.CollectionName,
+                    field,
+                    schemaType: PayloadSchemaType.Keyword,
+                    cancellationToken: cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Could not create the Qdrant payload index for {Field}.", field);
+            }
         }
     }
 

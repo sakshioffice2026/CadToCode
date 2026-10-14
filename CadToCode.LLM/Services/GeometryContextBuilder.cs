@@ -1,6 +1,8 @@
 ﻿using System.Globalization;
 using System.Text;
+using CadToCode.LLM.Prompts;
 using CadToCode.Models.Dtos;
+using CadToCode.Models.Enums;
 
 namespace CadToCode.LLM.Services;
 
@@ -20,6 +22,67 @@ public sealed class GeometryFeatureContext
 public static class GeometryContextBuilder
 {
     private static readonly int[] DetailLevels = { 24, 14, 8, 4, 2 };
+
+    public const string FewShotInstruction =
+        "Adapt this exact working script structure to match the dimensions and parameters of the newly uploaded drawing. "
+        + "Keep its using lines, solid-building calls and ending lines; change only the const values, part names and feature counts.";
+
+    public static string Build(
+        ProjectResultDto project,
+        AssemblyTree? tree,
+        int maxChars,
+        CadTemplateMatch? match,
+        int maxFewShotChars,
+        GeometryFeatureContext? features = null)
+    {
+        var geometry = Build(project, tree, maxChars, features);
+        var section = BuildFewShotSection(match, maxFewShotChars);
+
+        return section.Length == 0
+            ? geometry
+            : geometry + Environment.NewLine + Environment.NewLine + section;
+    }
+
+    public static string BuildFewShotSection(CadTemplateMatch? match, int maxChars)
+    {
+        if (match is null || string.IsNullOrWhiteSpace(match.Script) || maxChars < 400)
+        {
+            return string.Empty;
+        }
+
+        var header = CadAssistPromptTemplates.FewShotMarker + " from the CAD library: " + Clean(match.Title, 60)
+            + " (" + Clean(match.Category, 30) + ", " + match.Source + ", match " + Num(match.Score) + ")";
+
+        var script = match.Script.Replace("\r", string.Empty).Trim();
+        var budget = maxChars - header.Length - FewShotInstruction.Length - 40;
+
+        if (budget < 300)
+        {
+            return string.Empty;
+        }
+
+        if (script.Length > budget)
+        {
+            script = script[..budget];
+            var lastBreak = script.LastIndexOf('\n');
+
+            if (lastBreak > 40)
+            {
+                script = script[..lastBreak];
+            }
+
+            script += "\n// ... truncated";
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine(header);
+        sb.AppendLine(FewShotInstruction);
+        sb.AppendLine("```csharp");
+        sb.AppendLine(script);
+        sb.AppendLine("```");
+
+        return sb.ToString();
+    }
 
     public static string Build(
         ProjectResultDto project,
@@ -114,6 +177,58 @@ public static class GeometryContextBuilder
         return sb.ToString().Trim();
     }
 
+    public static string BuildDraftContext(
+        IReadOnlyList<CadAssistAttachmentDto>? attachments,
+        string? drawingType,
+        int maxChars)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Drawing: uploaded file, not yet processed by the geometry extractor.");
+
+        if (!string.IsNullOrWhiteSpace(drawingType))
+        {
+            sb.AppendLine("Drawing type: " + Clean(drawingType, 60));
+        }
+
+        sb.AppendLine("Unit: Millimeter");
+
+        var files = (attachments ?? Array.Empty<CadAssistAttachmentDto>())
+            .Where(a => a is not null && !string.IsNullOrWhiteSpace(a.FileName))
+            .Take(5)
+            .ToList();
+
+        if (files.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Uploaded files:");
+
+            foreach (var a in files)
+            {
+                var kind = IsImage(a) ? "image drawing" : "file";
+
+                sb.AppendLine("- " + Clean(a.FileName, 80) + " (" + kind
+                    + (string.IsNullOrWhiteSpace(a.ContentType) ? string.Empty : ", " + Clean(a.ContentType, 40))
+                    + ", " + a.SizeBytes.ToString(CultureInfo.InvariantCulture) + " bytes)");
+            }
+
+            foreach (var a in files.Where(f => !string.IsNullOrWhiteSpace(f.TextContent)))
+            {
+                var text = Clean(a.TextContent, 600);
+
+                if (text.Length > 0)
+                {
+                    sb.AppendLine("Text read from " + Clean(a.FileName, 80) + " (OCR or file text): " + text);
+                }
+            }
+        }
+
+        AppendDefaults(sb, false);
+
+        var result = sb.ToString();
+        return result.Length > Math.Max(400, maxChars) ? result[..Math.Max(400, maxChars)] : result;
+    }
+
     public static string BuildTemplatesSection(IReadOnlyList<VectorSearchHit>? templates, int maxChars)
     {
         if (templates is null || templates.Count == 0 || maxChars < 200)
@@ -202,6 +317,13 @@ public static class GeometryContextBuilder
             sb.AppendLine("Scale: " + Num((double)project.ScaleMmPerPixel.Value) + " mm per pixel");
         }
 
+        if (project.SourceFileType == SourceFileType.Image)
+        {
+            sb.AppendLine(project.ScaleMmPerPixel.HasValue
+                ? "Image drawing: sizes below were measured from the image with OCR text and the scale above, and are final."
+                : "Image drawing: no scale was detected, so sizes below are relative image estimates in millimeters; use them as the final proportions.");
+        }
+
         var components = project.Components
             .OrderBy(c => c.SequenceIndex)
             .Take(detail)
@@ -242,6 +364,11 @@ public static class GeometryContextBuilder
 
         if (tree is null || tree.Nodes.Count == 0)
         {
+            var hasDimensions = components.Any(c =>
+                    (c.Width ?? 0m) != 0m || (c.Height ?? 0m) != 0m || (c.Diameter ?? 0m) != 0m || c.Profile is not null)
+                || (features is not null && !features.IsEmpty);
+
+            AppendDefaults(sb, hasDimensions);
             return sb.ToString();
         }
 
@@ -340,7 +467,38 @@ public static class GeometryContextBuilder
             }
         }
 
+        AppendDefaults(sb, true);
         return sb.ToString();
+    }
+
+    private static void AppendDefaults(StringBuilder sb, bool hasDimensions)
+    {
+        sb.AppendLine();
+        sb.AppendLine("Assumed defaults (use these instead of asking or writing a disclaimer; declare each as a named const double and mark it // assumed):");
+        sb.AppendLine("- Thickness = 10 (extrusion depth of a 2D drawing, mm)");
+
+        if (hasDimensions)
+        {
+            return;
+        }
+
+        sb.AppendLine("- Width = 100 (overall width, mm)");
+        sb.AppendLine("- Height = 50 (overall height, mm)");
+        sb.AppendLine("- HoleDiameter = 10 (mm)");
+        sb.AppendLine("- WallThickness = 5 (mm)");
+        sb.AppendLine("No dimensions could be extracted from this drawing, so build a simple parametric part from these defaults and the text above.");
+    }
+
+    private static bool IsImage(CadAssistAttachmentDto attachment)
+    {
+        if (!string.IsNullOrWhiteSpace(attachment.ContentType)
+            && attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var extension = Path.GetExtension(attachment.FileName ?? string.Empty).ToLowerInvariant();
+        return extension is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff" or ".webp";
     }
 
     private static void AppendFeatures(StringBuilder sb, GeometryFeatureContext? features, int detail)

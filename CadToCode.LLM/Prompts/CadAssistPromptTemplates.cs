@@ -12,6 +12,8 @@ public static class CadAssistPromptTemplates
     private const int MinTotalChars = 3000;
     private const int QuestionHistoryTurnsCap = 2;
 
+    public const string FewShotMarker = "Verified working template";
+
     private static readonly Regex SpecialToken = new(@"<\|[^|>\r\n]{1,40}\|>", RegexOptions.Compiled);
     private static readonly Regex FencedBlock = new(@"```[^\r\n]*\r?\n.*?(?:```|\z)", RegexOptions.Compiled | RegexOptions.Singleline);
 
@@ -41,6 +43,16 @@ public static class CadAssistPromptTemplates
         + "Then declare every size and every assumed depth as a named const double (for example const double Thickness = 10;), "
         + "reusing the parameter names from the drawing data when they are given; then var doc = new StepDocument(\"Name\"); then add solids; "
         + "finish with var outputPath = Path.GetFullPath(\"Name.step\"); doc.Save(outputPath); Console.WriteLine(\"STEP saved to \" + outputPath + \" (\" + doc.SolidCount + \" solids)\"); "
+        + "STRICT API RULES: the only document type is StepDocument from namespace CadToCode.Step (there is no StepModel class). "
+        + "Every solid must be added through the doc.Add member, for example doc.Add.Box(\"Base\", 0, 0, Width, Height, Thickness); doc.Add.Cylinder(\"Hole\", 0, 0, Radius, Height); doc.Add.Extrude(\"Plate\", profile, Thickness). "
+        + "Never call Box, Cylinder, Extrude, Revolve, Sweep, Pipe, Cone, Sphere or Torus as a bare method or as a type name, because that causes the compile error \\\"The type or namespace name 'Box' could not be found\\\". "
+        + "Box and Cylinder as stand-alone solids exist only as Solid.Box(...) and Solid.Cylinder(...) and must then be added with doc.Add.Part(solid). "
+        + "Always include using CadToCode.Step; and never use any other namespace or type that is not listed here. "
+        + "StepDocument is NOT IDisposable: never wrap StepDocument (or any Solid, Profile2D, SweepRoute or Frame3D) in a using statement, a using declaration or a try/finally Dispose call, "
+        + "because that causes the compile error \\\"type used in a using statement must be implicitly convertible to System.IDisposable\\\". "
+        + "Always create it directly with exactly one line: var doc = new StepDocument(\\\"Name\\\"); and never write using var doc = ... or using (var doc = ...) { }. "
+        + "Write the script as plain top-level statements with no class, no Main method and no namespace declaration, and call doc.Save(outputPath) once at the end. "
+        + "If a dimension or depth is not given in the drawing data, never say that it is missing and never write a disclaimer: choose a sensible engineering default, declare it as a named const double with a short comment such as // assumed, and continue to generate the full script. "
         + "Follow the detected features in the drawing data: closed profiles become Extrude, axis-symmetric half sections become Revolve, "
         + "parallel wall lines become Pipe, isolated circles become Cylinder, and round holes stay holes of their profile. "
         + "Solids, all called on doc.Add with the name first; the optional last argument is a Frame3D placement: "
@@ -123,7 +135,8 @@ public static class CadAssistPromptTemplates
 
             if (string.IsNullOrWhiteSpace(attachment.TextContent))
             {
-                sb.AppendLine("Attached file: " + name + " (binary or image, content is not readable by this offline model)");
+                sb.AppendLine("Attached file: " + name + " (image or binary drawing, size " + attachment.SizeBytes + " bytes). "
+                    + "Use the extracted drawing data in the system message for its geometry and text, and use sensible named defaults for anything not listed.");
                 continue;
             }
 
@@ -163,7 +176,8 @@ public static class CadAssistPromptTemplates
         var remaining = Math.Max(800, total - system.Length - 300);
 
         var user = Truncate(userText, (int)(remaining * 0.35));
-        var geometry = Truncate(Sanitize(geometryContext, int.MaxValue), Math.Min(options.MaxGeometryChars, (int)(remaining * 0.35)));
+        var geometryShare = (geometryContext ?? string.Empty).Contains(FewShotMarker, StringComparison.Ordinal) ? 0.6 : 0.35;
+        var geometry = Truncate(Sanitize(geometryContext, int.MaxValue), Math.Min(options.MaxGeometryChars, (int)(remaining * geometryShare)));
 
         var hasCode = !questionOnly && !string.IsNullOrWhiteSpace(currentCode);
         var code = hasCode
