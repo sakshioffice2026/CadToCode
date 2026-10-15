@@ -1,4 +1,5 @@
 ﻿using CadToCode.Business.Interfaces;
+using CadToCode.Business.Services;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Prompts;
 using CadToCode.LLM.Services;
@@ -24,12 +25,15 @@ public class CadAssistController : Controller
     private const int MaxFieldChars = 400;
     private const int MaxTemplateChars = 3000;
     private const int MinGeometryChars = 1200;
+    private const long MaxUploadBytes = 52_428_800;
+    private const int MaxUploadFiles = 5;
 
     private readonly ILocalAiService _ai;
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
     private readonly IStepScriptRunner _stepScriptRunner;
     private readonly ICadTemplateMatcher _templateMatcher;
+    private readonly IDrawingProcessingService _drawingProcessing;
     private readonly LocalAiOptions _options;
     private readonly ILogger<CadAssistController> _logger;
 
@@ -39,6 +43,7 @@ public class CadAssistController : Controller
         ICodeGenerationService codeGenerationService,
         IStepScriptRunner stepScriptRunner,
         ICadTemplateMatcher templateMatcher,
+        IDrawingProcessingService drawingProcessing,
         IOptions<LocalAiOptions> options,
         ILogger<CadAssistController> logger)
     {
@@ -47,6 +52,7 @@ public class CadAssistController : Controller
         _codeGenerationService = codeGenerationService;
         _stepScriptRunner = stepScriptRunner;
         _templateMatcher = templateMatcher;
+        _drawingProcessing = drawingProcessing;
         _options = options.Value;
         _logger = logger;
     }
@@ -207,6 +213,189 @@ public class CadAssistController : Controller
             Message = result.Message,
             Model = result.Model,
             ElapsedMs = result.ElapsedMs
+        });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxUploadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBytes)]
+    public async Task<IActionResult> UploadAndGenerate(
+        List<IFormFile>? files,
+        int projectId,
+        string? sessionId,
+        string? prompt,
+        string? drawingType,
+        string? currentCode,
+        CancellationToken cancellationToken)
+    {
+        if (projectId < 0)
+        {
+            return BadRequest(new CadAssistChatResponse { Error = "The request was not valid." });
+        }
+
+        var selected = (files ?? new List<IFormFile>())
+            .Where(f => f is not null && f.Length > 0)
+            .ToList();
+
+        if (selected.Count == 0)
+        {
+            return BadRequest(new CadAssistChatResponse { Error = "Choose at least one DXF, PNG or JPG file." });
+        }
+
+        if (selected.Count > MaxUploadFiles)
+        {
+            return BadRequest(new CadAssistChatResponse { Error = "You can upload up to " + MaxUploadFiles + " files at a time." });
+        }
+
+        var session = _ai.EnsureSession(projectId, sessionId);
+
+        if (!_ai.IsAvailable)
+        {
+            var status = _ai.GetStatus();
+
+            return Json(new CadAssistChatResponse
+            {
+                Success = false,
+                SessionId = session,
+                Model = status.Model,
+                Error = status.Message ?? "The local model is not available."
+            });
+        }
+
+        var perFileChars = Math.Max(MinGeometryChars, _options.MaxGeometryChars) / selected.Count;
+
+        var contexts = new List<string>();
+        var attachments = new List<CadAssistAttachmentDto>();
+        var warnings = new List<string>();
+        var summaries = new List<object>();
+        var failures = new List<string>();
+
+        foreach (var file in selected)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var fileName = Path.GetFileName(file.FileName ?? string.Empty);
+
+            if (!_drawingProcessing.IsSupported(fileName))
+            {
+                failures.Add(fileName + ": unsupported file type. Use .dxf, .png, .jpg or .jpeg.");
+                continue;
+            }
+
+            if (file.Length > _options.MaxAttachmentBytes)
+            {
+                failures.Add(fileName + ": the file is too large.");
+                continue;
+            }
+
+            try
+            {
+                await using var stream = file.OpenReadStream();
+
+                var processed = await _drawingProcessing.ProcessAsync(
+                    stream,
+                    fileName,
+                    prompt,
+                    perFileChars,
+                    cancellationToken);
+
+                warnings.AddRange(processed.Warnings.Select(w => fileName + ": " + w));
+
+                if (!processed.HasUsableData)
+                {
+                    failures.Add(fileName + ": " + (processed.Error ?? "no usable drawing data was found."));
+                    continue;
+                }
+
+                contexts.Add(processed.ContextText);
+
+                attachments.Add(new CadAssistAttachmentDto
+                {
+                    FileName = Limit(fileName, MaxFileNameChars) ?? string.Empty,
+                    ContentType = Limit(file.ContentType, 100) ?? string.Empty,
+                    SizeBytes = file.Length,
+                    TextContent = null
+                });
+
+                summaries.Add(new
+                {
+                    fileName,
+                    source = processed.SourceKind.ToString(),
+                    mode = processed.Mode.ToString(),
+                    template = processed.TemplateTitle,
+                    templateScore = processed.TemplateScore,
+                    injected = processed.Injections.Select(i => new { i.Name, i.OldValue, i.NewValue, i.Source })
+                });
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Drawing processing failed for {File}.", fileName);
+                failures.Add(fileName + ": the file could not be processed.");
+            }
+        }
+
+        if (contexts.Count == 0)
+        {
+            return Json(new
+            {
+                success = false,
+                sessionId = session,
+                error = failures.Count > 0 ? string.Join(" ", failures) : "No usable drawing data was found.",
+                warnings
+            });
+        }
+
+        warnings.AddRange(failures);
+
+        var generation = new LocalAiGenerationRequest
+        {
+            ProjectId = projectId,
+            SessionId = session,
+            Prompt = string.IsNullOrWhiteSpace(prompt)
+                ? "Generate the STEP script for this drawing."
+                : prompt.Trim(),
+            DrawingType = Limit(drawingType, MaxFieldChars),
+            FilterInstructions = null,
+            CurrentCode = currentCode,
+            GeometryContext = string.Join(Environment.NewLine + Environment.NewLine, contexts),
+            Attachments = attachments
+        };
+
+        var result = await _ai.ChatAsync(generation, cancellationToken);
+
+        if (!result.Success || result.Message is null)
+        {
+            return Json(new
+            {
+                success = false,
+                sessionId = session,
+                model = result.Model,
+                elapsedMs = result.ElapsedMs,
+                error = result.Error ?? "The assistant could not answer.",
+                warnings,
+                processing = summaries
+            });
+        }
+
+        if (_options.AutoVerifyCode)
+        {
+            result.Message.Status = await VerifyAsync(result.Message, cancellationToken);
+        }
+
+        return Json(new
+        {
+            success = true,
+            sessionId = session,
+            message = result.Message,
+            model = result.Model,
+            elapsedMs = result.ElapsedMs,
+            warnings,
+            processing = summaries
         });
     }
 

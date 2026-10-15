@@ -36,6 +36,7 @@ public class CodeGenerationService : ICodeGenerationService
     private readonly IAssemblyTopologyMapper _topologyMapper;
     private readonly IPatternMemoryService _memory;
     private readonly ILLMGenerationService _llm;
+    private readonly IDrawingProcessingService _drawingProcessing;
     private readonly LlmOptions _options;
     private readonly ILogger<CodeGenerationService> _logger;
 
@@ -47,6 +48,7 @@ public class CodeGenerationService : ICodeGenerationService
         IAssemblyTopologyMapper topologyMapper,
         IPatternMemoryService memory,
         ILLMGenerationService llm,
+        IDrawingProcessingService drawingProcessing,
         IOptions<LlmOptions> options,
         ILogger<CodeGenerationService> logger)
     {
@@ -57,8 +59,82 @@ public class CodeGenerationService : ICodeGenerationService
         _topologyMapper = topologyMapper;
         _memory = memory;
         _llm = llm;
+        _drawingProcessing = drawingProcessing;
         _options = options.Value;
         _logger = logger;
+    }
+
+    private sealed record ImagePipelineOutcome(string? Script, IReadOnlyList<string> Warnings, string? Error);
+
+    private async Task<ImagePipelineOutcome> RunImagePipelineAsync(
+        int projectId,
+        string title,
+        string? originalFileName,
+        CancellationToken cancellationToken)
+    {
+        var path = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return new ImagePipelineOutcome(null, Array.Empty<string>(), "The stored file path is missing.");
+        }
+
+        await using var stream = await _storage.OpenReadAsync(path, cancellationToken);
+
+        if (stream is null)
+        {
+            return new ImagePipelineOutcome(null, Array.Empty<string>(), "The stored file could not be opened.");
+        }
+
+        var fileName = string.IsNullOrWhiteSpace(originalFileName) ? Path.GetFileName(path) : originalFileName;
+
+        var processed = await _drawingProcessing.ProcessAsync(stream, fileName, title, 6000, cancellationToken);
+
+        if (!processed.Success)
+        {
+            return new ImagePipelineOutcome(null, processed.Warnings, processed.Error);
+        }
+
+        var script = processed.Mode == DrawingProcessingMode.TemplateInjection
+            ? (processed.InjectedScript ?? processed.TemplateScript)
+            : null;
+
+        if (string.IsNullOrWhiteSpace(script))
+        {
+            return new ImagePipelineOutcome(
+                null,
+                processed.Warnings,
+                "No verified template matched this image, so no geometry was generated. Pixel guessing is disabled for images. Upload a DXF file, or add a clearer drawing with dimension labels.");
+        }
+
+        return new ImagePipelineOutcome(script, processed.Warnings, null);
+    }
+
+    private async Task<AssemblyGenerationResult> BuildImageAssemblyAsync(
+        AssemblyGenerationResult result,
+        ProjectResultDto project,
+        CancellationToken cancellationToken)
+    {
+        result.ClassName = AssemblyPromptTemplates.ToIdentifier(project.Title, "Assembly");
+
+        var outcome = await RunImagePipelineAsync(project.Id, project.Title, project.OriginalFileName, cancellationToken);
+
+        result.Warnings.AddRange(outcome.Warnings);
+
+        if (outcome.Script is null)
+        {
+            result.Success = false;
+            result.Error = outcome.Error ?? "No STEP script could be built from this image.";
+            return result;
+        }
+
+        result.Success = true;
+        result.Source = AssemblyCodeSource.Deterministic;
+        result.Code = outcome.Script;
+        result.Confidence = 1.00m;
+        result.FallbackReason = "Built from a verified template with OCR values. Pixel geometry is not used for images.";
+
+        return result;
     }
 
     public async Task<string> GenerateAsync(int projectId, CancellationToken cancellationToken = default)
@@ -67,6 +143,26 @@ public class CodeGenerationService : ICodeGenerationService
         if (project is null)
         {
             return "// The project was not found.";
+        }
+
+        if (project.SourceFileType == SourceFileType.Image)
+        {
+            try
+            {
+                var outcome = await RunImagePipelineAsync(projectId, project.Title, project.OriginalFileName, cancellationToken);
+
+                return outcome.Script
+                    ?? "// " + (outcome.Error ?? "No STEP script could be built from this image.");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Image pipeline failed for project {ProjectId}.", projectId);
+                return "// The image could not be processed, so no STEP script was generated.";
+            }
         }
 
         ExtractedGeometry geometry;
@@ -214,50 +310,50 @@ public class CodeGenerationService : ICodeGenerationService
         switch (feature.Kind)
         {
             case RecognizedFeatureKind.Extrusion:
-            {
-                var b = feature.Profile!.Bounds;
-
-                text += "extrusion of a closed profile " + FormatNumber((b.MaxX - b.MinX) * scale) + " x "
-                    + FormatNumber((b.MaxY - b.MinY) * scale) + " mm";
-
-                if (feature.Holes.Count > 0)
                 {
-                    text += ", " + feature.Holes.Count + " round holes (diameters "
-                        + string.Join(", ", feature.Holes.Select(h => FormatNumber(h.Diameter * scale))) + ")";
-                }
+                    var b = feature.Profile!.Bounds;
 
-                if (feature.OtherHoleCount > 0)
-                {
-                    text += ", " + feature.OtherHoleCount + " other cut-outs";
-                }
+                    text += "extrusion of a closed profile " + FormatNumber((b.MaxX - b.MinX) * scale) + " x "
+                        + FormatNumber((b.MaxY - b.MinY) * scale) + " mm";
 
-                return text + ", depth parameter " + feature.DepthParameter!.Name;
-            }
+                    if (feature.Holes.Count > 0)
+                    {
+                        text += ", " + feature.Holes.Count + " round holes (diameters "
+                            + string.Join(", ", feature.Holes.Select(h => FormatNumber(h.Diameter * scale))) + ")";
+                    }
+
+                    if (feature.OtherHoleCount > 0)
+                    {
+                        text += ", " + feature.OtherHoleCount + " other cut-outs";
+                    }
+
+                    return text + ", depth parameter " + feature.DepthParameter!.Name;
+                }
 
             case RecognizedFeatureKind.Cylinder:
-            {
-                var diameter = feature.Profile!.Outer.CircleArc!.Radius * 2.0 * scale;
+                {
+                    var diameter = feature.Profile!.Outer.CircleArc!.Radius * 2.0 * scale;
 
-                return text + "cylinder of diameter " + FormatNumber(diameter) + " mm, height parameter " + feature.DepthParameter!.Name;
-            }
+                    return text + "cylinder of diameter " + FormatNumber(diameter) + " mm, height parameter " + feature.DepthParameter!.Name;
+                }
 
             case RecognizedFeatureKind.Revolve:
-            {
-                var b = feature.Profile!.Bounds;
+                {
+                    var b = feature.Profile!.Bounds;
 
-                return text + "revolve of a half-section, max radius " + FormatNumber(b.MaxX * scale)
-                    + " mm, axial length " + FormatNumber((b.MaxY - b.MinY) * scale) + " mm";
-            }
+                    return text + "revolve of a half-section, max radius " + FormatNumber(b.MaxX * scale)
+                        + " mm, axial length " + FormatNumber((b.MaxY - b.MinY) * scale) + " mm";
+                }
 
             default:
-            {
-                var length = feature.Centerline.Sum(s => s.Length) * scale;
+                {
+                    var length = feature.Centerline.Sum(s => s.Length) * scale;
 
-                return text + "pipe along a centreline of " + feature.Centerline.Count + " segments, length " + FormatNumber(length)
-                    + " mm, outer diameter " + FormatNumber(feature.OuterDiameterParameter!.Value * scale)
-                    + " mm, wall " + FormatNumber(feature.WallParameter!.Value * scale)
-                    + (feature.WallParameter.IsAssumed ? " mm (assumed)" : " mm");
-            }
+                    return text + "pipe along a centreline of " + feature.Centerline.Count + " segments, length " + FormatNumber(length)
+                        + " mm, outer diameter " + FormatNumber(feature.OuterDiameterParameter!.Value * scale)
+                        + " mm, wall " + FormatNumber(feature.WallParameter!.Value * scale)
+                        + (feature.WallParameter.IsAssumed ? " mm (assumed)" : " mm");
+                }
         }
     }
 
@@ -323,6 +419,11 @@ public class CodeGenerationService : ICodeGenerationService
             {
                 result.Error = "The project was not found.";
                 return result;
+            }
+
+            if (project.SourceFileType == SourceFileType.Image)
+            {
+                return await BuildImageAssemblyAsync(result, project, cancellationToken);
             }
 
             geometry = await ExtractGeometryAsync(projectId, project.SourceFileType, cancellationToken);

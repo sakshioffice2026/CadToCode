@@ -75,6 +75,60 @@ public static class CadAssistPromptTemplates
         + "Never use files other than doc.Save, never use network, process, reflection or threading APIs. "
         + "Keep existing part names and values when editing a script, and change only what the user asked for.";
 
+    public const string ExactGeometryMarker = "MODE: EXACT GEOMETRY";
+
+    public const string TemplateInjectionMarker = "MODE: TEMPLATE PARAMETER INJECTION";
+
+    public const string ParametersOnlyMarker = "MODE: PARAMETERS ONLY";
+
+    public const string StrictDataRules =
+        "STRICT DATA RULES: use only the exact data or the verified template given in the drawing data below. "
+        + "Never invent, guess, round, add, move or remove any dimension, coordinate, radius, angle, hole or part that is not in that data. "
+        + "Do not add floating, unconnected or decorative solids. Every solid must come from the given data. "
+        + "Your only job is to parameterize and adapt the given data or template into a complete C# STEP script. "
+        + "CRITICAL: never wrap StepModel or StepDocument in using ( ... ) { } or a using declaration, never use try/finally Dispose on it, and never write using var doc. "
+        + "Always write exactly: var doc = new StepDocument(\"Name\"); as a plain statement, because neither type implements IDisposable and a using block causes a compile error.";
+
+    public const string ExactGeometryRules =
+        "EXACT GEOMETRY RULES: the drawing data is a table of exact DXF entities. "
+        + "Declare each needed coordinate, radius and length as a named const double copied digit for digit from the table. "
+        + "Every Line becomes a profile edge between its exact start and end point, every Arc becomes ArcSegment2D with its exact center, radius and angles, "
+        + "and every Circle becomes a circular hole or a Cylinder at its exact center and radius. "
+        + "Join the edges into closed profiles in the order the endpoints connect, extrude with a named depth constant, and use a sensible named default only for the depth because DXF is 2D. "
+        + "Do not create any solid that is not backed by an entity in the table.";
+
+    public const string TemplateInjectionRules =
+        "TEMPLATE RULES: start from the verified working template given in the drawing data and keep its using lines, structure, solid calls and ending lines. "
+        + "The const double values listed as already injected come from the drawing's OCR labels and are final; keep them unchanged. "
+        + "Change only const double values, part names and feature counts, and only to match the listed drawing parameters. "
+        + "Do not add new solids, do not remove solids and do not change any value that has no matching drawing parameter.";
+
+    public const string ParametersOnlyRules =
+        "PARAMETER RULES: no verified template matched. Build the simplest single solid that uses only the listed drawing parameters as named const double values, "
+        + "choose a sensible named default for any missing value with a // assumed comment, and add no extra solids.";
+
+    public static string ResolveModeRules(string? geometryContext)
+    {
+        var text = geometryContext ?? string.Empty;
+
+        if (text.Contains(ExactGeometryMarker, StringComparison.Ordinal))
+        {
+            return ExactGeometryRules;
+        }
+
+        if (text.Contains(TemplateInjectionMarker, StringComparison.Ordinal))
+        {
+            return TemplateInjectionRules;
+        }
+
+        if (text.Contains(ParametersOnlyMarker, StringComparison.Ordinal))
+        {
+            return ParametersOnlyRules;
+        }
+
+        return string.Empty;
+    }
+
     public static string[] GetStopMarkers(LocalAiOptions options)
     {
         if (options.StopMarkers is { Count: > 0 })
@@ -172,6 +226,13 @@ public static class CadAssistPromptTemplates
         var system = !string.IsNullOrWhiteSpace(options.SystemPromptOverride)
             ? options.SystemPromptOverride!
             : questionOnly ? QuestionSystemPrompt : DefaultSystemPrompt;
+
+        if (!questionOnly)
+        {
+            var modeRules = ResolveModeRules(geometryContext);
+
+            system = system + " " + StrictDataRules + (modeRules.Length > 0 ? " " + modeRules : string.Empty);
+        }
 
         var remaining = Math.Max(800, total - system.Length - 300);
 

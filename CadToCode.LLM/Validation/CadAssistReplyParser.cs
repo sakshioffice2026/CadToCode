@@ -18,6 +18,10 @@ public static class CadAssistReplyParser
         @"```[ \t]*([A-Za-z0-9#+_\-]*)[ \t]*\r?\n(.*?)(?:```|\z)",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
+    private static readonly Regex LeadingToken = new(
+        @"^\s*(?:<\|[^|>\r\n]{1,40}\|>(?:[ \t]*(?:assistant|system|user)[ \t]*(?:\r?\n|$))?|###[ \t]*Assistant:[ \t]*\r?\n?)",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
     private static readonly Regex BlankLines = new(@"(\r?\n){3,}", RegexOptions.Compiled);
 
     public static CadAssistParsedReply Parse(string? raw, IEnumerable<string>? stopMarkers = null)
@@ -81,7 +85,19 @@ public static class CadAssistReplyParser
             return string.Empty;
         }
 
-        var text = raw;
+        var text = raw.TrimStart();
+
+        while (true)
+        {
+            var stripped = LeadingToken.Replace(text, string.Empty, 1);
+
+            if (stripped.Length == text.Length)
+            {
+                break;
+            }
+
+            text = stripped.TrimStart();
+        }
 
         if (stopMarkers is not null)
         {

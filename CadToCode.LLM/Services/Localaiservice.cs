@@ -170,7 +170,20 @@ public sealed class LocalAiService : ILocalAiService, IDisposable
             using var inferenceTimeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             inferenceTimeout.CancelAfter(TimeSpan.FromSeconds(Math.Max(10, _options.InferenceTimeoutSeconds)));
 
-            raw = await GenerateAsync(fullPrompt, inferenceTimeout.Token).ConfigureAwait(false);
+            var stopMarkers = CadAssistPromptTemplates.GetStopMarkers(_options);
+
+            raw = await GenerateAsync(fullPrompt, inferenceTimeout.Token, 0f).ConfigureAwait(false);
+
+            if (IsEmptyReply(raw, stopMarkers))
+            {
+                _logger.LogWarning(
+                    "Local model returned an empty reply for project {ProjectId} (raw length {Length}, prompt length {PromptLength}); retrying once.",
+                    request.ProjectId,
+                    raw?.Length ?? 0,
+                    fullPrompt.Length);
+
+                raw = await GenerateAsync(fullPrompt, inferenceTimeout.Token, 0.3f).ConfigureAwait(false);
+            }
         }
         catch (OperationCanceledException)
         {
@@ -289,13 +302,20 @@ public sealed class LocalAiService : ILocalAiService, IDisposable
         }
     }
 
-    private async Task<string> GenerateAsync(string prompt, CancellationToken cancellationToken)
+    private static bool IsEmptyReply(string? raw, IEnumerable<string> stopMarkers)
+    {
+        var parsed = CadAssistReplyParser.Parse(raw, stopMarkers);
+
+        return parsed.Text.Length == 0 && parsed.CodeBlocks.Count == 0;
+    }
+
+    private async Task<string> GenerateAsync(string prompt, CancellationToken cancellationToken, float temperatureBoost)
     {
         var executor = _executor ?? throw new InvalidOperationException("The local model is not loaded.");
 
         using var sampler = new DefaultSamplingPipeline
         {
-            Temperature = (float)_options.Temperature,
+            Temperature = Math.Min(1f, (float)_options.Temperature + temperatureBoost),
             TopP = (float)_options.TopP
         };
 

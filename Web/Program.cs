@@ -65,6 +65,9 @@ builder.Services.AddSingleton<IVectorStoreService, QdrantVectorStoreService>();
 builder.Services.AddScoped<ICadRagRetriever, CadRagRetriever>();
 builder.Services.AddScoped<ICadTemplateIndexer, CadTemplateIndexer>();
 builder.Services.AddScoped<ICadTemplateMatcher, CadTemplateMatcher>();
+builder.Services.AddSingleton<IDxfGeometryParser, DxfGeometryParser>();
+builder.Services.AddSingleton<IBlueprintOcrService, BlueprintOcrService>();
+builder.Services.AddScoped<IDrawingProcessingService, DrawingProcessingService>();
 builder.Services.AddScoped<ICadLibraryService, CadLibraryService>();
 
 var app = builder.Build();
