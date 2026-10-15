@@ -151,7 +151,7 @@ public class ProjectController : Controller
     }
 
     [HttpGet]
-    public async Task<IActionResult> Details(int id, CancellationToken cancellationToken)
+    public async Task<IActionResult> Details(int id, KeyDimensionsDto? keyDimensions, CancellationToken cancellationToken)
     {
         var project = await _processingService.GetProjectAsync(id, cancellationToken);
         if (project is null)
@@ -159,19 +159,26 @@ public class ProjectController : Controller
             return NotFound();
         }
 
+        if (HasNegativeValue(keyDimensions))
+        {
+            TempData["Error"] = "Dimensions cannot be negative.";
+            return RedirectToAction(nameof(Details), new { id });
+        }
+
         await _processingService.MarkOpenedAsync(id, cancellationToken);
 
-        var code = await _codeGenerationService.GenerateAsync(id, cancellationToken);
+        var code = await _codeGenerationService.GenerateAsync(id, cancellationToken, keyDimensions);
 
         var assembly = project.Status == ProjectStatus.Processed
-            ? await _codeGenerationService.GenerateAssemblyAsync(id, false, cancellationToken)
+            ? await _codeGenerationService.GenerateAssemblyAsync(id, false, cancellationToken, keyDimensions)
             : new AssemblyGenerationResult { ProjectId = id };
 
         return View(DetailsViewPath, new ProjectResultViewModel
         {
             Project = project,
             GeneratedCode = code,
-            Assembly = assembly
+            Assembly = assembly,
+            KeyDimensions = keyDimensions ?? new KeyDimensionsDto()
         });
     }
 
@@ -273,6 +280,16 @@ public class ProjectController : Controller
         };
 
         return File(stream, contentType, project.OriginalFileName);
+    }
+
+    private static bool HasNegativeValue(KeyDimensionsDto? keys)
+    {
+        return keys is not null
+            && (keys.VesselDiameter < 0
+                || keys.VesselHeight < 0
+                || keys.InletPipeDiameter < 0
+                || keys.OutletPipeDiameter < 0
+                || keys.TankLength < 0);
     }
 
     private static bool HasNegativeValue(ComponentDto component)

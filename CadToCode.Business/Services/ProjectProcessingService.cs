@@ -81,7 +81,11 @@ public class ProjectProcessingService : IProjectProcessingService
 
             try
             {
-                await ExtractAndSaveAsync(projectId, fileType, storedPath, title, cancellationToken);
+                if (fileType != SourceFileType.Image)
+                {
+                    await ExtractAndSaveAsync(projectId, fileType, storedPath, title, cancellationToken);
+                }
+
                 await _unitOfWork.Projects.UpdateStatusAsync(projectId, ProjectStatus.Processed, null, cancellationToken);
             }
             catch (OperationCanceledException)

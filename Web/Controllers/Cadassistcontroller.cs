@@ -227,6 +227,7 @@ public class CadAssistController : Controller
         string? prompt,
         string? drawingType,
         string? currentCode,
+        KeyDimensionsDto? keyDimensions,
         CancellationToken cancellationToken)
     {
         if (projectId < 0)
@@ -270,6 +271,9 @@ public class CadAssistController : Controller
         var warnings = new List<string>();
         var summaries = new List<object>();
         var failures = new List<string>();
+        string? directScript = null;
+        string? directFallback = null;
+        string? directTemplate = null;
 
         foreach (var file in selected)
         {
@@ -298,7 +302,8 @@ public class CadAssistController : Controller
                     fileName,
                     prompt,
                     perFileChars,
-                    cancellationToken);
+                    cancellationToken,
+                    keyDimensions);
 
                 warnings.AddRange(processed.Warnings.Select(w => fileName + ": " + w));
 
@@ -309,6 +314,15 @@ public class CadAssistController : Controller
                 }
 
                 contexts.Add(processed.ContextText);
+
+                if (selected.Count == 1
+                    && processed.Mode == DrawingProcessingMode.TemplateInjection
+                    && !string.IsNullOrWhiteSpace(processed.InjectedScript ?? processed.TemplateScript))
+                {
+                    directScript = processed.InjectedScript ?? processed.TemplateScript;
+                    directFallback = processed.TemplateScript;
+                    directTemplate = processed.TemplateTitle;
+                }
 
                 attachments.Add(new CadAssistAttachmentDto
                 {
@@ -351,6 +365,64 @@ public class CadAssistController : Controller
         }
 
         warnings.AddRange(failures);
+
+        if (!string.IsNullOrWhiteSpace(directScript))
+        {
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            var script = directScript;
+            var check = await _stepScriptRunner.RunAsync(script, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(directFallback)
+                && !string.Equals(script, directFallback, StringComparison.Ordinal)
+                && (!check.Success || !check.IsConnected))
+            {
+                warnings.Add(!check.Success
+                    ? "The adjusted template did not build. The unmodified template is shown instead."
+                    : "The adjusted template produced parts that float apart (" + string.Join(", ", check.IsolatedParts) + "). The unmodified template is shown instead.");
+
+                script = directFallback;
+                check = await _stepScriptRunner.RunAsync(script, cancellationToken);
+            }
+
+            var block = new CadAssistCodeBlockDto
+            {
+                Language = "csharp",
+                Title = "STEP script",
+                Code = script,
+                LineCount = script.Split('\n').Length
+            };
+
+            var message = new CadAssistMessageDto
+            {
+                Role = CadAssistRole.Assistant,
+                Content = "Template-based, approximate: " + (directTemplate ?? "verified template") + ". Built without the language model.",
+                CodeBlocks = new List<CadAssistCodeBlockDto> { block },
+                Actions = new List<CadAssistActionDto>
+                {
+                    new() { Kind = CadAssistActionKind.Run, Label = "Run", TargetCodeBlockId = block.Id },
+                    new() { Kind = CadAssistActionKind.Apply, Label = "Apply to editor", TargetCodeBlockId = block.Id },
+                    new() { Kind = CadAssistActionKind.DownloadStep, Label = "Download STEP", TargetCodeBlockId = block.Id },
+                    new() { Kind = CadAssistActionKind.Copy, Label = "Copy", TargetCodeBlockId = block.Id },
+                    new() { Kind = CadAssistActionKind.Regenerate, Label = "Regenerate" }
+                },
+                Model = "template",
+                ElapsedMs = started.ElapsedMilliseconds,
+                Status = check.Success
+                    ? "Verified in sandbox: " + check.SolidCount + " solids, " + check.FaceCount + " faces, " + check.ElapsedMs + " ms"
+                    : "Needs review: " + (check.Message ?? "the script did not run.")
+            };
+
+            return Json(new
+            {
+                success = true,
+                sessionId = session,
+                message,
+                model = "template",
+                elapsedMs = started.ElapsedMilliseconds,
+                warnings,
+                processing = summaries
+            });
+        }
 
         var generation = new LocalAiGenerationRequest
         {

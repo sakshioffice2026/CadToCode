@@ -77,6 +77,9 @@ public class SandboxRunResult
     public string? FileName { get; set; }
     public string? StepContent { get; set; }
     public SandboxBounds? Bounds { get; set; }
+    public bool IsConnected { get; set; } = true;
+    public int ComponentCount { get; set; } = 1;
+    public List<string> IsolatedParts { get; set; } = new();
     public List<string> Output { get; set; } = new();
     public List<SandboxDiagnostic> Diagnostics { get; set; } = new();
     public List<SandboxSolid> Solids { get; set; } = new();

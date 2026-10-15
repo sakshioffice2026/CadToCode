@@ -37,6 +37,7 @@ public class CodeGenerationService : ICodeGenerationService
     private readonly IPatternMemoryService _memory;
     private readonly ILLMGenerationService _llm;
     private readonly IDrawingProcessingService _drawingProcessing;
+    private readonly IStepScriptRunner _stepRunner;
     private readonly LlmOptions _options;
     private readonly ILogger<CodeGenerationService> _logger;
 
@@ -49,6 +50,7 @@ public class CodeGenerationService : ICodeGenerationService
         IPatternMemoryService memory,
         ILLMGenerationService llm,
         IDrawingProcessingService drawingProcessing,
+        IStepScriptRunner stepRunner,
         IOptions<LlmOptions> options,
         ILogger<CodeGenerationService> logger)
     {
@@ -60,6 +62,7 @@ public class CodeGenerationService : ICodeGenerationService
         _memory = memory;
         _llm = llm;
         _drawingProcessing = drawingProcessing;
+        _stepRunner = stepRunner;
         _options = options.Value;
         _logger = logger;
     }
@@ -70,6 +73,7 @@ public class CodeGenerationService : ICodeGenerationService
         int projectId,
         string title,
         string? originalFileName,
+        KeyDimensionsDto? keyDimensions,
         CancellationToken cancellationToken)
     {
         var path = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
@@ -88,7 +92,7 @@ public class CodeGenerationService : ICodeGenerationService
 
         var fileName = string.IsNullOrWhiteSpace(originalFileName) ? Path.GetFileName(path) : originalFileName;
 
-        var processed = await _drawingProcessing.ProcessAsync(stream, fileName, title, 6000, cancellationToken);
+        var processed = await _drawingProcessing.ProcessAsync(stream, fileName, title, 6000, cancellationToken, keyDimensions);
 
         if (!processed.Success)
         {
@@ -107,17 +111,37 @@ public class CodeGenerationService : ICodeGenerationService
                 "No verified template matched this image, so no geometry was generated. Pixel guessing is disabled for images. Upload a DXF file, or add a clearer drawing with dimension labels.");
         }
 
-        return new ImagePipelineOutcome(script, processed.Warnings, null);
+        var warnings = processed.Warnings.ToList();
+
+        if (!string.IsNullOrWhiteSpace(processed.TemplateScript)
+            && !string.Equals(script, processed.TemplateScript, StringComparison.Ordinal))
+        {
+            var check = await _stepRunner.RunAsync(script, cancellationToken);
+
+            if (!check.Success)
+            {
+                warnings.Add("The adjusted template did not build (" + (check.Message ?? "unknown error") + "). The unmodified template is shown instead.");
+                script = processed.TemplateScript;
+            }
+            else if (!check.IsConnected)
+            {
+                warnings.Add("The adjusted template produced parts that float apart (" + string.Join(", ", check.IsolatedParts) + "). The unmodified template is shown instead.");
+                script = processed.TemplateScript;
+            }
+        }
+
+        return new ImagePipelineOutcome(script, warnings, null);
     }
 
     private async Task<AssemblyGenerationResult> BuildImageAssemblyAsync(
         AssemblyGenerationResult result,
         ProjectResultDto project,
+        KeyDimensionsDto? keyDimensions,
         CancellationToken cancellationToken)
     {
         result.ClassName = AssemblyPromptTemplates.ToIdentifier(project.Title, "Assembly");
 
-        var outcome = await RunImagePipelineAsync(project.Id, project.Title, project.OriginalFileName, cancellationToken);
+        var outcome = await RunImagePipelineAsync(project.Id, project.Title, project.OriginalFileName, keyDimensions, cancellationToken);
 
         result.Warnings.AddRange(outcome.Warnings);
 
@@ -132,12 +156,12 @@ public class CodeGenerationService : ICodeGenerationService
         result.Source = AssemblyCodeSource.Deterministic;
         result.Code = outcome.Script;
         result.Confidence = 1.00m;
-        result.FallbackReason = "Built from a verified template with OCR values. Pixel geometry is not used for images.";
+        result.FallbackReason = "Template-based, approximate. Built from a verified template with OCR and user-supplied values. Pixel geometry is not used for images.";
 
         return result;
     }
 
-    public async Task<string> GenerateAsync(int projectId, CancellationToken cancellationToken = default)
+    public async Task<string> GenerateAsync(int projectId, CancellationToken cancellationToken = default, KeyDimensionsDto? keyDimensions = null)
     {
         var project = await _unitOfWork.Projects.GetByIdAsync(projectId, cancellationToken);
         if (project is null)
@@ -149,7 +173,7 @@ public class CodeGenerationService : ICodeGenerationService
         {
             try
             {
-                var outcome = await RunImagePipelineAsync(projectId, project.Title, project.OriginalFileName, cancellationToken);
+                var outcome = await RunImagePipelineAsync(projectId, project.Title, project.OriginalFileName, keyDimensions, cancellationToken);
 
                 return outcome.Script
                     ?? "// " + (outcome.Error ?? "No STEP script could be built from this image.");
@@ -374,14 +398,16 @@ public class CodeGenerationService : ICodeGenerationService
         };
     }
 
-    public async Task<AssemblyGenerationResult> GenerateAssemblyAsync(int projectId, bool useAi, CancellationToken cancellationToken = default)
+    public async Task<AssemblyGenerationResult> GenerateAssemblyAsync(int projectId, bool useAi, CancellationToken cancellationToken = default, KeyDimensionsDto? keyDimensions = null)
     {
-        if (!useAi && AssemblyCache.TryGetValue(projectId, out var cached))
+        var hasKeyDimensions = keyDimensions is { HasAny: true };
+
+        if (!useAi && !hasKeyDimensions && AssemblyCache.TryGetValue(projectId, out var cached))
         {
             return cached.Result;
         }
 
-        var built = await BuildAssemblyAsync(projectId, useAi, cancellationToken);
+        var built = await BuildAssemblyAsync(projectId, useAi, keyDimensions, cancellationToken);
 
         if (built.Success)
         {
@@ -405,7 +431,7 @@ public class CodeGenerationService : ICodeGenerationService
         }
     }
 
-    private async Task<AssemblyGenerationResult> BuildAssemblyAsync(int projectId, bool useAi, CancellationToken cancellationToken)
+    private async Task<AssemblyGenerationResult> BuildAssemblyAsync(int projectId, bool useAi, KeyDimensionsDto? keyDimensions, CancellationToken cancellationToken)
     {
         var result = new AssemblyGenerationResult { ProjectId = projectId };
 
@@ -423,7 +449,7 @@ public class CodeGenerationService : ICodeGenerationService
 
             if (project.SourceFileType == SourceFileType.Image)
             {
-                return await BuildImageAssemblyAsync(result, project, cancellationToken);
+                return await BuildImageAssemblyAsync(result, project, keyDimensions, cancellationToken);
             }
 
             geometry = await ExtractGeometryAsync(projectId, project.SourceFileType, cancellationToken);

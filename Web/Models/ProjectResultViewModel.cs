@@ -10,6 +10,8 @@ public class ProjectResultViewModel
 
     public AssemblyGenerationResult Assembly { get; set; } = new();
 
+    public KeyDimensionsDto KeyDimensions { get; set; } = new();
+
     public bool IsImageSource => Project.SourceFileType == CadToCode.Models.Enums.SourceFileType.Image;
 
     public bool HasAssembly => Assembly.Success && Assembly.Tree.Nodes.Count > 0;

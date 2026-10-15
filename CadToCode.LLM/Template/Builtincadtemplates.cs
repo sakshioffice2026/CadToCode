@@ -53,6 +53,15 @@ public static class BuiltInCadTemplates
         },
         new()
         {
+            Key = "builtin-wet-scrubber-tank-pump",
+            Title = "Wet scrubber with tank, pump and spray header",
+            Category = "Scrubber",
+            Tags = new List<string> { "scrubber", "wet scrubber", "packed tower", "packing bed", "spray header", "spray nozzle", "recirculation", "recirculation tank", "sump", "pump", "motor", "suction", "discharge", "inlet", "outlet", "stack", "vessel", "tank", "gas cleaning" },
+            Description = "Vertical packed scrubber on a rectangular recirculation tank with a packing bed, spray header with nozzles, gas inlet and outlet stack, drain, and a pump connected by suction and discharge pipes.",
+            Script = WetScrubberWithTankAndPump
+        },
+        new()
+        {
             Key = "builtin-cyclone-separator",
             Title = "Cyclone separator",
             Category = "Cyclone",
@@ -218,6 +227,105 @@ doc.Add.Pipe("Drain", SweepRoute.From(0, 0, 0).LineTo(0, 0, -DrainLength), Drain
 doc.Add.Pipe("Inlet", SweepRoute.From(Radius - Wall, 0, InletZ).LineTo(Radius + InletLength, 0, InletZ), InletDiameter, Wall);
 
 var outputPath = Path.GetFullPath("WetScrubber.step");
+doc.Save(outputPath);
+Console.WriteLine("STEP saved to " + outputPath + " (" + doc.SolidCount + " solids)");
+""";
+
+    private const string WetScrubberWithTankAndPump = """
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using CadToCode.Step;
+
+const double Radius = 600;
+const double Wall = 8;
+const double ShellHeight = 2400;
+const double TankLength = 2000;
+const double TankWidth = 1400;
+const double TankHeight = 800;
+const double TankWall = 8;
+const double PackingHeight = 600;
+const double PackingOffset = 700;
+const double SprayGap = 200;
+const double SprayDiameter = 80;
+const double SprayWall = 4;
+const double NozzleLength = 150;
+const double FeedLength = 400;
+const double StackDiameter = 300;
+const double StackHeight = 400;
+const double InletDiameter = 250;
+const double InletLength = 400;
+const double InletHeight = 250;
+const double DrainDiameter = 100;
+const double DrainLength = 250;
+const double PumpRadius = 120;
+const double PumpHeight = 250;
+const double PumpGap = 200;
+const double MotorRadius = 100;
+const double MotorHeight = 300;
+const double SuctionDiameter = 100;
+const double DischargeDiameter = 80;
+const double RiserOffset = 150;
+
+var doc = new StepDocument("WetScrubberWithTankAndPump");
+
+var halfLength = TankLength / 2.0;
+var halfWidth = TankWidth / 2.0;
+var shellBaseZ = TankHeight - TankWall;
+var topZ = TankHeight + ShellHeight;
+var packingZ = TankHeight + PackingOffset;
+var sprayZ = packingZ + PackingHeight + SprayGap;
+var inletZ = TankHeight + InletHeight;
+var pumpX = halfLength + PumpGap + PumpRadius;
+var riserX = pumpX + PumpRadius + RiserOffset;
+var headerEndX = Radius + FeedLength;
+var pumpZ = PumpHeight / 2.0;
+
+var tankFloor = Profile2D.Rectangle(-halfLength, -halfWidth, TankLength, TankWidth);
+doc.Add.Extrude("TankFloor", tankFloor, TankWall);
+
+var tankWalls = Profile2D.Create(
+    ProfileLoop.Rectangle(-halfLength, -halfWidth, TankLength, TankWidth),
+    new List<ProfileLoop> { ProfileLoop.Rectangle(-halfLength + TankWall, -halfWidth + TankWall, TankLength - 2.0 * TankWall, TankWidth - 2.0 * TankWall) });
+doc.Add.Extrude("TankWalls", tankWalls, TankHeight);
+
+var tankRoof = Profile2D.Create(
+    ProfileLoop.Rectangle(-halfLength, -halfWidth, TankLength, TankWidth),
+    new List<ProfileLoop> { ProfileLoop.Circle(0, 0, Radius - Wall) });
+doc.Add.Extrude("TankRoof", tankRoof, TankWall, Frame3D.At(0, 0, shellBaseZ));
+
+var shell = Profile2D.Polygon(new List<(double X, double Y)>
+{
+    (Radius - Wall, shellBaseZ), (Radius, shellBaseZ), (Radius, topZ), (Radius - Wall, topZ)
+});
+doc.Add.Revolve("Shell", shell);
+
+var packing = Profile2D.Circle(0, 0, Radius - Wall / 2.0);
+doc.Add.Extrude("PackingBed", packing, PackingHeight, Frame3D.At(0, 0, packingZ));
+
+var cover = Profile2D.Create(
+    ProfileLoop.Circle(0, 0, Radius),
+    new List<ProfileLoop> { ProfileLoop.Circle(0, 0, StackDiameter / 2.0 - Wall) });
+doc.Add.Extrude("TopCover", cover, Wall, Frame3D.At(0, 0, topZ));
+
+doc.Add.Pipe("Stack", SweepRoute.From(0, 0, topZ).LineTo(0, 0, topZ + Wall + StackHeight), StackDiameter, Wall);
+doc.Add.Pipe("Inlet", SweepRoute.From(-(Radius - Wall), 0, inletZ).LineTo(-(Radius + InletLength), 0, inletZ), InletDiameter, Wall);
+doc.Add.Pipe("Drain", SweepRoute.From(-halfLength / 2.0, 0, TankWall).LineTo(-halfLength / 2.0, 0, -DrainLength), DrainDiameter, TankWall);
+
+doc.Add.Pipe("SprayHeader", SweepRoute.From(-(Radius - Wall / 2.0), 0, sprayZ).LineTo(headerEndX, 0, sprayZ), SprayDiameter, SprayWall);
+doc.Add.Pipe("SprayNozzleA", SweepRoute.From(-Radius / 2.0, 0, sprayZ).LineTo(-Radius / 2.0, 0, sprayZ - NozzleLength), SprayDiameter / 2.0, SprayWall / 2.0);
+doc.Add.Pipe("SprayNozzleB", SweepRoute.From(Radius / 2.0, 0, sprayZ).LineTo(Radius / 2.0, 0, sprayZ - NozzleLength), SprayDiameter / 2.0, SprayWall / 2.0);
+
+doc.Add.Extrude("PumpCasing", Profile2D.Circle(0, 0, PumpRadius), PumpHeight, Frame3D.At(pumpX, 0, 0));
+doc.Add.Extrude("PumpMotor", Profile2D.Circle(0, 0, MotorRadius), MotorHeight, Frame3D.At(pumpX, 0, PumpHeight));
+
+doc.Add.Pipe("Suction", SweepRoute.From(halfLength - TankWall, 0, pumpZ).LineTo(pumpX, 0, pumpZ), SuctionDiameter, TankWall);
+doc.Add.Pipe("DischargeRun", SweepRoute.From(pumpX, 0, pumpZ).LineTo(riserX, 0, pumpZ), DischargeDiameter, SprayWall);
+doc.Add.Pipe("DischargeRiser", SweepRoute.From(riserX, 0, pumpZ).LineTo(riserX, 0, sprayZ), DischargeDiameter, SprayWall);
+doc.Add.Pipe("DischargeFeed", SweepRoute.From(riserX, 0, sprayZ).LineTo(headerEndX - SprayDiameter, 0, sprayZ), DischargeDiameter, SprayWall);
+
+var outputPath = Path.GetFullPath("WetScrubberWithTankAndPump.step");
 doc.Save(outputPath);
 Console.WriteLine("STEP saved to " + outputPath + " (" + doc.SolidCount + " solids)");
 """;

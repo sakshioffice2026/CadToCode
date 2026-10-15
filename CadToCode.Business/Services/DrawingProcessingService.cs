@@ -70,7 +70,8 @@ public interface IDrawingProcessingService
         string fileName,
         string? userPrompt = null,
         int maxContextChars = 6000,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        KeyDimensionsDto? keyDimensions = null);
 }
 
 public sealed class DrawingProcessingService : IDrawingProcessingService
@@ -127,7 +128,8 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
         string fileName,
         string? userPrompt = null,
         int maxContextChars = 6000,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        KeyDimensionsDto? keyDimensions = null)
     {
         ArgumentNullException.ThrowIfNull(fileStream);
 
@@ -141,7 +143,7 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
                 return await ProcessDxfAsync(fileStream, name, userPrompt, limit, cancellationToken).ConfigureAwait(false);
 
             case DrawingSourceKind.Image:
-                return await ProcessImageAsync(fileStream, name, userPrompt, limit, cancellationToken).ConfigureAwait(false);
+                return await ProcessImageAsync(fileStream, name, userPrompt, limit, keyDimensions, cancellationToken).ConfigureAwait(false);
 
             default:
                 return new DrawingProcessingResult
@@ -249,6 +251,7 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
         string fileName,
         string? userPrompt,
         int limit,
+        KeyDimensionsDto? keyDimensions,
         CancellationToken cancellationToken)
     {
         BlueprintOcrResult ocr;
@@ -305,6 +308,7 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
         if (match is not null)
         {
             injected = InjectParameters(match.Script, ocr, injections);
+            injected = ApplyKeyDimensions(injected, keyDimensions, injections, warnings);
 
             if (injections.Count == 0 && ocr.HasDimensions)
             {
@@ -485,7 +489,7 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
 
         return ConstDouble.Replace(script, match =>
         {
-            var constName = match.Groups["name"].Value;
+            var constName = match.Groups["n"].Value;
             var normalized = constName.ToLowerInvariant();
 
             foreach (var (kind, keywords) in KindKeywords)
@@ -516,6 +520,76 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
 
             return match.Value;
         });
+    }
+
+    private static readonly Dictionary<string, (Func<KeyDimensionsDto, double?> Select, double Scale)> KeyDimensionTargets =
+        new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Radius"] = (k => k.VesselDiameter, 0.5),
+            ["VesselRadius"] = (k => k.VesselDiameter, 0.5),
+            ["VesselDiameter"] = (k => k.VesselDiameter, 1.0),
+            ["ShellDiameter"] = (k => k.VesselDiameter, 1.0),
+            ["ShellHeight"] = (k => k.VesselHeight, 1.0),
+            ["VesselHeight"] = (k => k.VesselHeight, 1.0),
+            ["BodyHeight"] = (k => k.VesselHeight, 1.0),
+            ["InletDiameter"] = (k => k.InletPipeDiameter, 1.0),
+            ["StackDiameter"] = (k => k.OutletPipeDiameter, 1.0),
+            ["ExitDiameter"] = (k => k.OutletPipeDiameter, 1.0),
+            ["OutletDiameter"] = (k => k.OutletPipeDiameter, 1.0),
+            ["TankLength"] = (k => k.TankLength, 1.0)
+        };
+
+    private static string ApplyKeyDimensions(
+        string script,
+        KeyDimensionsDto? keys,
+        List<ParameterInjection> injections,
+        List<string> warnings)
+    {
+        if (keys is null || !keys.HasAny || string.IsNullOrWhiteSpace(script))
+        {
+            return script;
+        }
+
+        var applied = 0;
+
+        var result = ConstDouble.Replace(script, match =>
+        {
+            var constName = match.Groups["n"].Value;
+
+            if (!KeyDimensionTargets.TryGetValue(constName, out var target))
+            {
+                return match.Value;
+            }
+
+            var supplied = target.Select(keys);
+
+            if (supplied is not > 0)
+            {
+                return match.Value;
+            }
+
+            if (!double.TryParse(match.Groups["value"].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var oldValue))
+            {
+                return match.Value;
+            }
+
+            var newValue = supplied.Value * target.Scale;
+
+            injections.RemoveAll(i => string.Equals(i.Name, constName, StringComparison.Ordinal));
+            injections.Add(new ParameterInjection(constName, oldValue, newValue, "User input"));
+            applied++;
+
+            return match.Groups["prefix"].Value
+                + newValue.ToString("0.####", CultureInfo.InvariantCulture)
+                + match.Groups["suffix"].Value;
+        });
+
+        if (applied == 0)
+        {
+            warnings.Add("None of the supplied key dimensions could be mapped to a named const in the template.");
+        }
+
+        return result;
     }
 
     private static bool NameMatches(string normalizedName, string keyword)

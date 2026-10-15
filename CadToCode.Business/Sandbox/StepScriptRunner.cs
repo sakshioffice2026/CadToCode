@@ -225,6 +225,11 @@ public sealed class StepScriptRunner : IStepScriptRunner
             Bounds = BoundsOf(solids)
         };
 
+        var connectivity = StepConnectivity.Analyze(solids);
+        result.IsConnected = connectivity.IsConnected;
+        result.ComponentCount = connectivity.ComponentCount;
+        result.IsolatedParts = connectivity.IsolatedNames.ToList();
+
         var approximated = 0;
         var previewPoints = 0;
 

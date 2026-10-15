@@ -15,7 +15,8 @@
         chat: root.getAttribute("data-ca-chat-url"),
         history: root.getAttribute("data-ca-history-url"),
         reset: root.getAttribute("data-ca-reset-url"),
-        status: root.getAttribute("data-ca-status-url")
+        status: root.getAttribute("data-ca-status-url"),
+        upload: root.getAttribute("data-ca-upload-url")
     };
     var maxText = parseInt(root.getAttribute("data-ca-max-text"), 10) || 4000;
     var maxFiles = parseInt(root.getAttribute("data-ca-max-files"), 10) || 5;
@@ -123,6 +124,19 @@
                 "RequestVerificationToken": antiForgeryToken()
             },
             body: JSON.stringify(body),
+            signal: signal
+        });
+    }
+
+    function postForm(url, form, signal) {
+        return fetch(url, {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Accept": "application/json",
+                "RequestVerificationToken": antiForgeryToken()
+            },
+            body: form,
             signal: signal
         });
     }
