@@ -10,6 +10,7 @@ public static class VisionResultParser
     private const int MaxTextChars = 300;
     private const int MaxViews = 20;
     private const int MaxUncertainties = 30;
+    private const int MaxRepairAttempts = 400;
     private const double MaxLengthMm = 100000.0;
     private const double MaxCount = 1000.0;
 
@@ -19,6 +20,12 @@ public static class VisionResultParser
         AllowTrailingCommas = true,
         ReadCommentHandling = JsonCommentHandling.Skip,
         NumberHandling = JsonNumberHandling.AllowReadingFromString
+    };
+
+    private static readonly JsonDocumentOptions DocumentOptions = new()
+    {
+        AllowTrailingCommas = true,
+        CommentHandling = JsonCommentHandling.Skip
     };
 
     public static VisionInspectionResult? Parse(string? raw, VisionOptions options, out string? error)
@@ -31,25 +38,15 @@ public static class VisionResultParser
             return null;
         }
 
-        var json = ExtractJsonObject(raw);
+        var json = ExtractJsonObject(raw, out var repaired);
 
         if (json is null)
         {
-            error = "The vision output had no complete JSON object.";
+            error = "The vision output had no JSON object that could be read or repaired.";
             return null;
         }
 
-        VisionInspectionResult? result;
-
-        try
-        {
-            result = JsonSerializer.Deserialize<VisionInspectionResult>(json, JsonOptions);
-        }
-        catch (JsonException ex)
-        {
-            error = "The vision output was not valid JSON: " + ex.Message;
-            return null;
-        }
+        var result = DeserializeTolerant(json);
 
         if (result is null)
         {
@@ -59,6 +56,11 @@ public static class VisionResultParser
 
         Sanitize(result, options);
 
+        if (repaired)
+        {
+            result.Warnings.Add("The vision output was cut off and repaired; trailing items may be missing.");
+        }
+
         if (!result.HasContent)
         {
             error = "The vision output had no usable content.";
@@ -66,6 +68,132 @@ public static class VisionResultParser
         }
 
         return result;
+    }
+
+    private static VisionInspectionResult? DeserializeTolerant(string json)
+    {
+        try
+        {
+            var strict = JsonSerializer.Deserialize<VisionInspectionResult>(json, JsonOptions);
+
+            if (strict is not null)
+            {
+                return strict;
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return DeserializeLoose(json);
+    }
+
+    private static VisionInspectionResult? DeserializeLoose(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json, DocumentOptions);
+
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            var result = new VisionInspectionResult();
+
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                switch (prop.Name.Trim().ToLowerInvariant())
+                {
+                    case "equipmenttype":
+                        result.EquipmentType = AsText(prop.Value);
+                        break;
+                    case "summary":
+                        result.Summary = AsText(prop.Value);
+                        break;
+                    case "views":
+                        result.Views = ReadList<VisionView>(prop.Value);
+                        break;
+                    case "components":
+                        result.Components = ReadList<VisionComponent>(prop.Value);
+                        break;
+                    case "dimensions":
+                        result.Dimensions = ReadList<VisionDimension>(prop.Value);
+                        break;
+                    case "uncertainties":
+                        result.Uncertainties = ReadStrings(prop.Value);
+                        break;
+                }
+            }
+
+            return result;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static string? AsText(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            _ => null
+        };
+    }
+
+    private static List<T> ReadList<T>(JsonElement element) where T : class
+    {
+        var list = new List<T>();
+
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return list;
+        }
+
+        foreach (var item in element.EnumerateArray())
+        {
+            try
+            {
+                var value = item.Deserialize<T>(JsonOptions);
+
+                if (value is not null)
+                {
+                    list.Add(value);
+                }
+            }
+            catch (JsonException)
+            {
+            }
+        }
+
+        return list;
+    }
+
+    private static List<string> ReadStrings(JsonElement element)
+    {
+        var list = new List<string>();
+
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return list;
+        }
+
+        foreach (var item in element.EnumerateArray())
+        {
+            var text = AsText(item);
+
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                list.Add(text);
+            }
+        }
+
+        return list;
     }
 
     private static void Sanitize(VisionInspectionResult result, VisionOptions options)
@@ -250,8 +378,10 @@ public static class VisionResultParser
         }
     }
 
-    private static string? ExtractJsonObject(string raw)
+    private static string? ExtractJsonObject(string raw, out bool repaired)
     {
+        repaired = false;
+
         var start = raw.IndexOf('{');
 
         if (start < 0)
@@ -304,7 +434,120 @@ public static class VisionResultParser
             }
         }
 
+        var fixedJson = RepairTruncated(raw, start);
+
+        if (fixedJson is not null)
+        {
+            repaired = true;
+        }
+
+        return fixedJson;
+    }
+
+    private static string? RepairTruncated(string raw, int start)
+    {
+        var stack = new List<char>();
+        var cuts = new List<(int Length, string Closers)>();
+        var inString = false;
+        var escaped = false;
+        var broken = false;
+
+        for (var i = start; i < raw.Length && !broken; i++)
+        {
+            var c = raw[i];
+
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                }
+                else if (c == '\\')
+                {
+                    escaped = true;
+                }
+                else if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            switch (c)
+            {
+                case '"':
+                    inString = true;
+                    break;
+                case '{':
+                    stack.Add('}');
+                    cuts.Add((i + 1, BuildClosers(stack)));
+                    break;
+                case '[':
+                    stack.Add(']');
+                    cuts.Add((i + 1, BuildClosers(stack)));
+                    break;
+                case '}':
+                case ']':
+                    if (stack.Count == 0 || stack[^1] != c)
+                    {
+                        broken = true;
+                        break;
+                    }
+
+                    stack.RemoveAt(stack.Count - 1);
+                    cuts.Add((i + 1, BuildClosers(stack)));
+                    break;
+                case ',':
+                    if (stack.Count > 0)
+                    {
+                        cuts.Add((i, BuildClosers(stack)));
+                    }
+
+                    break;
+            }
+        }
+
+        var attempts = 0;
+
+        for (var k = cuts.Count - 1; k >= 0 && attempts < MaxRepairAttempts; k--, attempts++)
+        {
+            var (length, closers) = cuts[k];
+
+            var candidate = raw.Substring(start, length - start).TrimEnd() + closers;
+
+            if (IsValidJsonObject(candidate))
+            {
+                return candidate;
+            }
+        }
+
         return null;
+    }
+
+    private static string BuildClosers(List<char> stack)
+    {
+        var sb = new StringBuilder(stack.Count);
+
+        for (var i = stack.Count - 1; i >= 0; i--)
+        {
+            sb.Append(stack[i]);
+        }
+
+        return sb.ToString();
+    }
+
+    private static bool IsValidJsonObject(string candidate)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(candidate, DocumentOptions);
+            return doc.RootElement.ValueKind == JsonValueKind.Object;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
     }
 
     private static string Clean(string? text)

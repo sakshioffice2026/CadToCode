@@ -22,7 +22,7 @@ public class VisionOptions
 
     public int MaxImageBytes { get; set; } = 20 * 1024 * 1024;
 
-    public int MaxTokens { get; set; } = 1024;
+    public int MaxTokens { get; set; } = 768;
 
     public double Temperature { get; set; } = 0.1;
 

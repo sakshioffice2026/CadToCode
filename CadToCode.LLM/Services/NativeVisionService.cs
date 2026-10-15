@@ -98,6 +98,11 @@ public sealed class NativeVisionService : IVisionInspectionService, IDisposable
                 return null;
             }
 
+            foreach (var warning in result.Warnings)
+            {
+                _logger.LogInformation("Vision output note: {Warning}", warning);
+            }
+
             return result;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -202,6 +207,13 @@ public sealed class NativeVisionService : IVisionInspectionService, IDisposable
         var modelParams = _modelParams ?? throw new InvalidOperationException("The vision model is not loaded.");
 
         var prompt = BuildPrompt(weights, userHint);
+        var maxTokens = Math.Max(MinTokens, _options.MaxTokens);
+
+        _logger.LogInformation(
+            "Vision inference starting: concise prompt {PromptChars} chars, MaxTokens {MaxTokens}, ContextSize {ContextSize}.",
+            prompt.Length,
+            maxTokens,
+            _options.ContextSize);
 
         using var context = weights.CreateContext(modelParams);
         var executor = new InteractiveExecutor(context, clip);
@@ -217,8 +229,6 @@ public sealed class NativeVisionService : IVisionInspectionService, IDisposable
                 Grammar = new Grammar(VisionPromptTemplates.JsonGrammar, "root")
             };
 
-            var maxTokens = Math.Max(MinTokens, _options.MaxTokens);
-
             var inference = new InferenceParams
             {
                 MaxTokens = maxTokens,
@@ -228,11 +238,58 @@ public sealed class NativeVisionService : IVisionInspectionService, IDisposable
             var builder = new StringBuilder();
             var charCap = maxTokens * CharsPerTokenCap;
 
+            var depth = 0;
+            var inString = false;
+            var escaped = false;
+            var started = false;
+            var complete = false;
+
             await foreach (var piece in executor.InferAsync(prompt, inference, cancellationToken).ConfigureAwait(false))
             {
                 builder.Append(piece);
 
-                if (builder.Length > charCap)
+                foreach (var c in piece)
+                {
+                    if (inString)
+                    {
+                        if (escaped)
+                        {
+                            escaped = false;
+                        }
+                        else if (c == '\\')
+                        {
+                            escaped = true;
+                        }
+                        else if (c == '"')
+                        {
+                            inString = false;
+                        }
+
+                        continue;
+                    }
+
+                    if (c == '"')
+                    {
+                        inString = true;
+                    }
+                    else if (c == '{')
+                    {
+                        depth++;
+                        started = true;
+                    }
+                    else if (c == '}')
+                    {
+                        depth--;
+
+                        if (started && depth <= 0)
+                        {
+                            complete = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (complete || builder.Length > charCap)
                 {
                     break;
                 }

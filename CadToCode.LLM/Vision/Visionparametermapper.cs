@@ -21,12 +21,23 @@ public sealed class VisionParameterMapping
     public List<UnmappedDimension> Unmapped { get; } = new();
 
     public List<string> Notes { get; } = new();
+
+    public List<string> Warnings { get; } = new();
 }
 
 public static class VisionParameterMapper
 {
     private const int MinScore = 60;
     private const double Tolerance = 1e-6;
+    private const double LowConfidenceThreshold = 0.80;
+    private const int SimpleTemplateMaxParameters = 6;
+    private const int ComplexComponentCount = 4;
+    private const string TruncationMarker = "cut off and repaired";
+
+    private static readonly HashSet<string> NeutralEquipmentWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "system", "assembly", "unit", "equipment", "industrial", "machine", "plant", "drawing", "blueprint", "cad"
+    };
 
     private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -62,9 +73,12 @@ public static class VisionParameterMapper
     public static VisionParameterMapping Map(
         TemplateParameterSchema schema,
         VisionInspectionResult vision,
-        string? ocrText = null)
+        string? ocrText = null,
+        double matchScore = 1.0)
     {
         var mapping = new VisionParameterMapping();
+
+        AddMismatchWarnings(mapping, schema, vision, matchScore);
         var ocrNumbers = ExtractNumbers(ocrText);
         var accepted = new Dictionary<string, List<(VisionDimension Dimension, double Value)>>(StringComparer.OrdinalIgnoreCase);
 
@@ -142,6 +156,78 @@ public static class VisionParameterMapper
         }
 
         return mapping;
+    }
+
+    private static void AddMismatchWarnings(
+        VisionParameterMapping mapping,
+        TemplateParameterSchema schema,
+        VisionInspectionResult vision,
+        double matchScore)
+    {
+        var reasons = new List<string>();
+
+        if (vision.Warnings.Any(w => w.Contains(TruncationMarker, StringComparison.OrdinalIgnoreCase)))
+        {
+            reasons.Add("the vision output was cut off, so parts of the drawing may be missing");
+        }
+
+        var confidence = matchScore > 1.0 ? matchScore / 100.0 : matchScore;
+
+        if (confidence < LowConfidenceThreshold)
+        {
+            reasons.Add("the match confidence is only "
+                        + (confidence * 100.0).ToString("0", CultureInfo.InvariantCulture) + "%");
+        }
+
+        var equipment = vision.EquipmentType;
+
+        if (!string.IsNullOrWhiteSpace(equipment) && !SharesVocabulary(schema, equipment))
+        {
+            reasons.Add("the drawing looks like '" + equipment.Trim() + "'");
+        }
+
+        if (schema.Parameters.Count <= SimpleTemplateMaxParameters
+            && vision.Components.Count >= ComplexComponentCount)
+        {
+            reasons.Add("the drawing shows " + vision.Components.Count
+                        + " distinct parts but this template is simple");
+        }
+
+        if (reasons.Count == 0)
+        {
+            return;
+        }
+
+        mapping.Warnings.Add(
+            "Possible template mismatch with " + schema.Title + ": " + string.Join("; ", reasons)
+            + ". If this is wrong, tell me the real equipment, for example `this is a wet scrubber`.");
+    }
+
+    private static bool SharesVocabulary(TemplateParameterSchema schema, string equipment)
+    {
+        var equipmentTokens = Tokenize(equipment)
+            .Where(t => t.Length >= 3 && !NeutralEquipmentWords.Contains(t))
+            .ToList();
+
+        if (equipmentTokens.Count == 0)
+        {
+            return true;
+        }
+
+        var vocabulary = Tokenize(schema.Title);
+
+        foreach (var component in schema.Components)
+        {
+            vocabulary.UnionWith(Tokenize(component.Key));
+            vocabulary.UnionWith(Tokenize(component.Title));
+
+            foreach (var alias in component.Aliases)
+            {
+                vocabulary.UnionWith(Tokenize(alias));
+            }
+        }
+
+        return equipmentTokens.Any(vocabulary.Contains);
     }
 
     private static List<(TemplateParameterDefinition Parameter, int Score)> Score(

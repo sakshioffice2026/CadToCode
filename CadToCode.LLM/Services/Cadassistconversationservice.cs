@@ -1,4 +1,5 @@
-﻿using System.Text;
+﻿using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
@@ -52,6 +53,16 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
     private static readonly Regex SwitchRegex = new(
         @"\b(this is|it is|it's|its|switch to|change (?:the )?template to|use (?:the )?(?:\w+ )?template|treat (?:it )?as|actually)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex ExplicitGenerateRegex = new(
+        @"\b(write|generate|create|build|make|give|produce|export|get|need|want)\b.*(?<![A-Za-z])(c#|csharp|c sharp|script|code|step|stp)(?![A-Za-z])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex PlainValueRegex = new(
+        @"(?<![A-Za-z])(?<noun>[a-z][a-z \-]{1,30}?)\s+(?:of|with|at|size|sized)\s+(?<num>-?\d+(?:[.,]\d+)?)\s*(?<unit>mm|cm|m|in)(?![A-Za-z])",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(250));
 
     private static readonly Regex NonAlphaNumeric = new("[^a-z0-9]+", RegexOptions.Compiled);
@@ -134,7 +145,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             }
             else if (input.Vision is not null)
             {
-                ApplyVisionValues(s, schema, input.Vision, input.OcrText);
+                ApplyVisionValues(s, schema, input.Vision, input.OcrText, score);
             }
 
             if (!string.IsNullOrWhiteSpace(input.Prompt))
@@ -289,11 +300,28 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             MergeLlm(intent, llm, rejected);
         }
 
+        var explicitGenerate = IsExplicitGenerateRequest(prompt);
+
+        if (explicitGenerate && !intent.HasParameters)
+        {
+            InferPlainValue(prompt, schema, intent);
+        }
+
         ApplyUpdates(s, schema, intent, accepted, rejected);
 
         foreach (var label in intent.UnrecognizedAssignments)
         {
             rejected.Add("Unknown parameter '" + label + "' for the " + schema.Title + " template.");
+        }
+
+        if (explicitGenerate)
+        {
+            if (rejected.Count > 0)
+            {
+                return CadAssistReplyBuilder.BuildParametersAck(s, accepted, rejected);
+            }
+
+            s.AcceptDefaults();
         }
 
         if (intent.UseDefaults)
@@ -324,7 +352,12 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             return CadAssistReplyBuilder.BuildUnknownComponent(s, intent.UnmatchedComponentText);
         }
 
-        if (intent.ShowParameters && !intent.HasParameters && !intent.HasScope)
+        if (explicitGenerate && !s.FullAssembly && s.ScopeComponentKeys.Count == 0)
+        {
+            s.SelectScope(true, null);
+        }
+
+        if (intent.ShowParameters && !intent.HasParameters && !intent.HasScope && !explicitGenerate)
         {
             return CadAssistReplyBuilder.BuildStatus(s);
         }
@@ -332,7 +365,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         var hasScope = s.FullAssembly || s.ScopeComponentKeys.Count > 0;
         var ready = IsReady(s, hasScope);
 
-        if (!intent.HasAnyAction)
+        if (!intent.HasAnyAction && !explicitGenerate)
         {
             return BuildIdleReply(s, hasScope, ready, schema, rejected);
         }
@@ -359,7 +392,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         s.RecordGenerated(result);
 
         var generated = CadAssistReplyBuilder.BuildGenerated(s, result);
-        PrefixAck(generated, schema, new Dictionary<string, double>(), rejected);
+        PrefixAck(generated, schema, accepted, rejected);
         return generated;
     }
 
@@ -549,9 +582,18 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         CadAssistSessionState s,
         TemplateParameterSchema schema,
         VisionInspectionResult vision,
-        string? ocrText)
+        string? ocrText,
+        double matchScore)
     {
-        var mapping = VisionParameterMapper.Map(schema, vision, ocrText);
+        var mapping = VisionParameterMapper.Map(schema, vision, ocrText, matchScore);
+
+        foreach (var warning in mapping.Warnings)
+        {
+            if (!s.VisionUncertainties.Contains(warning, StringComparer.OrdinalIgnoreCase))
+            {
+                s.VisionUncertainties.Add(warning);
+            }
+        }
 
         foreach (var item in mapping.Mapped)
         {
@@ -685,6 +727,91 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         }
 
         return ordered[0].Template;
+    }
+
+    private static bool IsExplicitGenerateRequest(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        try
+        {
+            return ExplicitGenerateRegex.IsMatch(text);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static void InferPlainValue(string text, TemplateParameterSchema schema, ParsedIntent intent)
+    {
+        Match match;
+
+        try
+        {
+            match = PlainValueRegex.Match(text);
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return;
+        }
+
+        if (!match.Success)
+        {
+            return;
+        }
+
+        var noun = match.Groups["noun"].Value.Trim().ToLowerInvariant();
+
+        var names = new List<string> { schema.Title.ToLowerInvariant() };
+
+        foreach (var component in schema.Components)
+        {
+            names.Add(component.Key.ToLowerInvariant());
+            names.Add(component.Title.ToLowerInvariant());
+            names.AddRange(component.Aliases.Select(a => a.ToLowerInvariant()));
+        }
+
+        var nounMatches = names.Any(n => n.Length >= 3 && (noun == n || noun.EndsWith(" " + n, StringComparison.Ordinal)));
+
+        if (!nounMatches)
+        {
+            return;
+        }
+
+        var candidates = schema.Parameters
+            .Where(p => string.Equals(p.Unit, "mm", StringComparison.OrdinalIgnoreCase)
+                        && !p.IsInteger
+                        && p.Aliases.Any(a => a.Equals("diameter", StringComparison.OrdinalIgnoreCase)
+                                              || a.Equals("dia", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (candidates.Count != 1)
+        {
+            return;
+        }
+
+        if (!double.TryParse(
+                match.Groups["num"].Value.Replace(',', '.'),
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var value))
+        {
+            return;
+        }
+
+        value = match.Groups["unit"].Value.ToLowerInvariant() switch
+        {
+            "cm" => value * 10.0,
+            "m" => value * 1000.0,
+            "in" => value * 25.4,
+            _ => value
+        };
+
+        intent.Updates[candidates[0].Key] = value;
     }
 
     private static bool SwitchRequested(string text)

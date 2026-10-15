@@ -312,7 +312,7 @@ public static class CadAssistReplyBuilder
                 var mapped = schema.FindComponent(detected.MappedComponentKey ?? string.Empty);
 
                 text.AppendLine(mapped is null
-                    ? "- " + detected.Label + " (no matching template component)"
+                    ? "- " + detected.Label
                     : "- " + detected.Label + " → " + mapped.Title);
             }
 
