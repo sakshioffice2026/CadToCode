@@ -1,6 +1,7 @@
 ﻿using CadToCode.Business.Interfaces;
 using CadToCode.Business.Services;
 using CadToCode.LLM.Interfaces;
+using CadToCode.LLM.Memory;
 using CadToCode.LLM.Prompts;
 using CadToCode.LLM.Services;
 using CadToCode.Models.Dtos;
@@ -25,6 +26,7 @@ public class CadAssistController : Controller
     private const int MaxFieldChars = 400;
     private const int MaxTemplateChars = 3000;
     private const int MinGeometryChars = 1200;
+    private const int MaxMatchTextChars = 2000;
     private const long MaxUploadBytes = 52_428_800;
     private const int MaxUploadFiles = 5;
 
@@ -34,6 +36,8 @@ public class CadAssistController : Controller
     private readonly IStepScriptRunner _stepScriptRunner;
     private readonly ICadTemplateMatcher _templateMatcher;
     private readonly IDrawingProcessingService _drawingProcessing;
+    private readonly ICadAssistConversationService _conversation;
+    private readonly ICadAssistSessionStore _sessionStore;
     private readonly LocalAiOptions _options;
     private readonly ILogger<CadAssistController> _logger;
 
@@ -44,6 +48,8 @@ public class CadAssistController : Controller
         IStepScriptRunner stepScriptRunner,
         ICadTemplateMatcher templateMatcher,
         IDrawingProcessingService drawingProcessing,
+        ICadAssistConversationService conversation,
+        ICadAssistSessionStore sessionStore,
         IOptions<LocalAiOptions> options,
         ILogger<CadAssistController> logger)
     {
@@ -53,6 +59,8 @@ public class CadAssistController : Controller
         _stepScriptRunner = stepScriptRunner;
         _templateMatcher = templateMatcher;
         _drawingProcessing = drawingProcessing;
+        _conversation = conversation;
+        _sessionStore = sessionStore;
         _options = options.Value;
         _logger = logger;
     }
@@ -91,6 +99,7 @@ public class CadAssistController : Controller
         if (!string.IsNullOrWhiteSpace(request.SessionId))
         {
             _ai.ResetSession(request.ProjectId, request.SessionId);
+            _sessionStore.Reset(request.ProjectId, request.SessionId);
         }
 
         return Json(new { success = true, sessionId = _ai.EnsureSession(request.ProjectId, null) });
@@ -107,6 +116,38 @@ public class CadAssistController : Controller
         }
 
         var sessionId = _ai.EnsureSession(request.ProjectId, request.SessionId);
+
+        if (ShouldUseConversation(request.ProjectId, sessionId, request.Prompt))
+        {
+            var started = System.Diagnostics.Stopwatch.StartNew();
+
+            var reply = await _conversation.HandleMessageAsync(
+                request.ProjectId,
+                sessionId,
+                request.Prompt,
+                cancellationToken);
+
+            reply.Status = null;
+            reply.Model = "template";
+
+            if (_options.AutoVerifyCode)
+            {
+                reply.Status = await VerifyAsync(reply, cancellationToken);
+            }
+
+            reply.ElapsedMs = started.ElapsedMilliseconds;
+            Decorate(reply, request.ProjectId, sessionId);
+
+            return Json(new CadAssistChatResponse
+            {
+                Success = true,
+                SessionId = sessionId,
+                Message = reply,
+                Model = "template",
+                Stage = reply.Stage,
+                ElapsedMs = reply.ElapsedMs
+            });
+        }
 
         if (!_ai.IsAvailable)
         {
@@ -251,29 +292,14 @@ public class CadAssistController : Controller
 
         var session = _ai.EnsureSession(projectId, sessionId);
 
-        if (!_ai.IsAvailable)
-        {
-            var status = _ai.GetStatus();
-
-            return Json(new CadAssistChatResponse
-            {
-                Success = false,
-                SessionId = session,
-                Model = status.Model,
-                Error = status.Message ?? "The local model is not available."
-            });
-        }
-
         var perFileChars = Math.Max(MinGeometryChars, _options.MaxGeometryChars) / selected.Count;
 
-        var contexts = new List<string>();
         var attachments = new List<CadAssistAttachmentDto>();
         var warnings = new List<string>();
         var summaries = new List<object>();
         var failures = new List<string>();
-        string? directScript = null;
-        string? directFallback = null;
-        string? directTemplate = null;
+        DrawingProcessingResult? primary = null;
+        string? primaryName = null;
 
         foreach (var file in selected)
         {
@@ -313,15 +339,10 @@ public class CadAssistController : Controller
                     continue;
                 }
 
-                contexts.Add(processed.ContextText);
-
-                if (selected.Count == 1
-                    && processed.Mode == DrawingProcessingMode.TemplateInjection
-                    && !string.IsNullOrWhiteSpace(processed.InjectedScript ?? processed.TemplateScript))
+                if (primary is null)
                 {
-                    directScript = processed.InjectedScript ?? processed.TemplateScript;
-                    directFallback = processed.TemplateScript;
-                    directTemplate = processed.TemplateTitle;
+                    primary = processed;
+                    primaryName = fileName;
                 }
 
                 attachments.Add(new CadAssistAttachmentDto
@@ -329,7 +350,7 @@ public class CadAssistController : Controller
                     FileName = Limit(fileName, MaxFileNameChars) ?? string.Empty,
                     ContentType = Limit(file.ContentType, 100) ?? string.Empty,
                     SizeBytes = file.Length,
-                    TextContent = null
+                    TextContent = Limit(processed.ContextText, MaxMatchTextChars)
                 });
 
                 summaries.Add(new
@@ -338,8 +359,7 @@ public class CadAssistController : Controller
                     source = processed.SourceKind.ToString(),
                     mode = processed.Mode.ToString(),
                     template = processed.TemplateTitle,
-                    templateScore = processed.TemplateScore,
-                    injected = processed.Injections.Select(i => new { i.Name, i.OldValue, i.NewValue, i.Source })
+                    templateScore = processed.TemplateScore
                 });
             }
             catch (OperationCanceledException)
@@ -353,7 +373,7 @@ public class CadAssistController : Controller
             }
         }
 
-        if (contexts.Count == 0)
+        if (primary is null || primaryName is null)
         {
             return Json(new
             {
@@ -366,109 +386,135 @@ public class CadAssistController : Controller
 
         warnings.AddRange(failures);
 
-        if (!string.IsNullOrWhiteSpace(directScript))
+        if (attachments.Count > 1)
         {
-            var started = System.Diagnostics.Stopwatch.StartNew();
-            var script = directScript;
-            var check = await _stepScriptRunner.RunAsync(script, cancellationToken);
+            warnings.Add("Only the first usable drawing (" + primaryName + ") is analysed per conversation.");
+        }
 
-            if (!string.IsNullOrWhiteSpace(directFallback)
-                && !string.Equals(script, directFallback, StringComparison.Ordinal)
-                && (!check.Success || !check.IsConnected))
+        ProjectResultDto? project = null;
+        AssemblyTree? tree = null;
+
+        if (projectId > 0)
+        {
+            project = await _processingService.GetProjectAsync(projectId, cancellationToken);
+
+            if (project is not null && project.Status == ProjectStatus.Processed)
             {
-                warnings.Add(!check.Success
-                    ? "The adjusted template did not build. The unmodified template is shown instead."
-                    : "The adjusted template produced parts that float apart (" + string.Join(", ", check.IsolatedParts) + "). The unmodified template is shown instead.");
-
-                script = directFallback;
-                check = await _stepScriptRunner.RunAsync(script, cancellationToken);
+                var assembly = await _codeGenerationService.GenerateAssemblyAsync(project.Id, false, cancellationToken);
+                tree = assembly.Tree;
             }
-
-            var block = new CadAssistCodeBlockDto
-            {
-                Language = "csharp",
-                Title = "STEP script",
-                Code = script,
-                LineCount = script.Split('\n').Length
-            };
-
-            var message = new CadAssistMessageDto
-            {
-                Role = CadAssistRole.Assistant,
-                Content = "Template-based, approximate: " + (directTemplate ?? "verified template") + ". Built without the language model.",
-                CodeBlocks = new List<CadAssistCodeBlockDto> { block },
-                Actions = new List<CadAssistActionDto>
-                {
-                    new() { Kind = CadAssistActionKind.Run, Label = "Run", TargetCodeBlockId = block.Id },
-                    new() { Kind = CadAssistActionKind.Apply, Label = "Apply to editor", TargetCodeBlockId = block.Id },
-                    new() { Kind = CadAssistActionKind.DownloadStep, Label = "Download STEP", TargetCodeBlockId = block.Id },
-                    new() { Kind = CadAssistActionKind.Copy, Label = "Copy", TargetCodeBlockId = block.Id },
-                    new() { Kind = CadAssistActionKind.Regenerate, Label = "Regenerate" }
-                },
-                Model = "template",
-                ElapsedMs = started.ElapsedMilliseconds,
-                Status = check.Success
-                    ? "Verified in sandbox: " + check.SolidCount + " solids, " + check.FaceCount + " faces, " + check.ElapsedMs + " ms"
-                    : "Needs review: " + (check.Message ?? "the script did not run.")
-            };
-
-            return Json(new
-            {
-                success = true,
-                sessionId = session,
-                message,
-                model = "template",
-                elapsedMs = started.ElapsedMilliseconds,
-                warnings,
-                processing = summaries
-            });
         }
 
-        var generation = new LocalAiGenerationRequest
-        {
-            ProjectId = projectId,
-            SessionId = session,
-            Prompt = string.IsNullOrWhiteSpace(prompt)
-                ? "Generate the STEP script for this drawing."
-                : prompt.Trim(),
-            DrawingType = Limit(drawingType, MaxFieldChars),
-            FilterInstructions = null,
-            CurrentCode = currentCode,
-            GeometryContext = string.Join(Environment.NewLine + Environment.NewLine, contexts),
-            Attachments = attachments
-        };
+        var isImage = primary.SourceKind == DrawingSourceKind.Image;
 
-        var result = await _ai.ChatAsync(generation, cancellationToken);
+        IReadOnlyDictionary<string, double>? dxfValues = null;
 
-        if (!result.Success || result.Message is null)
+        if (primary.SourceKind == DrawingSourceKind.Dxf && primary.Injections.Count > 0)
         {
-            return Json(new
+            dxfValues = primary.Injections
+                .GroupBy(i => i.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.Last().NewValue, StringComparer.OrdinalIgnoreCase);
+        }
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+
+        var message = await _conversation.HandleUploadAsync(
+            new CadAssistUploadInput
             {
-                success = false,
-                sessionId = session,
-                model = result.Model,
-                elapsedMs = result.ElapsedMs,
-                error = result.Error ?? "The assistant could not answer.",
-                warnings,
-                processing = summaries
-            });
-        }
+                ProjectId = projectId,
+                SessionId = session,
+                FileName = primaryName,
+                IsImage = isImage,
+                Prompt = prompt,
+                DrawingType = Limit(drawingType, MaxFieldChars),
+                Project = project,
+                Tree = tree,
+                Attachments = attachments,
+                DxfVerifiedValues = dxfValues
+            },
+            cancellationToken);
 
-        if (_options.AutoVerifyCode)
-        {
-            result.Message.Status = await VerifyAsync(result.Message, cancellationToken);
-        }
+        message.Status = null;
+        message.Model = "template";
+        message.ElapsedMs = started.ElapsedMilliseconds;
+        Decorate(message, projectId, session);
 
         return Json(new
         {
             success = true,
             sessionId = session,
-            message = result.Message,
-            model = result.Model,
-            elapsedMs = result.ElapsedMs,
+            message,
+            model = "template",
+            stage = message.Stage,
+            elapsedMs = started.ElapsedMilliseconds,
             warnings,
             processing = summaries
         });
+    }
+
+    private bool ShouldUseConversation(int projectId, string sessionId, string? prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return false;
+        }
+
+        var state = _sessionStore.Get(projectId, sessionId);
+
+        if (!state.HasTemplate && state.Stage != CadAssistStage.Uploaded)
+        {
+            return false;
+        }
+
+        if (CadAssistIntentParser.Parse(prompt, null).ShowParameters)
+        {
+            return true;
+        }
+
+        return !CadAssistPromptTemplates.IsQuestionOnly(prompt);
+    }
+
+    private void Decorate(CadAssistMessageDto message, int projectId, string sessionId)
+    {
+        var state = _sessionStore.Get(projectId, sessionId);
+
+        message.Stage = state.Stage.ToString();
+
+        var schema = state.Schema;
+
+        if (!state.HasTemplate || schema is null)
+        {
+            return;
+        }
+
+        message.TemplateTitle = state.TemplateTitle;
+
+        message.Breakdown = state.DetectedComponents
+            .Select(c => new CadAssistComponentDto
+            {
+                Label = c.Label,
+                MappedComponent = schema.FindComponent(c.MappedComponentKey ?? string.Empty)?.Title
+            })
+            .ToList();
+
+        message.Parameters = schema.Parameters
+            .Select(p =>
+            {
+                var has = state.Values.TryGetValue(p.Key, out var stored);
+
+                return new CadAssistParameterDto
+                {
+                    Key = p.Key,
+                    Label = p.Label,
+                    Unit = p.Unit,
+                    Default = p.Default,
+                    Min = p.Min,
+                    Max = p.Max,
+                    Value = has ? stored!.Value : null,
+                    Source = has ? stored!.Source.ToString() : "Default"
+                };
+            })
+            .ToList();
     }
 
     private int ResolveFewShotChars(bool questionOnly)
@@ -550,39 +596,6 @@ public class CadAssistController : Controller
         }
 
         return cleaned;
-    }
-
-    private static string BuildDraftQuery(CadAssistChatRequest request)
-    {
-        var parts = new List<string>();
-
-        if (!string.IsNullOrWhiteSpace(request.Prompt))
-        {
-            parts.Add("Request: " + request.Prompt.Trim());
-        }
-
-        if (!string.IsNullOrWhiteSpace(request.DrawingType))
-        {
-            parts.Add("Drawing type: " + request.DrawingType.Trim());
-        }
-
-        foreach (var attachment in request.Attachments.Where(a => a is not null).Take(5))
-        {
-            var name = Path.GetFileName(attachment.FileName ?? string.Empty);
-
-            if (!string.IsNullOrWhiteSpace(name))
-            {
-                parts.Add("Attached file: " + name);
-            }
-
-            if (!string.IsNullOrWhiteSpace(attachment.TextContent))
-            {
-                var text = attachment.TextContent.Trim();
-                parts.Add(text.Length > 600 ? text[..600] : text);
-            }
-        }
-
-        return string.Join(Environment.NewLine, parts);
     }
 
     private static string? Limit(string? value, int max)
