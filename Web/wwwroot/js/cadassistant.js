@@ -562,6 +562,10 @@
                 textContent: null
             };
 
+            if (isBinary || ext === ".dxf") {
+                entry.file = file;
+            }
+
             if (!isText) {
                 attachments.push(entry);
                 renderAttachments();
@@ -623,6 +627,19 @@
         liveNode = null;
     }
 
+    function plainEntry(item) {
+        return {
+            fileName: item.fileName,
+            contentType: item.contentType,
+            sizeBytes: item.sizeBytes,
+            textContent: item.textContent
+        };
+    }
+
+    function isImageName(name) {
+        return /\.(png|jpe?g)$/i.test(name || "");
+    }
+
     function send(options) {
         if (busy) {
             return;
@@ -652,8 +669,13 @@
             drawingType: type || null,
             filterInstructions: filter || null,
             currentCode: includeCode && includeCode.checked && editorInput ? editorInput.value : null,
-            attachments: files
+            attachments: files.map(plainEntry)
         };
+
+        var uploadFiles = files.filter(function (f) {
+            return f.file && (isImageName(f.fileName) || /\.dxf$/i.test(f.fileName || ""));
+        });
+        var useUpload = !!urls.upload && uploadFiles.some(function (f) { return isImageName(f.fileName); });
 
         addUser(prompt || "Attached files", files.map(function (f) { return f.fileName; }));
 
@@ -669,7 +691,34 @@
         startLive(files.some(function (f) { return /\.(png|jpe?g)$/i.test(f.fileName || ""); }));
         controller = new AbortController();
 
-        postJson(urls.chat, payload, controller.signal)
+        var request;
+
+        if (useUpload) {
+            var form = new FormData();
+
+            uploadFiles.forEach(function (f) { form.append("files", f.file, f.fileName); });
+            form.append("projectId", String(projectId));
+
+            if (sessionId) {
+                form.append("sessionId", sessionId);
+            }
+
+            form.append("prompt", prompt);
+
+            if (type) {
+                form.append("drawingType", type);
+            }
+
+            if (payload.currentCode) {
+                form.append("currentCode", payload.currentCode);
+            }
+
+            request = postForm(urls.upload, form, controller.signal);
+        } else {
+            request = postJson(urls.chat, payload, controller.signal);
+        }
+
+        request
             .then(function (response) {
                 return response.json().then(
                     function (data) { return data; },
@@ -685,6 +734,10 @@
 
                 if (data && data.success && data.message) {
                     addAssistant(data.message);
+
+                    if (data.warnings && data.warnings.length > 0) {
+                        addNote(data.warnings.join(" "));
+                    }
                 } else {
                     addError((data && data.error) || "The server could not answer this request.");
                     checkStatus();
@@ -906,6 +959,10 @@
             sizeBytes: file.size,
             textContent: null
         };
+
+        if (BINARY_EXTENSIONS.indexOf(ext) !== -1 || ext === ".dxf") {
+            entry.file = file;
+        }
 
         if (ext !== ".dxf" || file.size > maxBytes) {
             done(entry);

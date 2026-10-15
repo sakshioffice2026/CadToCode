@@ -91,6 +91,10 @@ public sealed class NativeVisionService : IVisionInspectionService, IDisposable
             if (result is null)
             {
                 _logger.LogWarning("Vision output rejected: {Error}", error);
+                _logger.LogWarning(
+                    "Vision raw output ({Length} chars): {Raw}",
+                    raw?.Length ?? 0,
+                    raw is null ? string.Empty : (raw.Length > 1200 ? raw[..1200] : raw));
                 return null;
             }
 
@@ -263,9 +267,12 @@ public sealed class NativeVisionService : IVisionInspectionService, IDisposable
         }
         catch (Exception)
         {
-            var merged = new LLamaTemplate(weights) { AddAssistant = true };
-            merged.Add("user", marker + "\n" + VisionPromptTemplates.SystemPrompt + " " + VisionPromptTemplates.BuildUserPrompt(userHint));
-            return Encoding.UTF8.GetString(merged.Apply());
+            return marker
+                + "\n\nQuestion: "
+                + VisionPromptTemplates.SystemPrompt
+                + " "
+                + VisionPromptTemplates.BuildUserPrompt(userHint)
+                + "\n\nAnswer:";
         }
     }
 

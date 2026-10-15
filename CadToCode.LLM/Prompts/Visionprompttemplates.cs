@@ -50,18 +50,20 @@ public static class VisionPromptTemplates
     }
 
     public const string JsonGrammar = """"
-root ::= "{" ws "\"equipmentType\"" ws ":" ws string "," ws "\"summary\"" ws ":" ws string "," ws "\"views\"" ws ":" ws viewlist "," ws "\"components\"" ws ":" ws componentlist "," ws "\"dimensions\"" ws ":" ws dimensionlist "," ws "\"uncertainties\"" ws ":" ws strlist ws "}"
-view ::= "{" ws "\"name\"" ws ":" ws string "," ws "\"description\"" ws ":" ws string ws "}"
-viewlist ::= "[" ws (view ("," ws view)*)? ws "]"
-component ::= "{" ws "\"name\"" ws ":" ws string "," ws "\"description\"" ws ":" ws string "," ws "\"quantity\"" ws ":" ws int "," ws "\"view\"" ws ":" ws string ws "}"
-componentlist ::= "[" ws (component ("," ws component)*)? ws "]"
-dimension ::= "{" ws "\"label\"" ws ":" ws string "," ws "\"value\"" ws ":" ws number "," ws "\"unit\"" ws ":" ws unit "," ws "\"component\"" ws ":" ws string "," ws "\"view\"" ws ":" ws string "," ws "\"evidence\"" ws ":" ws string ws "}"
-dimensionlist ::= "[" ws (dimension ("," ws dimension)*)? ws "]"
-strlist ::= "[" ws (string ("," ws string)*)? ws "]"
+root ::= "{" ws "\"equipmentType\"" ws ":" ws short "," ws "\"summary\"" ws ":" ws text "," ws "\"views\"" ws ":" ws viewlist "," ws "\"components\"" ws ":" ws componentlist "," ws "\"dimensions\"" ws ":" ws dimensionlist "," ws "\"uncertainties\"" ws ":" ws strlist ws "}"
+view ::= "{" ws "\"name\"" ws ":" ws short "," ws "\"description\"" ws ":" ws text ws "}"
+viewlist ::= "[" ws (view ("," ws view){0,3})? ws "]"
+component ::= "{" ws "\"name\"" ws ":" ws short "," ws "\"description\"" ws ":" ws text "," ws "\"quantity\"" ws ":" ws int "," ws "\"view\"" ws ":" ws short ws "}"
+componentlist ::= "[" ws (component ("," ws component){0,11})? ws "]"
+dimension ::= "{" ws "\"label\"" ws ":" ws short "," ws "\"value\"" ws ":" ws number "," ws "\"unit\"" ws ":" ws unit "," ws "\"component\"" ws ":" ws short "," ws "\"view\"" ws ":" ws short "," ws "\"evidence\"" ws ":" ws short ws "}"
+dimensionlist ::= "[" ws (dimension ("," ws dimension){0,14})? ws "]"
+strlist ::= "[" ws (text ("," ws text){0,3})? ws "]"
 unit ::= "\"mm\"" | "\"cm\"" | "\"m\"" | "\"in\"" | "\"deg\"" | "\"count\""
 int ::= [0-9]{1,4}
 number ::= "-"? ([0-9] | [1-9] [0-9]{0,8}) ("." [0-9]{1,4})?
-string ::= "\"" ([^"\\\x7F\x00-\x1F] | "\\" ["\\bfnrt])* "\""
+char ::= [^"\\\x7F\x00-\x1F] | "\\" ["\\bfnrt]
+short ::= "\"" char{0,40} "\""
+text ::= "\"" char{0,100} "\""
 ws ::= | " " | "\n" [ \t]{0,20}
 """";
 }
