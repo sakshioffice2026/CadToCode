@@ -25,6 +25,7 @@ public class CadAssistController : Controller
     private const int MaxFileNameChars = 120;
     private const int MaxFieldChars = 400;
     private const int MaxTemplateChars = 3000;
+    private const int MaxCatalogChars = 1200;
     private const int MinGeometryChars = 1200;
     private const int MaxMatchTextChars = 2000;
     private const long MaxUploadBytes = 52_428_800;
@@ -202,6 +203,31 @@ public class CadAssistController : Controller
                 geometryChars,
                 match,
                 fewShotChars);
+
+            if (questionOnly)
+            {
+                var catalogMatch = await _templateMatcher.MatchAsync(
+                    project, tree, request.Prompt, request.DrawingType, attachments, cancellationToken);
+
+                var catalog = GeometryContextBuilder.BuildParameterCatalogSection(catalogMatch, MaxCatalogChars);
+
+                if (catalog.Length > 0)
+                {
+                    geometryContext = geometryContext + Environment.NewLine + Environment.NewLine + catalog;
+                }
+            }
+        }
+        else if (questionOnly)
+        {
+            var catalogMatch = await _templateMatcher.MatchAsync(
+                null, null, request.Prompt, request.DrawingType, attachments, cancellationToken);
+
+            var catalog = GeometryContextBuilder.BuildParameterCatalogSection(catalogMatch, MaxCatalogChars);
+
+            if (catalog.Length > 0)
+            {
+                geometryContext = geometryContext + Environment.NewLine + Environment.NewLine + catalog;
+            }
         }
         else if (fewShotChars > 0)
         {

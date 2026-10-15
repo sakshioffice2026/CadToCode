@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using System.Text;
 using CadToCode.LLM.Prompts;
+using CadToCode.LLM.Templates;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 
@@ -227,6 +228,44 @@ public static class GeometryContextBuilder
 
         var result = sb.ToString();
         return result.Length > Math.Max(400, maxChars) ? result[..Math.Max(400, maxChars)] : result;
+    }
+
+    public static string BuildParameterCatalogSection(CadTemplateMatch? match, int maxChars)
+    {
+        if (match is null || maxChars < 200)
+        {
+            return string.Empty;
+        }
+
+        var template = BuiltInCadTemplates.All.FirstOrDefault(t =>
+            string.Equals(t.Title, match.Title, StringComparison.OrdinalIgnoreCase));
+
+        var schema = template is null ? null : TemplateParameterCatalog.Find(template.Key);
+
+        if (schema is null)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Matched template: " + Clean(schema.Title, 60));
+        sb.AppendLine("Template parameter catalog (names, units, defaults and allowed ranges are final; use these exact names):");
+
+        foreach (var p in schema.Parameters)
+        {
+            sb.AppendLine("- " + Clean(p.Key, 40) + " (" + Clean(p.Label, 40) + "), unit " + Clean(p.Unit, 10)
+                + ", default " + Num(p.Default) + ", range " + Num(p.Min) + " to " + Num(p.Max)
+                + (p.IsInteger ? ", whole number" : string.Empty));
+        }
+
+        if (schema.Components.Count > 0)
+        {
+            sb.AppendLine("Components: " + string.Join(", ", schema.Components.Select(c => Clean(c.Title, 40))));
+        }
+
+        var text = sb.ToString();
+        return text.Length > maxChars ? text[..maxChars] : text;
     }
 
     public static string BuildTemplatesSection(IReadOnlyList<VectorSearchHit>? templates, int maxChars)

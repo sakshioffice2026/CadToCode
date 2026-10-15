@@ -21,6 +21,8 @@ public static class CadAssistReplyBuilder
         text.AppendLine("I do not have a drawing to work from yet.");
         text.AppendLine();
         text.AppendLine("Upload a DXF or an image/blueprint and I will match it to a template, list its components, and ask you for the dimensions I need. I will not guess dimensions from an image.");
+        text.AppendLine();
+        text.AppendLine("New to the equipment? Ask me first, for example `What is an axial fan?`, and I will explain what it is, where it is used, its key components and the parameters that define it.");
 
         return Message(text.ToString(), "needs-upload");
     }
@@ -246,7 +248,7 @@ public static class CadAssistReplyBuilder
         if (schema is not null)
         {
             text.AppendLine();
-            text.AppendLine("Parameters for the " + schema.Title + " template:");
+            text.AppendLine("No problem. These are the parameters the " + schema.Title + " template understands:");
             text.AppendLine();
             AppendParameterTable(text, schema.Parameters);
         }
@@ -338,7 +340,15 @@ public static class CadAssistReplyBuilder
 
         text.AppendLine("`" + (sample.Count > 0 ? string.Join(", ", sample) : "Radius 600") + "`");
         text.AppendLine();
-        text.AppendLine("Or reply **use defaults** to accept every default value shown above.");
+        text.AppendLine("Or reply **use defaults** to accept every default value shown above. Defaults are only starting values, so confirm them against your customer's datasheet or design requirements.");
+
+        var first = missing.FirstOrDefault();
+
+        if (first is not null)
+        {
+            text.AppendLine();
+            text.AppendLine("Not sure what a dimension means or what a sensible value is? Ask me, for example `what is " + first.Label + "?`, and I will explain it in plain words.");
+        }
     }
 
     private static void AppendScopeChoice(StringBuilder text, CadAssistSessionState state, TemplateParameterSchema schema)
