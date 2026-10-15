@@ -7,6 +7,7 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<ProjectReference Include="..\CadToCode.Core\CadToCode.Core.csproj" />
 		<ProjectReference Include="..\CadToCode.Database\CadToCode.Database.csproj" />
 		<ProjectReference Include="..\CadToCode.Models\CadToCode.Models.csproj" />
 	</ItemGroup>
