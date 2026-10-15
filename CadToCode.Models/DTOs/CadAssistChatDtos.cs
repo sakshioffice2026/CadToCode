@@ -43,6 +43,24 @@ public class CadAssistActionDto
     public string? TargetCodeBlockId { get; set; }
 }
 
+public class CadAssistComponentDto
+{
+    public string Label { get; set; } = string.Empty;
+    public string? MappedComponent { get; set; }
+}
+
+public class CadAssistParameterDto
+{
+    public string Key { get; set; } = string.Empty;
+    public string Label { get; set; } = string.Empty;
+    public string Unit { get; set; } = "mm";
+    public double Default { get; set; }
+    public double Min { get; set; }
+    public double Max { get; set; }
+    public double? Value { get; set; }
+    public string Source { get; set; } = "Default";
+}
+
 public class CadAssistMessageDto
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -52,9 +70,13 @@ public class CadAssistMessageDto
     public string? Status { get; set; }
     public string? Model { get; set; }
     public long ElapsedMs { get; set; }
+    public string? Stage { get; set; }
+    public string? TemplateTitle { get; set; }
     public List<string> Attachments { get; set; } = new();
     public List<CadAssistCodeBlockDto> CodeBlocks { get; set; } = new();
     public List<CadAssistActionDto> Actions { get; set; } = new();
+    public List<CadAssistComponentDto> Breakdown { get; set; } = new();
+    public List<CadAssistParameterDto> Parameters { get; set; } = new();
 
     [JsonIgnore]
     public string? ModelContent { get; set; }
@@ -78,6 +100,7 @@ public class CadAssistChatResponse
     public CadAssistMessageDto? Message { get; set; }
     public string? Error { get; set; }
     public string? Model { get; set; }
+    public string? Stage { get; set; }
     public long ElapsedMs { get; set; }
 }
 
