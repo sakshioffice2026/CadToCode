@@ -623,3 +623,4 @@ public static class GeometryContextBuilder
         return text.Length > max ? text[..max] : text;
     }
 }
+
