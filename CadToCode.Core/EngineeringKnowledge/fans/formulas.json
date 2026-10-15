@@ -1,0 +1,227 @@
+{
+  "meta": {
+    "schemaVersion": "1.0.0",
+    "equipment": "AxialFan",
+    "unitSystem": "SI",
+    "status": "PENDING_ENGINEERING_REVIEW",
+    "note": "Reference formulas for retrieval only. Numeric design values are computed by the deterministic C# calculators and design-rules.json, never from this file."
+  },
+  "geometry": [
+    {
+      "id": "FAN-GEO-001",
+      "name": "Annulus flow area",
+      "expression": "A = (pi / 4) * (D_tip^2 - D_hub^2)",
+      "variables": {
+        "A": "annulus flow area, m2",
+        "D_tip": "tip (casing) diameter, m",
+        "D_hub": "hub diameter, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-GEO-002",
+      "name": "Hub-tip ratio",
+      "expression": "nu = D_hub / D_tip",
+      "variables": {
+        "nu": "hub-tip ratio, dimensionless",
+        "D_hub": "hub diameter, m",
+        "D_tip": "tip diameter, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "kinematics": [
+    {
+      "id": "FAN-KIN-001",
+      "name": "Axial velocity",
+      "expression": "c_a = Q / A",
+      "variables": {
+        "c_a": "mean axial velocity, m/s",
+        "Q": "volumetric flow rate, m3/s",
+        "A": "annulus flow area, m2"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-KIN-002",
+      "name": "Tip speed",
+      "expression": "u_t = pi * D_tip * N / 60",
+      "variables": {
+        "u_t": "blade tip speed, m/s",
+        "D_tip": "tip diameter, m",
+        "N": "rotational speed, rpm"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-KIN-003",
+      "name": "Mean-radius blade speed",
+      "expression": "u_m = pi * D_m * N / 60, D_m = (D_tip + D_hub) / 2",
+      "variables": {
+        "u_m": "blade speed at mean radius, m/s",
+        "D_m": "mean diameter, m",
+        "N": "rotational speed, rpm"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "pressure": [
+    {
+      "id": "FAN-PRS-001",
+      "name": "Dynamic pressure",
+      "expression": "p_d = 0.5 * rho * c^2",
+      "variables": {
+        "p_d": "dynamic pressure, Pa",
+        "rho": "gas density, kg/m3",
+        "c": "gas velocity, m/s"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-PRS-002",
+      "name": "Fan total pressure rise",
+      "expression": "dp_t = dp_s + 0.5 * rho * c_a^2",
+      "variables": {
+        "dp_t": "fan total pressure rise, Pa",
+        "dp_s": "fan static pressure rise, Pa",
+        "rho": "gas density, kg/m3",
+        "c_a": "outlet axial velocity, m/s"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-PRS-003",
+      "name": "Euler pressure rise (ideal)",
+      "expression": "dp_th = rho * u_m * (c_u2 - c_u1)",
+      "variables": {
+        "dp_th": "theoretical pressure rise, Pa",
+        "rho": "gas density, kg/m3",
+        "u_m": "blade speed at mean radius, m/s",
+        "c_u1": "inlet swirl velocity, m/s",
+        "c_u2": "outlet swirl velocity, m/s"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "coefficients": [
+    {
+      "id": "FAN-CFT-001",
+      "name": "Flow coefficient",
+      "expression": "phi = c_a / u_t",
+      "variables": {
+        "phi": "flow coefficient, dimensionless",
+        "c_a": "axial velocity, m/s",
+        "u_t": "tip speed, m/s"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-CFT-002",
+      "name": "Total pressure coefficient",
+      "expression": "psi_t = 2 * dp_t / (rho * u_t^2)",
+      "variables": {
+        "psi_t": "total pressure coefficient, dimensionless",
+        "dp_t": "total pressure rise, Pa",
+        "rho": "gas density, kg/m3",
+        "u_t": "tip speed, m/s"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-CFT-003",
+      "name": "Specific speed (dimensional form)",
+      "expression": "n_s = N * Q^0.5 / dp_t^0.75",
+      "variables": {
+        "n_s": "specific speed, dimensional",
+        "N": "rotational speed, rpm",
+        "Q": "volumetric flow rate, m3/s",
+        "dp_t": "total pressure rise, Pa"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "power": [
+    {
+      "id": "FAN-PWR-001",
+      "name": "Air power",
+      "expression": "P_air = Q * dp_t",
+      "variables": {
+        "P_air": "air power, W",
+        "Q": "volumetric flow rate, m3/s",
+        "dp_t": "total pressure rise, Pa"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-PWR-002",
+      "name": "Shaft power",
+      "expression": "P_shaft = P_air / eta_t",
+      "variables": {
+        "P_shaft": "fan shaft power, W",
+        "P_air": "air power, W",
+        "eta_t": "total efficiency, dimensionless"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-PWR-003",
+      "name": "Motor input power",
+      "expression": "P_motor = P_shaft / eta_drive * (1 + margin)",
+      "variables": {
+        "P_motor": "required motor rated power, W",
+        "P_shaft": "fan shaft power, W",
+        "eta_drive": "transmission efficiency, dimensionless",
+        "margin": "motor sizing margin, dimensionless"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "fluidProperties": [
+    {
+      "id": "FAN-FLD-001",
+      "name": "Gas density (ideal gas)",
+      "expression": "rho = p / (R * T)",
+      "variables": {
+        "rho": "gas density, kg/m3",
+        "p": "absolute pressure, Pa",
+        "R": "specific gas constant, J/(kg*K); 287.05 for dry air",
+        "T": "absolute temperature, K"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "fanLaws": [
+    {
+      "id": "FAN-LAW-001",
+      "name": "Flow scaling with speed",
+      "expression": "Q2 / Q1 = N2 / N1",
+      "variables": {
+        "Q1, Q2": "volumetric flow rates, m3/s",
+        "N1, N2": "rotational speeds, rpm"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-LAW-002",
+      "name": "Pressure scaling with speed and density",
+      "expression": "dp2 / dp1 = (N2 / N1)^2 * (rho2 / rho1)",
+      "variables": {
+        "dp1, dp2": "pressure rises, Pa",
+        "N1, N2": "rotational speeds, rpm",
+        "rho1, rho2": "gas densities, kg/m3"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "FAN-LAW-003",
+      "name": "Power scaling with speed and density",
+      "expression": "P2 / P1 = (N2 / N1)^3 * (rho2 / rho1)",
+      "variables": {
+        "P1, P2": "shaft powers, W",
+        "N1, N2": "rotational speeds, rpm",
+        "rho1, rho2": "gas densities, kg/m3"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ]
+}

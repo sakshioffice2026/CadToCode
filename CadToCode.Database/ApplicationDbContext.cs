@@ -13,6 +13,7 @@ public class ApplicationDbContext : DbContext
     public DbSet<Project> Projects => Set<Project>();
     public DbSet<DrawingComponent> DrawingComponents => Set<DrawingComponent>();
     public DbSet<CadLibraryItem> CadLibraryItems => Set<CadLibraryItem>();
+    public DbSet<DesignSession> DesignSessions => Set<DesignSession>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +43,14 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(i => i.SyncStatus);
             entity.HasIndex(i => i.CreatedAt);
             entity.HasIndex(i => i.VectorPointId).IsUnique();
+        });
+
+        modelBuilder.Entity<DesignSession>(entity =>
+        {
+            entity.HasIndex(s => s.UserId);
+            entity.HasIndex(s => s.State);
+            entity.HasIndex(s => s.UpdatedAt);
+            entity.HasIndex(s => new { s.UserId, s.UpdatedAt });
         });
     }
 }
