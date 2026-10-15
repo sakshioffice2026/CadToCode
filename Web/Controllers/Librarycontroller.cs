@@ -81,7 +81,7 @@ public class LibraryController : Controller
                     new CadLibraryUploadRequestDto
                     {
                         Title = selected.Count == 1 ? (title ?? string.Empty) : string.Empty,
-                        Category = category ?? "General",
+                        Category = string.IsNullOrWhiteSpace(category) ? "General" : category.Trim(),
                         Tags = tags,
                         Description = description,
                         FileName = fileName,
