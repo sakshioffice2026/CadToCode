@@ -24,6 +24,14 @@ public sealed class DetectedComponentInfo
     public string? MappedComponentKey { get; set; }
 }
 
+public sealed class DetectedViewInfo
+{
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+}
+
+public sealed record ParameterEvidence(string VisionLabel, string Text, bool Corroborated);
+
 public sealed class CadAssistSessionState
 {
     public int ProjectId { get; set; }
@@ -37,6 +45,10 @@ public sealed class CadAssistSessionState
     public string? TemplateTitle { get; set; }
     public double MatchScore { get; set; }
     public List<DetectedComponentInfo> DetectedComponents { get; set; } = new();
+
+    public List<DetectedViewInfo> VisionViews { get; set; } = new();
+    public List<string> VisionUncertainties { get; set; } = new();
+    public Dictionary<string, ParameterEvidence> Evidence { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
     public Dictionary<string, ParameterValue> Values { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public bool DefaultsAccepted { get; set; }
@@ -76,6 +88,11 @@ public sealed class CadAssistSessionState
         var canonical = schema?.FindParameter(key)?.Key ?? key;
         Values[canonical] = new ParameterValue(value, source);
 
+        if (source != ParameterSource.ImageUnverified)
+        {
+            Evidence.Remove(canonical);
+        }
+
         if (Stage == CadAssistStage.Generated)
         {
             Stage = CadAssistStage.Refining;
@@ -84,6 +101,23 @@ public sealed class CadAssistSessionState
         {
             Stage = CadAssistStage.AwaitingParameters;
         }
+    }
+
+    public void SetVisionData(IEnumerable<DetectedViewInfo> views, IEnumerable<string> uncertainties)
+    {
+        VisionViews = views.ToList();
+        VisionUncertainties = uncertainties.ToList();
+    }
+
+    public void SetEvidence(string key, ParameterEvidence evidence)
+    {
+        var canonical = Schema?.FindParameter(key)?.Key ?? key;
+        Evidence[canonical] = evidence;
+    }
+
+    public bool IsVerified(string key)
+    {
+        return !Values.TryGetValue(key, out var value) || value.Source != ParameterSource.ImageUnverified;
     }
 
     public IReadOnlyList<TemplateParameterDefinition> MissingParameters()
@@ -206,6 +240,11 @@ public sealed class CadAssistSessionState
             DetectedComponents = DetectedComponents
                 .Select(c => new DetectedComponentInfo { Label = c.Label, MappedComponentKey = c.MappedComponentKey })
                 .ToList(),
+            VisionViews = VisionViews
+                .Select(v => new DetectedViewInfo { Name = v.Name, Description = v.Description })
+                .ToList(),
+            VisionUncertainties = VisionUncertainties.ToList(),
+            Evidence = new Dictionary<string, ParameterEvidence>(Evidence, StringComparer.OrdinalIgnoreCase),
             Values = Values.ToDictionary(
                 p => p.Key,
                 p => new ParameterValue(p.Value.Value, p.Value.Source),

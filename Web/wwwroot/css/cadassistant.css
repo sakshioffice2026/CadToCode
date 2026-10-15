@@ -4,7 +4,6 @@
 
 .ca-panel {
     --ca-width: 30rem;
-
     position: fixed;
     top: 0;
     right: 0;
@@ -24,11 +23,11 @@
     transition: transform 0.22s ease, visibility 0s linear 0.22s;
 }
 
-.ca-panel.is-open {
-    transform: translateX(0);
-    visibility: visible;
-    transition: transform 0.22s ease, visibility 0s;
-}
+    .ca-panel.is-open {
+        transform: translateX(0);
+        visibility: visible;
+        transition: transform 0.22s ease, visibility 0s;
+    }
 
 @media (min-width: 1280px) {
     body.ca-open .cc-main {
@@ -122,11 +121,11 @@
     transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
-.ca-icon-btn:hover {
-    border-color: var(--cc-line-strong, #34425f);
-    background: rgba(255, 255, 255, 0.06);
-    color: #ffffff;
-}
+    .ca-icon-btn:hover {
+        border-color: var(--cc-line-strong, #34425f);
+        background: rgba(255, 255, 255, 0.06);
+        color: #ffffff;
+    }
 
 /* ---------- Thread ---------- */
 
@@ -176,10 +175,10 @@
     transition: border-color 0.15s ease, background-color 0.15s ease;
 }
 
-.ca-suggest-btn:hover {
-    border-color: var(--cc-accent, #ff7a59);
-    background: var(--cc-accent-soft, rgba(255, 122, 89, 0.18));
-}
+    .ca-suggest-btn:hover {
+        border-color: var(--cc-accent, #ff7a59);
+        background: var(--cc-accent-soft, rgba(255, 122, 89, 0.18));
+    }
 
 /* ---------- Messages ---------- */
 
@@ -225,18 +224,18 @@
     align-items: stretch;
 }
 
-.ca-msg-note .ca-bubble {
-    max-width: 100%;
-    border-style: dashed;
-    border-color: var(--cc-line-strong, #34425f);
-    background: var(--cc-surface-sunken, #0a0e18);
-    color: var(--cc-ink-soft, #a6b3cc);
-    font-size: 0.8rem;
-}
+    .ca-msg-note .ca-bubble {
+        max-width: 100%;
+        border-style: dashed;
+        border-color: var(--cc-line-strong, #34425f);
+        background: var(--cc-surface-sunken, #0a0e18);
+        color: var(--cc-ink-soft, #a6b3cc);
+        font-size: 0.8rem;
+    }
 
-.ca-msg-note .ca-files {
-    justify-content: flex-start;
-}
+    .ca-msg-note .ca-files {
+        justify-content: flex-start;
+    }
 
 .ca-files {
     display: flex;
@@ -272,9 +271,9 @@
     cursor: pointer;
 }
 
-.ca-file-remove:hover {
-    color: var(--cc-bad, #f87171);
-}
+    .ca-file-remove:hover {
+        color: var(--cc-bad, #f87171);
+    }
 
 /* ---------- Live status ---------- */
 
@@ -318,6 +317,50 @@
     color: var(--cc-warn, #fbbf24);
 }
 
+.ca-vision {
+    max-width: 100%;
+    padding: 0.6rem 0.75rem;
+    border: 1px solid var(--cc-line, #243047);
+    border-radius: 0.65rem;
+    background: var(--cc-surface-sunken, #0a0e18);
+    font-size: 0.78rem;
+    color: var(--cc-ink-soft, #a6b3cc);
+}
+
+.ca-vision-title {
+    margin-bottom: 0.35rem;
+    color: var(--cc-ink, #e8eefb);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.ca-vision-list {
+    margin: 0;
+    padding-left: 1.1rem;
+}
+
+    .ca-vision-list li {
+        margin: 0.15rem 0;
+        overflow-wrap: anywhere;
+    }
+
+.ca-vision-warn {
+    border-color: var(--cc-warn, #fbbf24);
+}
+
+.ca-badge-unverified {
+    display: inline-block;
+    margin-bottom: 0.4rem;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--cc-warn, #fbbf24);
+    border-radius: 999px;
+    color: var(--cc-warn, #fbbf24);
+    font-size: 0.68rem;
+    letter-spacing: 0.04em;
+}
+
 .ca-meta {
     color: var(--cc-ink-faint, #6f7f9b);
     font-size: 0.7rem;
@@ -334,33 +377,33 @@
     overflow: hidden;
 }
 
-.ca-code > summary {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    padding: 0.5rem 0.75rem;
-    background: var(--cc-surface, #111827);
-    color: var(--cc-ink, #e8eefb);
-    font-size: 0.8rem;
-    letter-spacing: 0.04em;
-    cursor: pointer;
-    list-style: none;
-    user-select: none;
-}
+    .ca-code > summary {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        padding: 0.5rem 0.75rem;
+        background: var(--cc-surface, #111827);
+        color: var(--cc-ink, #e8eefb);
+        font-size: 0.8rem;
+        letter-spacing: 0.04em;
+        cursor: pointer;
+        list-style: none;
+        user-select: none;
+    }
 
-.ca-code > summary::-webkit-details-marker {
-    display: none;
-}
+        .ca-code > summary::-webkit-details-marker {
+            display: none;
+        }
 
-.ca-code > summary::before {
-    content: "\25B8";
-    color: var(--cc-accent, #ff7a59);
-    transition: transform 0.15s ease;
-}
+        .ca-code > summary::before {
+            content: "\25B8";
+            color: var(--cc-accent, #ff7a59);
+            transition: transform 0.15s ease;
+        }
 
-.ca-code[open] > summary::before {
-    transform: rotate(90deg);
-}
+    .ca-code[open] > summary::before {
+        transform: rotate(90deg);
+    }
 
 .ca-code-lines {
     margin-left: auto;
@@ -405,10 +448,10 @@
     transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
-.ca-action:hover {
-    border-color: var(--cc-cyan, #38bdf8);
-    background: var(--cc-cyan-soft, rgba(56, 189, 248, 0.12));
-}
+    .ca-action:hover {
+        border-color: var(--cc-cyan, #38bdf8);
+        background: var(--cc-cyan-soft, rgba(56, 189, 248, 0.12));
+    }
 
 .ca-action-primary {
     border-color: var(--cc-accent, #ff7a59);
@@ -417,10 +460,10 @@
     font-weight: 700;
 }
 
-.ca-action-primary:hover {
-    border-color: #d95f40;
-    background: #d95f40;
-}
+    .ca-action-primary:hover {
+        border-color: #d95f40;
+        background: #d95f40;
+    }
 
 .ca-action[disabled] {
     opacity: 0.5;
@@ -439,10 +482,10 @@
     background: rgba(17, 24, 39, 0.8);
 }
 
-.ca-composer.is-dragging {
-    outline: 2px dashed var(--cc-accent, #ff7a59);
-    outline-offset: -6px;
-}
+    .ca-composer.is-dragging {
+        outline: 2px dashed var(--cc-accent, #ff7a59);
+        outline-offset: -6px;
+    }
 
 .ca-drop {
     position: absolute;
@@ -457,9 +500,9 @@
     pointer-events: none;
 }
 
-.ca-drop[hidden] {
-    display: none;
-}
+    .ca-drop[hidden] {
+        display: none;
+    }
 
 .ca-options {
     display: grid;
@@ -480,13 +523,13 @@
     font-size: 0.82rem;
 }
 
-.ca-select:focus,
-.ca-input:focus,
-.ca-textarea:focus {
-    border-color: var(--cc-accent, #ff7a59);
-    outline: none;
-    box-shadow: 0 0 0 3px var(--cc-accent-soft, rgba(255, 122, 89, 0.18));
-}
+    .ca-select:focus,
+    .ca-input:focus,
+    .ca-textarea:focus {
+        border-color: var(--cc-accent, #ff7a59);
+        outline: none;
+        box-shadow: 0 0 0 3px var(--cc-accent-soft, rgba(255, 122, 89, 0.18));
+    }
 
 .ca-check {
     display: inline-flex;
@@ -497,9 +540,9 @@
     cursor: pointer;
 }
 
-.ca-check input {
-    accent-color: var(--cc-accent, #ff7a59);
-}
+    .ca-check input {
+        accent-color: var(--cc-accent, #ff7a59);
+    }
 
 .ca-attachments {
     display: flex;
@@ -507,9 +550,9 @@
     gap: 0.35rem;
 }
 
-.ca-attachments:empty {
-    display: none;
-}
+    .ca-attachments:empty {
+        display: none;
+    }
 
 .ca-row {
     display: flex;
@@ -540,20 +583,20 @@
     transition: background-color 0.15s ease;
 }
 
-.ca-send:hover {
-    background: #d95f40;
-}
+    .ca-send:hover {
+        background: #d95f40;
+    }
 
-.ca-send.is-stop {
-    border-color: var(--cc-bad, #f87171);
-    background: transparent;
-    color: var(--cc-bad, #f87171);
-}
+    .ca-send.is-stop {
+        border-color: var(--cc-bad, #f87171);
+        background: transparent;
+        color: var(--cc-bad, #f87171);
+    }
 
-.ca-send[disabled] {
-    opacity: 0.55;
-    cursor: not-allowed;
-}
+    .ca-send[disabled] {
+        opacity: 0.55;
+        cursor: not-allowed;
+    }
 
 .ca-hint {
     margin: 0;
@@ -587,15 +630,15 @@
     transition: border-color 0.15s ease, transform 0.15s ease;
 }
 
-.ca-launcher:hover {
-    border-color: var(--cc-accent, #ff7a59);
-    transform: translateY(-1px);
-}
+    .ca-launcher:hover {
+        border-color: var(--cc-accent, #ff7a59);
+        transform: translateY(-1px);
+    }
 
-.ca-launcher:focus-visible {
-    outline: 2px solid var(--cc-accent, #ff7a59);
-    outline-offset: 2px;
-}
+    .ca-launcher:focus-visible {
+        outline: 2px solid var(--cc-accent, #ff7a59);
+        outline-offset: 2px;
+    }
 
 .ca-launcher-icon {
     display: grid;

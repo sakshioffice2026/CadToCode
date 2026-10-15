@@ -2,8 +2,11 @@
 using System.Text;
 using System.Text.RegularExpressions;
 using CadToCode.LLM.Interfaces;
+using CadToCode.LLM.Vision;
 using CadToCode.Models.Dtos;
+using CadToCode.Models.Options;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace CadToCode.Business.Services;
 
@@ -58,6 +61,10 @@ public sealed class DrawingProcessingResult
 
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
+    public VisionInspectionResult? Vision { get; init; }
+
+    public string? OcrText { get; init; }
+
     public bool HasUsableData => Success && Mode != DrawingProcessingMode.None && ContextText.Length > 0;
 }
 
@@ -103,17 +110,26 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
     private readonly IDxfGeometryParser _dxfParser;
     private readonly IBlueprintOcrService _ocr;
     private readonly ICadTemplateMatcher _qdrantService;
+    private readonly IImageOptimizer _imageOptimizer;
+    private readonly IVisionInspectionService _vision;
+    private readonly VisionOptions _visionOptions;
     private readonly ILogger<DrawingProcessingService> _logger;
 
     public DrawingProcessingService(
         IDxfGeometryParser dxfParser,
         IBlueprintOcrService ocr,
         ICadTemplateMatcher qdrantService,
+        IImageOptimizer imageOptimizer,
+        IVisionInspectionService vision,
+        IOptions<VisionOptions> visionOptions,
         ILogger<DrawingProcessingService> logger)
     {
         _dxfParser = dxfParser;
         _ocr = ocr;
         _qdrantService = qdrantService;
+        _imageOptimizer = imageOptimizer;
+        _vision = vision;
+        _visionOptions = visionOptions.Value;
         _logger = logger;
     }
 
@@ -255,10 +271,16 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
         CancellationToken cancellationToken)
     {
         BlueprintOcrResult ocr;
+        byte[] imageBytes;
 
         try
         {
-            ocr = await _ocr.AnalyzeAsync(stream, cancellationToken).ConfigureAwait(false);
+            using var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, cancellationToken).ConfigureAwait(false);
+            imageBytes = buffer.ToArray();
+
+            using var ocrStream = new MemoryStream(imageBytes, writable: false);
+            ocr = await _ocr.AnalyzeAsync(ocrStream, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -279,12 +301,15 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
 
         var warnings = new List<string>(ocr.Warnings);
 
+        var vision = await TryInspectWithVisionAsync(imageBytes, userPrompt, fileName, warnings, cancellationToken)
+            .ConfigureAwait(false);
+
         CadTemplateMatch? match = null;
 
         try
         {
             match = await _qdrantService
-                .MatchAsync(null, null, BuildMatchPrompt(userPrompt, ocr), null, null, cancellationToken)
+                .MatchAsync(null, null, BuildMatchPrompt(userPrompt, ocr, vision), null, null, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
@@ -320,7 +345,7 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
             warnings.Add("No verified template matched this drawing; the model must not invent geometry.");
         }
 
-        if (match is null && !ocr.HasDimensions)
+        if (match is null && !ocr.HasDimensions && vision is null)
         {
             return new DrawingProcessingResult
             {
@@ -337,6 +362,7 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
         var parameterTable = ocr.ToParameterTable();
 
         var context = BuildImageContext(fileName, userPrompt, mode, parameterTable, match, injected, injections, limit, warnings);
+        context = AppendVisionContext(context, vision, limit);
 
         return new DrawingProcessingResult
         {
@@ -353,8 +379,122 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
             TemplateScript = match?.Script,
             InjectedScript = injected,
             Injections = injections,
-            Warnings = warnings
+            Warnings = warnings,
+            Vision = vision,
+            OcrText = string.Join("\n", ocr.RawLines)
         };
+    }
+
+    private async Task<VisionInspectionResult?> TryInspectWithVisionAsync(
+        byte[] imageBytes,
+        string? userPrompt,
+        string fileName,
+        List<string> warnings,
+        CancellationToken cancellationToken)
+    {
+        if (!_visionOptions.Enabled)
+        {
+            return null;
+        }
+
+        if (!_vision.IsAvailable)
+        {
+            warnings.Add("The vision model is not available, so only OCR was used for this image.");
+            return null;
+        }
+
+        var optimized = _imageOptimizer.Optimize(imageBytes);
+
+        if (optimized is null)
+        {
+            warnings.Add("The image could not be prepared for the vision model, so only OCR was used.");
+            return null;
+        }
+
+        try
+        {
+            var result = await _vision.InspectAsync(optimized.Bytes, userPrompt, cancellationToken).ConfigureAwait(false);
+
+            if (result is null)
+            {
+                warnings.Add("The vision model could not analyse this image in time or returned unreadable output, so only OCR was used.");
+                return null;
+            }
+
+            warnings.AddRange(result.Warnings);
+            warnings.Add("Dimensions read from the image by the vision model are unverified. Please confirm each one.");
+            return result;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Vision analysis failed for {File}; falling back to OCR.", fileName);
+            warnings.Add("The vision model failed, so only OCR was used.");
+            return null;
+        }
+    }
+
+    private static string AppendVisionContext(string context, VisionInspectionResult? vision, int limit)
+    {
+        if (vision is null)
+        {
+            return context;
+        }
+
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Vision analysis (UNVERIFIED, read from the image by a model; never treat as exact):");
+
+        if (!string.IsNullOrWhiteSpace(vision.EquipmentType))
+        {
+            sb.AppendLine("- equipment: " + vision.EquipmentType);
+        }
+
+        if (!string.IsNullOrWhiteSpace(vision.Summary))
+        {
+            sb.AppendLine("- summary: " + vision.Summary);
+        }
+
+        foreach (var view in vision.Views.Take(8))
+        {
+            sb.AppendLine("- view: " + view.Name);
+        }
+
+        foreach (var component in vision.Components.Take(15))
+        {
+            sb.AppendLine("- component: " + component.Name
+                + (component.Quantity is > 0 ? " x" + component.Quantity.Value.ToString(CultureInfo.InvariantCulture) : string.Empty));
+        }
+
+        foreach (var d in vision.Dimensions.Take(25))
+        {
+            sb.AppendLine("- dimension: " + d.Label + " = " + d.Value.ToString("0.###", CultureInfo.InvariantCulture)
+                + " " + d.Unit + (string.IsNullOrWhiteSpace(d.Evidence) ? string.Empty : " (printed: " + d.Evidence + ")"));
+        }
+
+        foreach (var note in vision.Uncertainties.Take(8))
+        {
+            sb.AppendLine("- unclear: " + note);
+        }
+
+        var room = limit - context.Length - 2;
+
+        if (room < 200)
+        {
+            return context;
+        }
+
+        var text = sb.ToString();
+
+        if (text.Length > room)
+        {
+            text = text[..room];
+        }
+
+        return context + Environment.NewLine + Environment.NewLine + text;
     }
 
     private static string BuildImageContext(
@@ -428,13 +568,28 @@ public sealed class DrawingProcessingService : IDrawingProcessingService
         return text[..limit];
     }
 
-    private static string BuildMatchPrompt(string? userPrompt, BlueprintOcrResult ocr)
+    private static string BuildMatchPrompt(string? userPrompt, BlueprintOcrResult ocr, VisionInspectionResult? vision = null)
     {
         var sb = new StringBuilder();
 
         if (!string.IsNullOrWhiteSpace(userPrompt))
         {
             sb.AppendLine(userPrompt.Trim());
+        }
+
+        if (vision is not null)
+        {
+            if (!string.IsNullOrWhiteSpace(vision.EquipmentType))
+            {
+                sb.AppendLine(vision.EquipmentType);
+            }
+
+            if (!string.IsNullOrWhiteSpace(vision.Summary))
+            {
+                sb.AppendLine(vision.Summary);
+            }
+
+            sb.AppendLine(string.Join(", ", vision.Components.Take(12).Select(c => c.Name)));
         }
 
         foreach (var kind in ocr.Dimensions.Select(d => d.Kind).Where(k => k != OcrDimensionKind.Unlabeled).Distinct())

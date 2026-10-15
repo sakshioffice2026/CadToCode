@@ -49,6 +49,12 @@ public class CadAssistComponentDto
     public string? MappedComponent { get; set; }
 }
 
+public class CadAssistViewDto
+{
+    public string Name { get; set; } = string.Empty;
+    public string? Description { get; set; }
+}
+
 public class CadAssistParameterDto
 {
     public string Key { get; set; } = string.Empty;
@@ -59,6 +65,8 @@ public class CadAssistParameterDto
     public double Max { get; set; }
     public double? Value { get; set; }
     public string Source { get; set; } = "Default";
+    public string? Evidence { get; set; }
+    public bool Verified { get; set; } = true;
 }
 
 public class CadAssistMessageDto
@@ -77,6 +85,8 @@ public class CadAssistMessageDto
     public List<CadAssistActionDto> Actions { get; set; } = new();
     public List<CadAssistComponentDto> Breakdown { get; set; } = new();
     public List<CadAssistParameterDto> Parameters { get; set; } = new();
+    public List<CadAssistViewDto> Views { get; set; } = new();
+    public List<string> Uncertainties { get; set; } = new();
 
     [JsonIgnore]
     public string? ModelContent { get; set; }

@@ -32,6 +32,7 @@ builder.Services.PostConfigure<UploadOptions>(options =>
 builder.Services.Configure<ExtractionOptions>(builder.Configuration.GetSection(ExtractionOptions.SectionName));
 builder.Services.Configure<LlmOptions>(builder.Configuration.GetSection(LlmOptions.SectionName));
 builder.Services.Configure<LocalAiOptions>(builder.Configuration.GetSection(LocalAiOptions.SectionName));
+builder.Services.Configure<VisionOptions>(builder.Configuration.GetSection(VisionOptions.SectionName));
 builder.Services.Configure<QdrantOptions>(builder.Configuration.GetSection(QdrantOptions.SectionName));
 builder.Services.Configure<GeminiEmbeddingOptions>(builder.Configuration.GetSection(GeminiEmbeddingOptions.SectionName));
 
@@ -55,6 +56,8 @@ builder.Services.AddSingleton<ILLMGenerationService, LLamaGenerationService>();
 builder.Services.AddSingleton<IChatMemoryStore, ChatMemoryStore>();
 builder.Services.AddSingleton<ICadAssistSessionStore, CadAssistSessionStore>();
 builder.Services.AddSingleton<ILocalAiService, LocalAiService>();
+builder.Services.AddSingleton<IImageOptimizer, ImageOptimizer>();
+builder.Services.AddSingleton<IVisionInspectionService, NativeVisionService>();
 builder.Services.AddScoped<IAiComponentClassifier, AiComponentClassifier>();
 builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
 builder.Services.AddScoped<IDefinitionLearningService, DefinitionLearningService>();

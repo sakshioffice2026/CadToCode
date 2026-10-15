@@ -320,11 +320,54 @@
         scrollToEnd();
     }
 
+    function renderList(title, items) {
+        var box = el("div", "ca-vision");
+        box.appendChild(el("div", "ca-vision-title", title));
+
+        var list = el("ul", "ca-vision-list");
+        items.forEach(function (text) { list.appendChild(el("li", "", text)); });
+        box.appendChild(list);
+
+        return box;
+    }
+
+    function renderVision(message, wrap) {
+        var views = (message.views || []).map(function (v) {
+            return v.description ? v.name + ": " + v.description : v.name;
+        });
+
+        if (views.length > 0) {
+            wrap.appendChild(renderList("Views seen in the image", views));
+        }
+
+        var unverified = (message.parameters || []).filter(function (p) {
+            return p.verified === false && p.value !== null && p.value !== undefined;
+        });
+
+        if (unverified.length > 0) {
+            var readings = unverified.map(function (p) {
+                return p.key + " = " + p.value + " " + p.unit + (p.evidence ? " (read: " + p.evidence + ")" : "");
+            });
+
+            var box = renderList("Unverified readings from the image", readings);
+            box.classList.add("ca-vision-warn");
+            box.insertBefore(el("span", "ca-badge-unverified", "Unverified \u2013 please confirm"), box.firstChild.nextSibling);
+            wrap.appendChild(box);
+        }
+
+        var notes = message.uncertainties || [];
+
+        if (notes.length > 0) {
+            wrap.appendChild(renderList("Unclear or not used", notes));
+        }
+    }
+
     function addAssistant(message) {
         hideEmpty();
 
         var wrap = el("div", "ca-msg ca-msg-assistant");
         wrap.appendChild(el("div", "ca-bubble", message.content || ""));
+        renderVision(message, wrap);
 
         var blocks = message.codeBlocks || [];
         var actions = message.actions || [];
@@ -544,8 +587,11 @@
         sendButton.classList.toggle("is-stop", state);
     }
 
-    function startLive() {
+    function startLive(analysingImage) {
         var started = Date.now();
+        var working = analysingImage
+            ? "Analysing image with the local vision model\u2026 "
+            : "Thinking on your local model\u2026 ";
 
         liveNode = el("div", "ca-msg ca-msg-assistant");
         var row = el("div", "ca-live");
@@ -560,7 +606,7 @@
             var seconds = Math.floor((Date.now() - started) / 1000);
             label.textContent = seconds < 2
                 ? "Reading drawing data\u2026"
-                : "Thinking on your local model\u2026 " + seconds + " s";
+                : working + seconds + " s";
         }, 500);
     }
 
@@ -620,7 +666,7 @@
         }
 
         setBusy(true);
-        startLive();
+        startLive(files.some(function (f) { return /\.(png|jpe?g)$/i.test(f.fileName || ""); }));
         controller = new AbortController();
 
         postJson(urls.chat, payload, controller.signal)

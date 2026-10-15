@@ -48,14 +48,24 @@ public static class CadAssistReplyBuilder
 
         if (state.SourceIsImage)
         {
+            AppendVisionBreakdown(text, state);
+
             text.AppendLine();
-            text.AppendLine("This is an image, so I have not taken any dimensions from it. Every value below must come from you or from the defaults.");
+            text.AppendLine(state.Evidence.Count > 0
+                ? "I read some dimensions from the image. They are **unverified estimates**, so please confirm or correct each one before I generate the STEP file."
+                : "This is an image, so I have not taken any dimensions from it. Every value below must come from you or from the defaults.");
         }
 
         text.AppendLine();
-        AppendParameterTable(text, state.MissingParameters());
+        AppendParameterTable(text, state, state.MissingParameters());
         text.AppendLine();
         AppendParameterInvitation(text, state.MissingParameters());
+
+        if (state.Evidence.Count > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("Replying **use defaults** accepts the image readings exactly as shown, plus the defaults for everything else. To change one, send the corrected value.");
+        }
 
         var message = Message(text.ToString(), "awaiting-parameters");
         message.Actions.Add(new CadAssistActionDto
@@ -114,7 +124,7 @@ public static class CadAssistReplyBuilder
         {
             text.AppendLine("Still using defaults for " + missing.Count.ToString(CultureInfo.InvariantCulture) + " parameter(s):");
             text.AppendLine();
-            AppendParameterTable(text, missing);
+            AppendParameterTable(text, state, missing);
             text.AppendLine();
             text.AppendLine("Send more values, or reply **use defaults** to accept the rest and move on.");
 
@@ -316,6 +326,78 @@ public static class CadAssistReplyBuilder
         {
             text.AppendLine("- " + component.Title);
         }
+    }
+
+    private static void AppendParameterTable(
+        StringBuilder text,
+        CadAssistSessionState state,
+        IEnumerable<TemplateParameterDefinition> parameters)
+    {
+        var list = parameters.ToList();
+
+        if (state.Evidence.Count == 0)
+        {
+            AppendParameterTable(text, list);
+            return;
+        }
+
+        text.AppendLine("| Parameter | Meaning | Default | Read from image (unverified) | Allowed range |");
+        text.AppendLine("| --- | --- | --- | --- | --- |");
+
+        foreach (var def in list)
+        {
+            var reading = "-";
+
+            if (state.Evidence.TryGetValue(def.Key, out var evidence) && state.Values.TryGetValue(def.Key, out var value))
+            {
+                var seen = evidence.Text.Length > 0 ? "read: " + evidence.Text : evidence.VisionLabel;
+
+                reading = "**" + Format(value.Value) + " " + def.Unit + "** (" + Cell(seen)
+                          + (evidence.Corroborated ? ", OCR agrees" : string.Empty) + ")";
+            }
+
+            text.AppendLine(
+                "| `" + def.Key + "` | " + def.Label + " | " + Format(def.Default) + " " + def.Unit +
+                " | " + reading +
+                " | " + Format(def.Min) + " to " + Format(def.Max) + " " + def.Unit + " |");
+        }
+    }
+
+    private static void AppendVisionBreakdown(StringBuilder text, CadAssistSessionState state)
+    {
+        if (state.VisionViews.Count > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("**Views seen in the image**");
+            text.AppendLine();
+
+            foreach (var view in state.VisionViews)
+            {
+                text.AppendLine("- " + Cell(view.Name) +
+                                (string.IsNullOrWhiteSpace(view.Description) ? string.Empty : ": " + Cell(view.Description)));
+            }
+        }
+
+        if (state.VisionUncertainties.Count > 0)
+        {
+            text.AppendLine();
+            text.AppendLine("**Unclear or not used**");
+            text.AppendLine();
+
+            foreach (var note in state.VisionUncertainties)
+            {
+                text.AppendLine("- " + Cell(note));
+            }
+        }
+    }
+
+    private static string Cell(string? value)
+    {
+        return (value ?? string.Empty)
+            .Replace("|", "/")
+            .Replace("\r", " ")
+            .Replace("\n", " ")
+            .Trim();
     }
 
     private static void AppendParameterTable(StringBuilder text, IEnumerable<TemplateParameterDefinition> parameters)

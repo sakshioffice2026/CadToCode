@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Text;
+using CadToCode.LLM.Memory;
 using CadToCode.LLM.Prompts;
 using CadToCode.LLM.Templates;
 using CadToCode.Models.Dtos;
@@ -262,6 +263,50 @@ public static class GeometryContextBuilder
         if (schema.Components.Count > 0)
         {
             sb.AppendLine("Components: " + string.Join(", ", schema.Components.Select(c => Clean(c.Title, 40))));
+        }
+
+        var text = sb.ToString();
+        return text.Length > maxChars ? text[..maxChars] : text;
+    }
+
+    public static string BuildVisionSection(CadAssistSessionState? state, int maxChars)
+    {
+        if (state is null || !state.SourceIsImage || maxChars < 200)
+        {
+            return string.Empty;
+        }
+
+        if (state.VisionViews.Count == 0 && state.VisionUncertainties.Count == 0 && state.Evidence.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder();
+
+        sb.AppendLine("Image analysis (UNVERIFIED: read by a vision model from an image, not exact, ask the user to confirm):");
+
+        foreach (var view in state.VisionViews.Take(10))
+        {
+            sb.AppendLine("- view: " + Clean(view.Name, 60)
+                + (string.IsNullOrWhiteSpace(view.Description) ? string.Empty : " - " + Clean(view.Description, 100)));
+        }
+
+        foreach (var pair in state.Evidence.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!state.Values.TryGetValue(pair.Key, out var value))
+            {
+                continue;
+            }
+
+            var unit = state.Schema?.FindParameter(pair.Key)?.Unit ?? string.Empty;
+
+            sb.AppendLine("- unverified reading: " + Clean(pair.Key, 40) + " = " + Num(value.Value) + " " + unit
+                + (string.IsNullOrWhiteSpace(pair.Value.Text) ? string.Empty : " (printed: " + Clean(pair.Value.Text, 60) + ")"));
+        }
+
+        foreach (var note in state.VisionUncertainties.Take(8))
+        {
+            sb.AppendLine("- unclear: " + Clean(note, 120));
         }
 
         var text = sb.ToString();
@@ -623,4 +668,3 @@ public static class GeometryContextBuilder
         return text.Length > max ? text[..max] : text;
     }
 }
-

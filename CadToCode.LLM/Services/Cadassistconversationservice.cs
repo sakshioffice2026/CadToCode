@@ -3,6 +3,7 @@ using System.Text.RegularExpressions;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
 using CadToCode.LLM.Templates;
+using CadToCode.LLM.Vision;
 using CadToCode.Models.Dtos;
 
 namespace CadToCode.LLM.Services;
@@ -22,6 +23,12 @@ public sealed class CadAssistUploadInput
 
     /// <summary>Dimensions read exactly from a DXF. Ignored for images.</summary>
     public IReadOnlyDictionary<string, double>? DxfVerifiedValues { get; init; }
+
+    /// <summary>Breakdown read by the vision model from an image. Values stay unverified.</summary>
+    public VisionInspectionResult? Vision { get; init; }
+
+    /// <summary>OCR text of the image, used only to corroborate vision values.</summary>
+    public string? OcrText { get; init; }
 }
 
 public interface ICadAssistConversationService
@@ -40,6 +47,7 @@ public interface ICadAssistConversationService
 public sealed class CadAssistConversationService : ICadAssistConversationService
 {
     private const int MaxDetectedComponents = 12;
+    private const int MaxUnmappedNotes = 8;
 
     private static readonly Regex SwitchRegex = new(
         @"\b(this is|it is|it's|its|switch to|change (?:the )?template to|use (?:the )?(?:\w+ )?template|treat (?:it )?as|actually)\b",
@@ -94,6 +102,13 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             s.SourceFileName = input.FileName;
             s.SourceIsImage = input.IsImage;
 
+            if (input.IsImage && input.Vision is not null)
+            {
+                s.SetVisionData(
+                    input.Vision.Views.Select(v => new DetectedViewInfo { Name = v.Name, Description = v.Description }),
+                    input.Vision.Uncertainties.Concat(input.Vision.Warnings));
+            }
+
             if (template is null)
             {
                 s.TemplateKey = null;
@@ -116,6 +131,10 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             if (!input.IsImage)
             {
                 ApplyDxfValues(s, schema, input.DxfVerifiedValues);
+            }
+            else if (input.Vision is not null)
+            {
+                ApplyVisionValues(s, schema, input.Vision, input.OcrText);
             }
 
             if (!string.IsNullOrWhiteSpace(input.Prompt))
@@ -526,6 +545,30 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         }
     }
 
+    private static void ApplyVisionValues(
+        CadAssistSessionState s,
+        TemplateParameterSchema schema,
+        VisionInspectionResult vision,
+        string? ocrText)
+    {
+        var mapping = VisionParameterMapper.Map(schema, vision, ocrText);
+
+        foreach (var item in mapping.Mapped)
+        {
+            s.SetValue(item.Key, item.Value, ParameterSource.ImageUnverified);
+            s.SetEvidence(item.Key, new ParameterEvidence(item.VisionLabel, item.Evidence, item.Corroborated));
+        }
+
+        foreach (var item in mapping.Unmapped.Take(MaxUnmappedNotes))
+        {
+            var d = item.Dimension;
+
+            s.VisionUncertainties.Add(
+                "Not used: " + d.Label + " " + d.Value.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)
+                + " " + d.Unit + " (" + item.Reason + ")");
+        }
+    }
+
     private static List<DetectedComponentInfo> BuildDetectedComponents(CadAssistUploadInput input, TemplateParameterSchema schema)
     {
         var labels = new List<string>();
@@ -541,6 +584,11 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         }
 
         labels.AddRange(input.ComponentLabels);
+
+        if (input.Vision is not null)
+        {
+            labels.AddRange(input.Vision.Components.Select(c => c.Name));
+        }
 
         return labels
             .Where(l => !string.IsNullOrWhiteSpace(l))

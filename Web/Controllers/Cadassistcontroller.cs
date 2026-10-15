@@ -26,6 +26,9 @@ public class CadAssistController : Controller
     private const int MaxFieldChars = 400;
     private const int MaxTemplateChars = 3000;
     private const int MaxCatalogChars = 1200;
+    private const int MaxVisionChars = 1200;
+
+    private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
     private const int MinGeometryChars = 1200;
     private const int MaxMatchTextChars = 2000;
     private const long MaxUploadBytes = 52_428_800;
@@ -242,6 +245,14 @@ public class CadAssistController : Controller
             }
         }
 
+        var visionSection = GeometryContextBuilder.BuildVisionSection(
+            _sessionStore.Get(request.ProjectId, sessionId), MaxVisionChars);
+
+        if (visionSection.Length > 0)
+        {
+            geometryContext = geometryContext + Environment.NewLine + Environment.NewLine + visionSection;
+        }
+
         var generation = new LocalAiGenerationRequest
         {
             ProjectId = projectId,
@@ -343,6 +354,25 @@ public class CadAssistController : Controller
             {
                 failures.Add(fileName + ": the file is too large.");
                 continue;
+            }
+
+            var extension = Path.GetExtension(fileName).ToLowerInvariant();
+
+            if (extension is ".png" or ".jpg" or ".jpeg")
+            {
+                var header = new byte[8];
+                int headerRead;
+
+                await using (var headerStream = file.OpenReadStream())
+                {
+                    headerRead = await headerStream.ReadAsync(header.AsMemory(0, header.Length), cancellationToken);
+                }
+
+                if (!HasImageSignature(header.AsSpan(0, headerRead)))
+                {
+                    failures.Add(fileName + ": the file content is not a real PNG or JPEG image.");
+                    continue;
+                }
             }
 
             try
@@ -456,7 +486,9 @@ public class CadAssistController : Controller
                 Project = project,
                 Tree = tree,
                 Attachments = attachments,
-                DxfVerifiedValues = dxfValues
+                DxfVerifiedValues = dxfValues,
+                Vision = isImage ? primary.Vision : null,
+                OcrText = isImage ? primary.OcrText : null
             },
             cancellationToken);
 
@@ -464,6 +496,8 @@ public class CadAssistController : Controller
         message.Model = "template";
         message.ElapsedMs = started.ElapsedMilliseconds;
         Decorate(message, projectId, session);
+
+        var unverified = isImage && primary.Vision is not null;
 
         return Json(new
         {
@@ -474,6 +508,7 @@ public class CadAssistController : Controller
             stage = message.Stage,
             elapsedMs = started.ElapsedMilliseconds,
             warnings,
+            unverified,
             processing = summaries
         });
     }
@@ -506,6 +541,12 @@ public class CadAssistController : Controller
 
         message.Stage = state.Stage.ToString();
 
+        message.Views = state.VisionViews
+            .Select(v => new CadAssistViewDto { Name = v.Name, Description = v.Description })
+            .ToList();
+
+        message.Uncertainties = state.VisionUncertainties.ToList();
+
         var schema = state.Schema;
 
         if (!state.HasTemplate || schema is null)
@@ -537,10 +578,22 @@ public class CadAssistController : Controller
                     Min = p.Min,
                     Max = p.Max,
                     Value = has ? stored!.Value : null,
-                    Source = has ? stored!.Source.ToString() : "Default"
+                    Source = has ? stored!.Source.ToString() : "Default",
+                    Evidence = state.Evidence.TryGetValue(p.Key, out var evidence) ? evidence.Text : null,
+                    Verified = state.IsVerified(p.Key)
                 };
             })
             .ToList();
+    }
+
+    private static bool HasImageSignature(ReadOnlySpan<byte> header)
+    {
+        if (header.Length >= PngSignature.Length && header[..PngSignature.Length].SequenceEqual(PngSignature))
+        {
+            return true;
+        }
+
+        return header.Length >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF;
     }
 
     private int ResolveFewShotChars(bool questionOnly)
