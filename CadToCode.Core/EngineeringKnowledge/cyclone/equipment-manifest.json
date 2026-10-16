@@ -1,0 +1,231 @@
+{
+  "id": "cyclone-separator",
+  "domain": "process-equipment",
+  "displayName": "Cyclone separator",
+  "description": "Dry gas-solid cyclone separator sized from gas flow using published proportion families. Outputs are SI values; a mapper converts them to CAD template parameters.",
+  "version": "1.0.0",
+  "maxTier": "Engineered",
+  "aliases": [
+    "cyclone",
+    "cyclone separator",
+    "cyclone dust collector",
+    "dust cyclone",
+    "dedusting cyclone"
+  ],
+  "calculatorId": "Cyclone",
+  "rulePackIds": [
+    "cyclone-design-rules"
+  ],
+  "templateKeys": [
+    "builtin-cyclone-separator"
+  ],
+  "references": [
+    "Perry's Chemical Engineers' Handbook, cyclone separator design (gas-solid separation)",
+    "Stairmand, C.J., The design and performance of cyclone separators, Trans. Inst. Chem. Eng., 1951",
+    "Lapple, C.E., Processes use many collector types, Chemical Engineering, 1951"
+  ],
+  "inputs": [
+    {
+      "key": "airflow_m3s",
+      "displayName": "Gas flow",
+      "unit": "m3/s",
+      "min": 0.01,
+      "max": 100,
+      "isRequired": true,
+      "description": "Inlet gas volumetric flow rate at operating conditions.",
+      "aliases": ["gas flow", "airflow", "flow rate", "flow"]
+    },
+    {
+      "key": "inlet_velocity_ms",
+      "displayName": "Inlet velocity",
+      "unit": "m/s",
+      "min": 5,
+      "max": 40,
+      "description": "Target inlet velocity. When omitted the rulepack design velocity is used.",
+      "aliases": ["inlet velocity", "inlet speed"]
+    },
+    {
+      "key": "cut_diameter_m",
+      "displayName": "Target cut diameter",
+      "unit": "m",
+      "min": 0.000001,
+      "max": 0.0001,
+      "description": "Target d50 particle size. Used only to check the sized design, never to resize it silently.",
+      "aliases": ["cut diameter", "d50", "cut size"]
+    },
+    {
+      "key": "gas_density_kgm3",
+      "displayName": "Gas density",
+      "unit": "kg/m3",
+      "min": 0.1,
+      "max": 10,
+      "default": 1.204,
+      "description": "Gas density at operating conditions. Default is standard air at 20 C.",
+      "aliases": ["gas density", "air density"]
+    },
+    {
+      "key": "gas_viscosity_pas",
+      "displayName": "Gas viscosity",
+      "unit": "Pa.s",
+      "min": 0.000001,
+      "max": 0.001,
+      "default": 0.0000181,
+      "description": "Gas dynamic viscosity at operating conditions. Default is air at 20 C.",
+      "aliases": ["gas viscosity", "air viscosity"]
+    },
+    {
+      "key": "particle_density_kgm3",
+      "displayName": "Particle density",
+      "unit": "kg/m3",
+      "min": 100,
+      "max": 20000,
+      "description": "Solid particle density. Required to estimate the cut diameter.",
+      "aliases": ["particle density", "dust density", "solids density"]
+    },
+    {
+      "key": "wall_thickness_m",
+      "displayName": "Wall thickness",
+      "unit": "m",
+      "min": 0.001,
+      "max": 0.05,
+      "description": "Shell wall thickness. When omitted the rulepack minimum is used.",
+      "aliases": ["wall thickness", "wall", "thickness"]
+    }
+  ],
+  "outputs": [
+    {
+      "key": "barrel_diameter_m",
+      "displayName": "Barrel diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Cylindrical body inside diameter."
+    },
+    {
+      "key": "barrel_height_m",
+      "displayName": "Barrel height",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Cylindrical body height."
+    },
+    {
+      "key": "cone_height_m",
+      "displayName": "Cone height",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Conical section height."
+    },
+    {
+      "key": "dust_outlet_diameter_m",
+      "displayName": "Dust outlet diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Solids discharge diameter."
+    },
+    {
+      "key": "dust_outlet_length_m",
+      "displayName": "Dust outlet length",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Solids discharge pipe length."
+    },
+    {
+      "key": "vortex_finder_diameter_m",
+      "displayName": "Vortex finder diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Gas outlet diameter."
+    },
+    {
+      "key": "vortex_finder_depth_m",
+      "displayName": "Vortex finder insertion depth",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Depth the vortex finder extends into the body."
+    },
+    {
+      "key": "vortex_finder_height_m",
+      "displayName": "Vortex finder height above top",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Height of the vortex finder above the top plate."
+    },
+    {
+      "key": "inlet_height_m",
+      "displayName": "Inlet height",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Rectangular inlet height."
+    },
+    {
+      "key": "inlet_width_m",
+      "displayName": "Inlet width",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Rectangular inlet width."
+    },
+    {
+      "key": "inlet_length_m",
+      "displayName": "Inlet length",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Tangential inlet duct length."
+    },
+    {
+      "key": "wall_thickness_m",
+      "displayName": "Wall thickness used",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Wall thickness applied in the design."
+    },
+    {
+      "key": "inlet_velocity_used_ms",
+      "displayName": "Inlet velocity used",
+      "unit": "m/s",
+      "description": "Inlet velocity applied in the design."
+    },
+    {
+      "key": "pressure_drop_pa",
+      "displayName": "Pressure drop",
+      "unit": "Pa",
+      "description": "Estimated gas-side pressure drop."
+    },
+    {
+      "key": "d50_estimated_m",
+      "displayName": "Estimated cut diameter",
+      "unit": "m",
+      "description": "Estimated d50 for the sized design. Present only when particle density is given."
+    }
+  ],
+  "components": [
+    {
+      "key": "body",
+      "title": "Cyclone body and hopper",
+      "aliases": ["body", "shell", "hopper", "cone", "cyclone body"],
+      "parameterKeys": ["airflow_m3s", "inlet_velocity_ms", "wall_thickness_m"]
+    },
+    {
+      "key": "topplate",
+      "title": "Top plate",
+      "aliases": ["top plate", "plate", "cover", "lid"],
+      "parameterKeys": ["airflow_m3s", "wall_thickness_m"]
+    },
+    {
+      "key": "vortexfinder",
+      "title": "Vortex finder",
+      "aliases": ["vortex finder", "finder", "gas exit", "exit pipe"],
+      "parameterKeys": ["airflow_m3s", "wall_thickness_m"]
+    },
+    {
+      "key": "dustoutlet",
+      "title": "Dust outlet",
+      "aliases": ["dust outlet", "dust", "apex", "outlet pipe"],
+      "parameterKeys": ["airflow_m3s", "wall_thickness_m"]
+    },
+    {
+      "key": "inlet",
+      "title": "Tangential inlet",
+      "aliases": ["inlet", "tangential inlet", "feed"],
+      "parameterKeys": ["airflow_m3s", "inlet_velocity_ms", "wall_thickness_m"]
+    }
+  ]
+}

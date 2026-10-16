@@ -70,6 +70,7 @@ public static class TemplateParameterCatalog
         BuildPipeTee(),
         BuildFlangePlate(),
         BuildWetScrubber(),
+        BuildWetScrubberTankPump(),
         BuildCycloneSeparator()
     };
 
@@ -185,6 +186,73 @@ public static class TemplateParameterCatalog
                 if (V("InletZ") <= V("ConeHeight") || V("InletZ") >= V("ConeHeight") + V("ShellHeight"))
                 {
                     errors.Add("InletZ must lie on the cylindrical shell (between ConeHeight and ConeHeight + ShellHeight).");
+                }
+                break;
+
+            case "builtin-wet-scrubber-tank-pump":
+                if (V("Wall") * 2.0 >= V("Radius"))
+                {
+                    errors.Add("Wall is too thick for the vessel Radius.");
+                }
+                if (V("TankWall") * 2.0 >= Math.Min(V("TankLength"), V("TankWidth")))
+                {
+                    errors.Add("TankWall is too thick for the tank footprint.");
+                }
+                if (V("TankWall") >= V("TankHeight"))
+                {
+                    errors.Add("TankWall must be smaller than TankHeight.");
+                }
+                if (V("TankLength") <= V("Radius") * 2.0 || V("TankWidth") <= V("Radius") * 2.0)
+                {
+                    errors.Add("TankLength and TankWidth must exceed the vessel diameter.");
+                }
+                if (V("StackDiameter") >= V("Radius") * 2.0)
+                {
+                    errors.Add("StackDiameter must be smaller than the vessel diameter.");
+                }
+                if (V("Wall") * 2.0 >= V("StackDiameter"))
+                {
+                    errors.Add("Wall is too thick for StackDiameter.");
+                }
+                if (V("Wall") * 2.0 >= V("InletDiameter"))
+                {
+                    errors.Add("Wall is too thick for InletDiameter.");
+                }
+                if (V("InletHeight") + V("InletDiameter") / 2.0 >= V("ShellHeight"))
+                {
+                    errors.Add("InletHeight plus half of InletDiameter must stay below the top of the shell (ShellHeight).");
+                }
+                if (V("PackingOffset") + V("PackingHeight") + V("SprayGap") >= V("ShellHeight"))
+                {
+                    errors.Add("PackingOffset + PackingHeight + SprayGap must be smaller than ShellHeight.");
+                }
+                if (V("NozzleLength") > V("SprayGap"))
+                {
+                    errors.Add("NozzleLength must not exceed SprayGap.");
+                }
+                if (V("SprayWall") * 2.0 >= V("SprayDiameter"))
+                {
+                    errors.Add("SprayWall is too thick for SprayDiameter.");
+                }
+                if (V("SprayWall") * 2.0 >= V("DischargeDiameter"))
+                {
+                    errors.Add("SprayWall is too thick for DischargeDiameter.");
+                }
+                if (V("TankWall") * 2.0 >= V("DrainDiameter"))
+                {
+                    errors.Add("TankWall is too thick for DrainDiameter.");
+                }
+                if (V("DrainDiameter") >= V("TankWidth"))
+                {
+                    errors.Add("DrainDiameter must be smaller than TankWidth.");
+                }
+                if (V("TankWall") * 2.0 >= V("SuctionDiameter"))
+                {
+                    errors.Add("TankWall is too thick for SuctionDiameter.");
+                }
+                if (V("SuctionDiameter") >= V("PumpHeight") || V("DischargeDiameter") >= V("PumpHeight"))
+                {
+                    errors.Add("SuctionDiameter and DischargeDiameter must be smaller than PumpHeight.");
                 }
                 break;
 
@@ -383,6 +451,80 @@ public static class TemplateParameterCatalog
                     new[] { "Wall", "DrainDiameter", "DrainLength" }),
                 C("inlet", "Side inlet", new[] { "inlet", "side inlet", "gas inlet", "nozzle" }, new[] { "Inlet" },
                     new[] { "Radius", "Wall", "InletDiameter", "InletLength", "InletZ" })
+            }
+        };
+    }
+
+    private static TemplateParameterSchema BuildWetScrubberTankPump()
+    {
+        return new TemplateParameterSchema
+        {
+            TemplateKey = "builtin-wet-scrubber-tank-pump",
+            Title = "Wet scrubber with tank, pump and spray header",
+            Parameters = new[]
+            {
+                P("Radius", "Vessel outer radius", 600, 50, 10000, aliases: new[] { "vessel radius", "shell radius", "r" }),
+                P("Wall", "Shell wall thickness", 8, 1, 100, aliases: new[] { "thickness", "shell wall", "wall thk" }),
+                P("ShellHeight", "Cylindrical shell height", 2400, 100, 50000, aliases: new[] { "shell height", "straight height", "cylinder height", "column height" }),
+                P("TankLength", "Recirculation tank length", 2000, 200, 50000, aliases: new[] { "tank length", "sump length" }),
+                P("TankWidth", "Recirculation tank width", 1400, 200, 50000, aliases: new[] { "tank width", "sump width" }),
+                P("TankHeight", "Recirculation tank height", 800, 100, 20000, aliases: new[] { "tank height", "sump height" }),
+                P("TankWall", "Tank wall thickness", 8, 1, 100, aliases: new[] { "tank wall", "tank thickness" }),
+                P("PackingHeight", "Packing bed height", 600, 50, 20000, aliases: new[] { "packing height", "bed height" }),
+                P("PackingOffset", "Packing bed offset above tank top", 700, 50, 20000, aliases: new[] { "packing offset", "bed offset" }),
+                P("SprayGap", "Gap between packing top and spray header", 200, 20, 5000, aliases: new[] { "spray gap", "header gap" }),
+                P("SprayDiameter", "Spray header diameter", 80, 10, 1000, aliases: new[] { "spray dia", "spray header diameter", "header diameter" }),
+                P("SprayWall", "Spray header wall thickness", 4, 0.5, 50, aliases: new[] { "spray wall", "header wall" }),
+                P("NozzleLength", "Spray nozzle length", 150, 10, 2000, aliases: new[] { "nozzle length", "spray nozzle length" }),
+                P("FeedLength", "Spray header feed length beyond shell", 400, 10, 20000, aliases: new[] { "feed length", "header feed length" }),
+                P("StackDiameter", "Gas outlet stack diameter", 300, 20, 5000, aliases: new[] { "stack dia", "outlet diameter", "stack od", "stack" }),
+                P("StackHeight", "Gas outlet stack height", 400, 10, 20000, aliases: new[] { "stack height", "outlet height" }),
+                P("InletDiameter", "Side inlet diameter", 250, 20, 5000, aliases: new[] { "inlet dia", "inlet od", "inlet" }),
+                P("InletLength", "Side inlet length", 400, 10, 20000, aliases: new[] { "inlet length" }),
+                P("InletHeight", "Side inlet elevation above tank top", 250, 10, 20000, aliases: new[] { "inlet height", "inlet elevation", "inlet offset" }),
+                P("DrainDiameter", "Drain pipe diameter", 100, 10, 2000, aliases: new[] { "drain dia", "drain od", "drain" }),
+                P("DrainLength", "Drain pipe length", 250, 10, 10000, aliases: new[] { "drain length" }),
+                P("PumpRadius", "Pump casing radius", 120, 20, 2000, aliases: new[] { "pump radius", "pump casing radius" }),
+                P("PumpHeight", "Pump casing height", 250, 50, 5000, aliases: new[] { "pump height", "pump casing height" }),
+                P("PumpGap", "Gap between tank and pump", 200, 10, 5000, aliases: new[] { "pump gap", "pump spacing" }),
+                P("MotorRadius", "Motor radius", 100, 20, 2000, aliases: new[] { "motor radius" }),
+                P("MotorHeight", "Motor height", 300, 50, 5000, aliases: new[] { "motor height" }),
+                P("SuctionDiameter", "Pump suction pipe diameter", 100, 10, 1000, aliases: new[] { "suction dia", "suction diameter", "suction" }),
+                P("DischargeDiameter", "Pump discharge pipe diameter", 80, 10, 1000, aliases: new[] { "discharge dia", "discharge diameter", "discharge" }),
+                P("RiserOffset", "Discharge riser offset from pump", 150, 10, 5000, aliases: new[] { "riser offset" })
+            },
+            Components = new[]
+            {
+                C("tank", "Recirculation tank", new[] { "tank", "recirculation tank", "sump", "basin" },
+                    new[] { "TankFloor", "TankWalls", "TankRoof" },
+                    new[] { "Radius", "Wall", "TankLength", "TankWidth", "TankHeight", "TankWall" }),
+                C("shell", "Vessel shell", new[] { "shell", "vessel", "vessel shell", "column", "tower", "body" },
+                    new[] { "Shell" },
+                    new[] { "Radius", "Wall", "ShellHeight", "TankHeight", "TankWall" }),
+                C("packing", "Packing bed", new[] { "packing", "packing bed", "bed" },
+                    new[] { "PackingBed" },
+                    new[] { "Radius", "Wall", "PackingHeight", "PackingOffset", "TankHeight" }),
+                C("cover", "Top cover", new[] { "cover", "top cover", "lid", "top plate" },
+                    new[] { "TopCover" },
+                    new[] { "Radius", "Wall", "ShellHeight", "TankHeight", "StackDiameter" }),
+                C("stack", "Gas outlet stack", new[] { "stack", "outlet", "gas outlet", "chimney" },
+                    new[] { "Stack" },
+                    new[] { "Wall", "ShellHeight", "TankHeight", "StackDiameter", "StackHeight" }),
+                C("inlet", "Side inlet", new[] { "inlet", "side inlet", "gas inlet", "inlet nozzle" },
+                    new[] { "Inlet" },
+                    new[] { "Radius", "Wall", "TankHeight", "InletDiameter", "InletLength", "InletHeight" }),
+                C("drain", "Drain pipe", new[] { "drain", "drain pipe", "bottom outlet" },
+                    new[] { "Drain" },
+                    new[] { "TankLength", "TankWall", "DrainDiameter", "DrainLength" }),
+                C("spray", "Spray header and nozzles", new[] { "spray", "spray header", "spray nozzle", "spray nozzles", "header" },
+                    new[] { "SprayHeader", "SprayNozzleA", "SprayNozzleB" },
+                    new[] { "Radius", "Wall", "TankHeight", "PackingOffset", "PackingHeight", "SprayGap", "SprayDiameter", "SprayWall", "NozzleLength", "FeedLength" }),
+                C("pump", "Pump and motor", new[] { "pump", "motor", "pump and motor" },
+                    new[] { "PumpCasing", "PumpMotor" },
+                    new[] { "TankLength", "PumpGap", "PumpRadius", "PumpHeight", "MotorRadius", "MotorHeight" }),
+                C("piping", "Pump piping", new[] { "piping", "suction", "discharge", "pump piping", "riser" },
+                    new[] { "Suction", "DischargeRun", "DischargeRiser", "DischargeFeed" },
+                    new[] { "Radius", "TankHeight", "TankLength", "TankWall", "PackingOffset", "PackingHeight", "SprayGap", "SprayDiameter", "SprayWall", "FeedLength", "PumpGap", "PumpRadius", "PumpHeight", "RiserOffset", "SuctionDiameter", "DischargeDiameter" })
             }
         };
     }

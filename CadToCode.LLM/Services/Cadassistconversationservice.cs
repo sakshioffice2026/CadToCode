@@ -994,9 +994,33 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         return EquipmentType.Unknown;
     }
 
-    private static CadAssistMessageDto BuildNoMatch(string? fileName, EquipmentType equipment = EquipmentType.Unknown)
+    private static CadAssistMessageDto BuildNoMatch(
+        string? fileName,
+        EquipmentType equipment = EquipmentType.Unknown,
+        string? unrecognisedEquipment = null)
     {
         var text = new StringBuilder();
+
+        if (equipment == EquipmentType.Unknown && !string.IsNullOrWhiteSpace(unrecognisedEquipment))
+        {
+            text.AppendLine("This looks like a **" + unrecognisedEquipment + "**. There is no matching CAD template for it, "
+                            + "and I will not substitute a pipe or any other shape.");
+            text.AppendLine();
+            text.AppendLine("Tell me the equipment dimensions or pick one of the templates below and I will continue.");
+            text.AppendLine();
+
+            foreach (var template in BuiltInCadTemplates.All)
+            {
+                text.AppendLine("- " + template.Title);
+            }
+
+            return new CadAssistMessageDto
+            {
+                Role = CadAssistRole.Assistant,
+                Content = text.ToString().TrimEnd(),
+                Status = "equipment-no-template"
+            };
+        }
 
         if (equipment != EquipmentType.Unknown && EquipmentRegistry.TryGet(equipment, out var metadata))
         {
