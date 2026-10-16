@@ -5,7 +5,8 @@ namespace CadToCode.Database;
 
 public class ApplicationDbContext : DbContext
 {
-    public ApplicationDbContext(DbContextOptions<ApplicationDbContext> options)
+    public ApplicationDbContext(
+        DbContextOptions<ApplicationDbContext> options)
         : base(options)
     {
     }
@@ -31,9 +32,9 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(c => new { c.ProjectId, c.SequenceIndex });
 
             entity.HasOne(c => c.Project)
-                  .WithMany(p => p.DrawingComponents)
-                  .HasForeignKey(c => c.ProjectId)
-                  .OnDelete(DeleteBehavior.Cascade);
+                .WithMany(p => p.DrawingComponents)
+                .HasForeignKey(c => c.ProjectId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<CadLibraryItem>(entity =>

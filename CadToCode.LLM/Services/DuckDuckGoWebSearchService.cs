@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using CadToCode.Core.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
@@ -11,21 +12,13 @@ public sealed class DuckDuckGoOptions
     public const string SectionName = "DuckDuckGoOptions";
 
     public bool Enabled { get; set; } = true;
-
-    public string BaseUrl { get; set; } = "https://api.duckduckgo.com";
-
+    public string BaseUrl { get; set; } =
+        "https://api.duckduckgo.com/";
     public int MaxResults { get; set; } = 5;
-
     public int MaxSnippetChars { get; set; } = 600;
-
     public int TimeoutSeconds { get; set; } = 15;
 }
 
-/// <summary>
-/// Key-less advisory web search using the DuckDuckGo Instant Answer API.
-/// Coverage is limited to abstracts and related topics; results never feed
-/// deterministic calculations.
-/// </summary>
 public sealed class DuckDuckGoWebSearchService : IWebSearchService
 {
     private readonly HttpClient _http;
@@ -38,118 +31,233 @@ public sealed class DuckDuckGoWebSearchService : IWebSearchService
         ILogger<DuckDuckGoWebSearchService> logger)
     {
         _http = http ?? throw new ArgumentNullException(nameof(http));
-        _options = options?.Value ?? throw new ArgumentNullException(nameof(options));
+        _options = options?.Value
+            ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _http.Timeout = TimeSpan.FromSeconds(Math.Max(5, _options.TimeoutSeconds));
+
+        _http.Timeout = TimeSpan.FromSeconds(
+            Math.Clamp(_options.TimeoutSeconds, 5, 120));
     }
 
-    public bool IsConfigured => _options.Enabled;
+    public string ProviderName => "DuckDuckGo";
 
-    public async Task<IReadOnlyList<WebSearchResult>> SearchAsync(
-        string query,
-        int maxResults = 5,
+    public bool IsAvailable =>
+        _options.Enabled &&
+        Uri.TryCreate(_options.BaseUrl, UriKind.Absolute, out var uri) &&
+        (uri.Scheme == Uri.UriSchemeHttps ||
+         uri.Scheme == Uri.UriSchemeHttp);
+
+    public async Task<WebSearchResult> SearchAsync(
+        WebSearchRequest request,
         CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(query) || !IsConfigured)
-            return Array.Empty<WebSearchResult>();
+        ArgumentNullException.ThrowIfNull(request);
 
-        var limit = Math.Clamp(maxResults <= 0 ? _options.MaxResults : maxResults, 1, 20);
-        var url = $"{_options.BaseUrl.TrimEnd('/')}/?q={Uri.EscapeDataString(query.Trim())}" +
-                  "&format=json&no_html=1&skip_disambig=1&no_redirect=1";
+        if (!IsAvailable)
+        {
+            return WebSearchResult.Failure(
+                request.Query,
+                ProviderName,
+                "DuckDuckGo search is not configured.");
+        }
+
+        var endpoint = BuildEndpoint(request.Query);
 
         try
         {
-            using var response = await _http.GetAsync(url, cancellationToken).ConfigureAwait(false);
+            using var response = await _http.GetAsync(
+                endpoint, cancellationToken).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogWarning("DuckDuckGo web search failed with HTTP {Status}.", (int)response.StatusCode);
-                return Array.Empty<WebSearchResult>();
+                _logger.LogWarning(
+                    "DuckDuckGo search failed with HTTP {Status}.",
+                    (int)response.StatusCode);
+
+                return WebSearchResult.Failure(
+                    request.Query,
+                    ProviderName,
+                    $"DuckDuckGo returned HTTP {(int)response.StatusCode}.");
             }
 
             var payload = await response.Content
-                .ReadFromJsonAsync<DuckDuckGoResponse>(cancellationToken: cancellationToken)
+                .ReadFromJsonAsync<DuckDuckGoResponse>(
+                    cancellationToken: cancellationToken)
                 .ConfigureAwait(false);
 
-            if (payload is null)
-                return Array.Empty<WebSearchResult>();
+            var snippets = new List<WebSearchSnippet>();
+            var limit = Math.Clamp(
+                Math.Min(request.MaxResults, Math.Max(1, _options.MaxResults)),
+                1,
+                WebSearchRequest.MaxAllowedResults);
 
-            var results = new List<WebSearchResult>();
-
-            if (!string.IsNullOrWhiteSpace(payload.AbstractText) && !string.IsNullOrWhiteSpace(payload.AbstractUrl))
+            if (payload is not null)
             {
-                results.Add(new WebSearchResult(
-                    Title: string.IsNullOrWhiteSpace(payload.Heading) ? payload.AbstractUrl! : payload.Heading!,
-                    Url: payload.AbstractUrl!,
-                    Snippet: Truncate(payload.AbstractText, _options.MaxSnippetChars)));
+                AddResult(
+                    payload.AbstractText,
+                    payload.AbstractURL,
+                    payload.Heading,
+                    request,
+                    snippets,
+                    limit);
+
+                AddTopics(
+                    payload.RelatedTopics,
+                    request,
+                    snippets,
+                    limit);
             }
 
-            foreach (var topic in Flatten(payload.RelatedTopics))
-            {
-                if (results.Count >= limit)
-                    break;
-
-                if (string.IsNullOrWhiteSpace(topic.FirstUrl) || string.IsNullOrWhiteSpace(topic.Text))
-                    continue;
-
-                results.Add(new WebSearchResult(
-                    Title: ExtractTitle(topic.Text!),
-                    Url: topic.FirstUrl!,
-                    Snippet: Truncate(topic.Text, _options.MaxSnippetChars)));
-            }
-
-            return results.Take(limit).ToList();
+            return snippets.Count == 0
+                ? WebSearchResult.Empty(request.Query, ProviderName)
+                : WebSearchResult.Success(
+                    request.Query, ProviderName, snippets);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning("DuckDuckGo web search timed out.");
-            return Array.Empty<WebSearchResult>();
+            _logger.LogWarning("DuckDuckGo search timed out.");
+
+            return WebSearchResult.Failure(
+                request.Query,
+                ProviderName,
+                "DuckDuckGo request timed out.");
         }
         catch (HttpRequestException ex)
         {
-            _logger.LogWarning(ex, "DuckDuckGo web search request failed.");
-            return Array.Empty<WebSearchResult>();
+            _logger.LogWarning(ex, "DuckDuckGo search request failed.");
+
+            return WebSearchResult.Failure(
+                request.Query,
+                ProviderName,
+                "DuckDuckGo network request failed.");
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "DuckDuckGo web search returned an unreadable response.");
-            return Array.Empty<WebSearchResult>();
+            _logger.LogWarning(
+                ex, "DuckDuckGo returned an unreadable response.");
+
+            return WebSearchResult.Failure(
+                request.Query,
+                ProviderName,
+                "DuckDuckGo returned an unreadable response.");
         }
     }
 
-    private static IEnumerable<DuckDuckGoTopic> Flatten(List<DuckDuckGoTopic>? topics)
+    private string BuildEndpoint(string query)
+    {
+        var separator = _options.BaseUrl.Contains('?') ? "&" : "?";
+
+        return $"{_options.BaseUrl}{separator}" +
+               $"q={Uri.EscapeDataString(query)}&format=json" +
+               "&no_html=1&skip_disambig=1";
+    }
+
+    private void AddTopics(
+        IEnumerable<DuckDuckGoTopic>? topics,
+        WebSearchRequest request,
+        List<WebSearchSnippet> snippets,
+        int limit)
     {
         if (topics is null)
-            yield break;
+        {
+            return;
+        }
 
         foreach (var topic in topics)
         {
+            if (snippets.Count >= limit)
+            {
+                return;
+            }
+
             if (topic.Topics is { Count: > 0 })
             {
-                foreach (var nested in Flatten(topic.Topics))
-                    yield return nested;
+                AddTopics(topic.Topics, request, snippets, limit);
+                continue;
             }
-            else
-            {
-                yield return topic;
-            }
+
+            AddResult(
+                topic.Text,
+                topic.FirstURL,
+                topic.Text,
+                request,
+                snippets,
+                limit);
         }
     }
 
-    private static string ExtractTitle(string text)
+    private void AddResult(
+        string? text,
+        string? url,
+        string? title,
+        WebSearchRequest request,
+        List<WebSearchSnippet> snippets,
+        int limit)
     {
-        var separator = text.IndexOf(" - ", StringComparison.Ordinal);
-        var title = separator > 0 ? text[..separator] : text;
-        return title.Length <= 120 ? title : title[..120];
+        if (snippets.Count >= limit ||
+            string.IsNullOrWhiteSpace(text) ||
+            !Uri.TryCreate(url, UriKind.Absolute, out var sourceUri) ||
+            (sourceUri.Scheme != Uri.UriSchemeHttp &&
+             sourceUri.Scheme != Uri.UriSchemeHttps))
+        {
+            return;
+        }
+
+        var domain = sourceUri.Host.ToLowerInvariant();
+
+        if (request.BlockedDomains.Any(
+                rule => DomainMatches(domain, rule)))
+        {
+            return;
+        }
+
+        if (request.AllowedDomains.Count > 0 &&
+            !request.AllowedDomains.Any(
+                rule => DomainMatches(domain, rule)))
+        {
+            return;
+        }
+
+        if (snippets.Any(
+                item => string.Equals(
+                    item.Url, sourceUri.AbsoluteUri,
+                    StringComparison.OrdinalIgnoreCase)))
+        {
+            return;
+        }
+
+        snippets.Add(new WebSearchSnippet(
+            Title: string.IsNullOrWhiteSpace(title)
+                ? sourceUri.Host
+                : title.Trim(),
+            Url: sourceUri.AbsoluteUri,
+            Domain: domain,
+            Snippet: Truncate(
+                text,
+                Math.Min(
+                    request.MaxSnippetCharacters,
+                    Math.Max(1, _options.MaxSnippetChars)))));
     }
 
-    private static string Truncate(string? value, int maxLength)
+    private static bool DomainMatches(string domain, string rule)
     {
-        if (string.IsNullOrWhiteSpace(value))
-            return string.Empty;
+        var normalized = rule.Trim().TrimStart('.');
 
+        return normalized.Length > 0 &&
+               (domain.Equals(
+                    normalized, StringComparison.OrdinalIgnoreCase) ||
+                domain.EndsWith(
+                    "." + normalized, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
         var trimmed = value.Trim();
-        return trimmed.Length <= maxLength ? trimmed : trimmed[..maxLength];
+
+        return trimmed.Length <= maxLength
+            ? trimmed
+            : trimmed[..maxLength];
     }
 
     private sealed class DuckDuckGoResponse
@@ -161,7 +269,7 @@ public sealed class DuckDuckGoWebSearchService : IWebSearchService
         public string? AbstractText { get; set; }
 
         [JsonPropertyName("AbstractURL")]
-        public string? AbstractUrl { get; set; }
+        public string? AbstractURL { get; set; }
 
         [JsonPropertyName("RelatedTopics")]
         public List<DuckDuckGoTopic>? RelatedTopics { get; set; }
@@ -173,7 +281,7 @@ public sealed class DuckDuckGoWebSearchService : IWebSearchService
         public string? Text { get; set; }
 
         [JsonPropertyName("FirstURL")]
-        public string? FirstUrl { get; set; }
+        public string? FirstURL { get; set; }
 
         [JsonPropertyName("Topics")]
         public List<DuckDuckGoTopic>? Topics { get; set; }
