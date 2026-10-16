@@ -138,6 +138,7 @@ public static class EquipmentRegistry
         EquipmentType best = EquipmentType.Unknown;
         int bestLength = 0;
         var matchedTypes = new HashSet<EquipmentType>();
+        var padded = " " + normalized + " ";
 
         foreach (var item in Items.Values)
         {
@@ -149,7 +150,7 @@ public static class EquipmentRegistry
                 if (normalized == a)
                     return item.Type;
 
-                if (normalized.Contains(a, StringComparison.Ordinal))
+                if (padded.Contains(" " + a + " ", StringComparison.Ordinal))
                 {
                     matchedTypes.Add(item.Type);
                     if (a.Length > bestLength)
@@ -166,10 +167,20 @@ public static class EquipmentRegistry
     }
 
     private static string Normalize(string value)
-        => new string(value.Trim().ToLowerInvariant()
-            .Where(c => char.IsLetterOrDigit(c) || c == ' ')
-            .ToArray())
-            .Replace("  ", " ");
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return string.Empty;
+
+        var chars = value.Trim().ToLowerInvariant()
+            .Select(c => char.IsLetterOrDigit(c) ? c : ' ')
+            .ToArray();
+
+        var normalized = new string(chars);
+        while (normalized.Contains("  ", StringComparison.Ordinal))
+            normalized = normalized.Replace("  ", " ");
+
+        return normalized.Trim();
+    }
 
     private static IReadOnlyDictionary<EquipmentType, EquipmentMetadata> Build()
     {
@@ -202,7 +213,7 @@ public static class EquipmentRegistry
                     new ParameterDescriptor("casing_outer_diameter_m", "Casing Outer Diameter", "m", true, "Casing outer diameter."),
                     new ParameterDescriptor("casing_length_m", "Casing Length", "m", true, "Axial casing length.")
                 },
-                new[] { "axial fan", "axial flow fan", "tube axial", "tubeaxial", "vane axial", "vaneaxial", "propeller fan", "axial blower" },
+                new[] { "axial fan", "axial flow fan", "tube axial", "tubeaxial", "vane axial", "vaneaxial", "propeller fan", "axial blower", "axial", "ventilador", "ventilator", "fan", "blower" },
                 new[] { "fans", "common" }),
 
             new(

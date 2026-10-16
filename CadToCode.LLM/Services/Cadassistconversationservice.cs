@@ -1,7 +1,8 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using CadToCode.Core.Domain;
+using CadToCode.Core.Manifests;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
 using CadToCode.LLM.Templates;
@@ -72,17 +73,29 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
     private readonly ICadTemplateMatcher _matcher;
     private readonly IChatMemoryStore _memory;
     private readonly ILlmParameterExtractor _extractor;
+    private readonly IEquipmentManifestRegistry? _manifests;
+
+    private const double MinImageEquipmentConfidence = 0.85;
+
+    private static readonly HashSet<string> EquipmentGateCodes = new(StringComparer.Ordinal)
+    {
+        "GATE_AMBIGUOUS_EQUIPMENT",
+        "GATE_IDENTIFY_EQUIPMENT",
+        "GATE_CONFIRM_EQUIPMENT"
+    };
 
     public CadAssistConversationService(
         ICadAssistSessionStore store,
         ICadTemplateMatcher matcher,
         IChatMemoryStore memory,
-        ILlmParameterExtractor extractor)
+        ILlmParameterExtractor extractor,
+        IEquipmentManifestRegistry? manifests = null)
     {
         _store = store;
         _matcher = matcher;
         _memory = memory;
         _extractor = extractor;
+        _manifests = manifests;
     }
 
     public bool HasActiveTemplate(int projectId, string sessionId)
@@ -101,6 +114,34 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             input.DrawingType,
             input.Attachments,
             cancellationToken);
+
+        var gatePause = EvaluateEquipmentGate(input, match?.Score);
+
+        if (gatePause is not null)
+        {
+            _store.Update(input.ProjectId, input.SessionId, s =>
+            {
+                s.SourceFileName = input.FileName;
+                s.SourceIsImage = input.IsImage;
+
+                if (input.IsImage && input.Vision is not null)
+                {
+                    s.SetVisionData(
+                        input.Vision.Views.Select(v => new DetectedViewInfo { Name = v.Name, Description = v.Description }),
+                        input.Vision.Uncertainties.Concat(input.Vision.Warnings));
+                }
+
+                s.TemplateKey = null;
+                s.TemplateTitle = null;
+                s.Stage = CadAssistStage.Uploaded;
+            });
+
+            AppendUser(input.ProjectId, input.SessionId, "Uploaded " + input.FileName +
+                (string.IsNullOrWhiteSpace(input.Prompt) ? string.Empty : ": " + input.Prompt.Trim()));
+
+            _memory.Append(input.ProjectId, input.SessionId, gatePause);
+            return gatePause;
+        }
 
         var requestedEquipment = ResolveRequestedEquipment(input);
         var unrecognisedEquipment = GetUnrecognisedVisionEquipment(input, requestedEquipment);
@@ -885,6 +926,77 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
 
         text.Append(message.Content);
         message.Content = text.ToString();
+    }
+
+    private CadAssistMessageDto? EvaluateEquipmentGate(CadAssistUploadInput input, double? matchScore)
+    {
+        if (_manifests is null || !input.IsImage)
+        {
+            return null;
+        }
+
+        var userText = string.Join(
+            " ",
+            new[] { input.Prompt, input.DrawingType, Path.GetFileNameWithoutExtension(input.FileName) }
+                .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        var allText = string.Join(
+            " ",
+            new[] { input.Vision?.EquipmentType, input.Vision?.Summary, userText }
+                .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        var resolution = _manifests.ResolveDetailed(allText);
+
+        if (!resolution.IsResolved && !resolution.IsAmbiguous)
+        {
+            return null;
+        }
+
+        var namedByUser = _manifests.Resolve(userText) is not null;
+
+        double? confidence = null;
+
+        if (!namedByUser && matchScore.HasValue && matchScore.Value > 0)
+        {
+            confidence = matchScore.Value > 1.0 ? matchScore.Value / 100.0 : matchScore.Value;
+        }
+
+        var decision = DesignGate.Evaluate(new GateContext
+        {
+            Manifest = resolution.Manifest,
+            Resolution = resolution,
+            AvailableManifests = _manifests.All,
+            MatchConfidence = confidence,
+            MinMatchConfidence = MinImageEquipmentConfidence,
+            CalculatorRegistered = true
+        });
+
+        var question = decision.Questions.FirstOrDefault(q => EquipmentGateCodes.Contains(q.Code));
+
+        if (question is null)
+        {
+            return null;
+        }
+
+        var text = new StringBuilder();
+        text.AppendLine(question.Prompt);
+
+        if (question.Choices.Count > 0)
+        {
+            text.AppendLine();
+
+            foreach (var choice in question.Choices)
+            {
+                text.AppendLine("- " + choice);
+            }
+        }
+
+        return new CadAssistMessageDto
+        {
+            Role = CadAssistRole.Assistant,
+            Content = text.ToString().TrimEnd(),
+            Status = "equipment-confirm"
+        };
     }
 
     private static EquipmentType ResolveRequestedEquipment(CadAssistUploadInput input)

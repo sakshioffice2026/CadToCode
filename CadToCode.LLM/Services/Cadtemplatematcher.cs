@@ -1,6 +1,7 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.RegularExpressions;
 using CadToCode.Core.Domain;
+using CadToCode.Core.Manifests;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Templates;
 using CadToCode.Models.Dtos;
@@ -23,15 +24,18 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
     private readonly ICadRagRetriever _rag;
     private readonly ICadTemplateIndexer _indexer;
     private readonly ILogger<CadTemplateMatcher> _logger;
+    private readonly IEquipmentManifestRegistry? _manifests;
 
     public CadTemplateMatcher(
         ICadRagRetriever rag,
         ICadTemplateIndexer indexer,
-        ILogger<CadTemplateMatcher> logger)
+        ILogger<CadTemplateMatcher> logger,
+        IEquipmentManifestRegistry? manifests = null)
     {
         _rag = rag;
         _indexer = indexer;
         _logger = logger;
+        _manifests = manifests;
     }
 
     public async Task<CadTemplateMatch?> MatchAsync(
@@ -44,6 +48,38 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
     {
         var corpus = BuildCorpus(project, tree, prompt, drawingType, attachments);
         var requested = EquipmentRegistry.Resolve(corpus);
+
+        if (_manifests is not null)
+        {
+            var resolution = _manifests.ResolveDetailed(corpus);
+
+            if (resolution.IsAmbiguous)
+            {
+                _logger.LogInformation(
+                    "Equipment is ambiguous ({Reason}); no template is chosen until the user confirms the type.",
+                    resolution.Reason);
+                return null;
+            }
+
+            if (resolution.IsResolved)
+            {
+                var fromManifest = MapManifestToEquipment(resolution.Manifest!);
+
+                if (requested == EquipmentType.Unknown)
+                {
+                    requested = fromManifest;
+                }
+                else if (fromManifest != EquipmentType.Unknown && fromManifest != requested)
+                {
+                    _logger.LogInformation(
+                        "Equipment sources disagree ({Registry} vs {Manifest}); no template is chosen.",
+                        requested,
+                        fromManifest);
+                    return null;
+                }
+            }
+        }
+
         var keywordMatch = MatchBuiltIn(corpus, requested);
 
         if (!_rag.IsAvailable)
@@ -93,6 +129,38 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
             _logger.LogWarning(ex, "Template matching through Qdrant failed; using keyword matching.");
             return keywordMatch;
         }
+    }
+
+    private static EquipmentType MapManifestToEquipment(EquipmentManifest manifest)
+    {
+        var id = (manifest.Id ?? string.Empty).Trim().ToLowerInvariant();
+
+        if (id.Contains("fan", StringComparison.Ordinal))
+        {
+            return EquipmentType.AxialFan;
+        }
+
+        if (id.Contains("cyclone", StringComparison.Ordinal))
+        {
+            return EquipmentType.Cyclone;
+        }
+
+        if (id.Contains("scrubber", StringComparison.Ordinal))
+        {
+            return EquipmentType.WetScrubber;
+        }
+
+        if (id.Contains("pressure-vessel", StringComparison.Ordinal))
+        {
+            return EquipmentType.PressureVessel;
+        }
+
+        if (id.Contains("pip", StringComparison.Ordinal))
+        {
+            return EquipmentType.PipingLayout;
+        }
+
+        return EquipmentType.Unknown;
     }
 
     private static CadTemplateMatch? MatchBuiltIn(string corpus, EquipmentType requested)

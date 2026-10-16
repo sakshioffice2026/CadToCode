@@ -1,6 +1,8 @@
-﻿using System.Text;
+﻿using System.Globalization;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using CadToCode.Models.Options;
 
 namespace CadToCode.LLM.Vision;
@@ -13,6 +15,18 @@ public static class VisionResultParser
     private const int MaxRepairAttempts = 800;
     private const double MaxLengthMm = 100000.0;
     private const double MaxCount = 1000.0;
+    private const double EvidenceTolerance = 0.005;
+
+    private static readonly HashSet<string> ViewWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "front", "side", "top", "bottom", "back", "rear", "left", "right", "plan", "elevation",
+        "section", "sectional", "detail", "view", "views", "isometric", "iso", "auxiliary",
+        "cross", "longitudinal", "partial"
+    };
+
+    private static readonly Regex NumberRegex = new(@"-?\d+(?:[.,]\d+)?", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
+
+    private static readonly Regex WordRegex = new(@"[A-Za-z]+", RegexOptions.Compiled, TimeSpan.FromSeconds(1));
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -261,6 +275,12 @@ public static class VisionResultParser
                 continue;
             }
 
+            if (IsViewLabel(label, result.Views) || !EvidenceContainsValue(evidence, value))
+            {
+                dropped++;
+                continue;
+            }
+
             var candidate = new VisionDimension
             {
                 Label = label,
@@ -302,7 +322,7 @@ public static class VisionResultParser
 
         if (dropped > 0)
         {
-            result.Warnings.Add(dropped + " dimension(s) from the image were dropped because the unit, value or printed evidence was missing or invalid.");
+            result.Warnings.Add(dropped + " dimension(s) from the image were dropped because the unit, value or printed evidence was missing or invalid, the label was a view name, or the value did not appear in the printed evidence.");
         }
 
         result.Uncertainties = (result.Uncertainties ?? new List<string>())
@@ -311,6 +331,52 @@ public static class VisionResultParser
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(MaxUncertainties)
             .ToList();
+    }
+
+    private static bool IsViewLabel(string label, List<VisionView> views)
+    {
+        if (views.Any(v => string.Equals(v.Name, label, StringComparison.OrdinalIgnoreCase)))
+        {
+            return true;
+        }
+
+        try
+        {
+            var words = WordRegex.Matches(label).Select(m => m.Value).ToList();
+
+            return words.Count > 0 && words.All(w => ViewWords.Contains(w));
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+    }
+
+    private static bool EvidenceContainsValue(string evidence, double value)
+    {
+        try
+        {
+            foreach (Match match in NumberRegex.Matches(evidence))
+            {
+                var normalized = match.Value.Replace(',', '.');
+
+                if (!double.TryParse(normalized, NumberStyles.Float, CultureInfo.InvariantCulture, out var printed))
+                {
+                    continue;
+                }
+
+                if (Math.Abs(printed - value) <= Math.Max(EvidenceTolerance, Math.Abs(value) * 0.001))
+                {
+                    return true;
+                }
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
+
+        return false;
     }
 
     private static bool IsValueInRange(VisionDimension d)

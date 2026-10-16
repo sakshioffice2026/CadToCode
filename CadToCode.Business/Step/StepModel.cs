@@ -40,7 +40,17 @@ public sealed class StepDocument
         return StepWriter.Write(this);
     }
 
+    public string ToStep(StepExportOptions? options)
+    {
+        return StepWriter.Write(this, options);
+    }
+
     public bool Save(string path)
+    {
+        return Save(path, null);
+    }
+
+    public bool Save(string path, StepExportOptions? options)
     {
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -54,7 +64,7 @@ public sealed class StepDocument
             return true;
         }
 
-        File.WriteAllText(path, ToStep(), new UTF8Encoding(false));
+        File.WriteAllText(path, ToStep(options), new UTF8Encoding(false));
         return true;
     }
 }

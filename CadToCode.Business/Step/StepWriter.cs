@@ -3,6 +3,74 @@ using System.Text;
 
 namespace CadToCode.Step;
 
+public sealed class StepExportOptions
+{
+    public static StepExportOptions Default { get; } = new();
+
+    /// <summary>Manufacturing part number. Defaults to the document name.</summary>
+    public string? PartNumber { get; init; }
+
+    public string? PartDescription { get; init; }
+
+    public string? Revision { get; init; }
+
+    public string Author { get; init; } = "CadToCode";
+
+    public string Organization { get; init; } = "CadToCode";
+
+    /// <summary>Equipment manifest the part belongs to.</summary>
+    public string? ManifestId { get; init; }
+
+    /// <summary>Manifest part key this file represents.</summary>
+    public string? PartKey { get; init; }
+
+    public int Quantity { get; init; } = 1;
+
+    /// <summary>When true the document must contain exactly one body, as a manufacturable part.</summary>
+    public bool RequireSingleBody { get; init; }
+
+    /// <summary>When true the file is labelled as a generic, non-engineered model.</summary>
+    public bool IsGeneric { get; init; }
+
+    /// <summary>Extra FILE_DESCRIPTION lines.</summary>
+    public IReadOnlyList<string> ExtraDescriptions { get; init; } = Array.Empty<string>();
+
+    public IReadOnlyList<IStepExportHook> Hooks { get; init; } = Array.Empty<IStepExportHook>();
+}
+
+public sealed class StepExportContext
+{
+    internal StepExportContext(StepDocument document, StepExportOptions options, string fileName, string timestamp)
+    {
+        Document = document;
+        Options = options;
+        FileName = fileName;
+        Timestamp = timestamp;
+    }
+
+    public StepDocument Document { get; }
+
+    public StepExportOptions Options { get; }
+
+    public string FileName { get; }
+
+    public string Timestamp { get; }
+
+    public int SolidCount => Document.SolidCount;
+
+    /// <summary>FILE_DESCRIPTION lines. Hooks may add to or replace them in BeforeWrite.</summary>
+    public List<string> Descriptions { get; } = new();
+}
+
+public interface IStepExportHook
+{
+    /// <summary>Runs before anything is written. Throw to abort the export.</summary>
+    void BeforeWrite(StepExportContext context);
+
+    /// <summary>Runs on the finished STEP text. Return the text to write, or null to keep it unchanged.</summary>
+    string? AfterWrite(StepExportContext context, string step);
+}
+
 internal static class StepWriter
 {
     private const double AxisTolerance = 1e-9;
@@ -10,15 +78,63 @@ internal static class StepWriter
 
     public static string Write(StepDocument document)
     {
+        return Write(document, null);
+    }
+
+    public static string Write(StepDocument document, StepExportOptions? options)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        options ??= StepExportOptions.Default;
+
+        if (options.RequireSingleBody && document.Solids.Count != 1)
+        {
+            throw new InvalidOperationException(
+                "Part '" + (options.PartKey ?? document.Name) + "' must contain exactly one body, but has "
+                + document.Solids.Count.ToString(CultureInfo.InvariantCulture) + ".");
+        }
+
         var emitter = new Emitter();
         var name = document.Name;
+        var fileName = name + ".step";
+        var timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
+        var exportContext = new StepExportContext(document, options, fileName, timestamp);
+
+        exportContext.Descriptions.Add("CadToCode STEP export");
+
+        if (options.IsGeneric)
+        {
+            exportContext.Descriptions.Add("GENERIC NON-ENGINEERED MODEL");
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.ManifestId))
+        {
+            exportContext.Descriptions.Add("EQUIPMENT=" + options.ManifestId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(options.PartKey))
+        {
+            exportContext.Descriptions.Add("PART=" + options.PartKey);
+            exportContext.Descriptions.Add("QUANTITY=" + Math.Max(1, options.Quantity).ToString(CultureInfo.InvariantCulture));
+        }
+
+        exportContext.Descriptions.AddRange(options.ExtraDescriptions.Where(d => !string.IsNullOrWhiteSpace(d)));
+
+        foreach (var hook in options.Hooks)
+        {
+            hook.BeforeWrite(exportContext);
+        }
+
+        var partNumber = string.IsNullOrWhiteSpace(options.PartNumber) ? name : options.PartNumber.Trim();
+        var partDescription = options.PartDescription ?? string.Empty;
+        var revision = options.Revision ?? string.Empty;
 
         var appContext = emitter.Add("APPLICATION_CONTEXT('core data for automotive mechanical design processes')");
         emitter.Add($"APPLICATION_PROTOCOL_DEFINITION('international standard','automotive_design',2000,{R(appContext)})");
         var productContext = emitter.Add($"PRODUCT_CONTEXT('',{R(appContext)},'mechanical')");
-        var product = emitter.Add($"PRODUCT({Str(name)},{Str(name)},'',({R(productContext)}))");
+        var product = emitter.Add($"PRODUCT({Str(partNumber)},{Str(name)},{Str(partDescription)},({R(productContext)}))");
         emitter.Add($"PRODUCT_RELATED_PRODUCT_CATEGORY('part',$,({R(product)}))");
-        var formation = emitter.Add($"PRODUCT_DEFINITION_FORMATION('','',{R(product)})");
+        var formation = emitter.Add($"PRODUCT_DEFINITION_FORMATION({Str(revision)},'',{R(product)})");
         var definitionContext = emitter.Add($"PRODUCT_DEFINITION_CONTEXT('part definition',{R(appContext)},'design')");
         var definition = emitter.Add($"PRODUCT_DEFINITION('design','',{R(formation)},{R(definitionContext)})");
         var shape = emitter.Add($"PRODUCT_DEFINITION_SHAPE('','',{R(definition)})");
@@ -75,15 +191,15 @@ internal static class StepWriter
             $"ADVANCED_BREP_SHAPE_REPRESENTATION({Str(name)},({string.Join(",", items.Select(R))}),{R(context)})");
         emitter.Add($"SHAPE_DEFINITION_REPRESENTATION({R(shape)},{R(representation)})");
 
-        var fileName = name + ".step";
-        var timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss", CultureInfo.InvariantCulture);
-
         var builder = new StringBuilder();
         builder.Append("ISO-10303-21;\n");
         builder.Append("HEADER;\n");
-        builder.Append("FILE_DESCRIPTION(('CadToCode STEP export'),'2;1');\n");
-        builder.Append("FILE_NAME(").Append(Str(fileName)).Append(',').Append(Str(timestamp))
-            .Append(",('CadToCode'),('CadToCode'),'CadToCode STEP writer','CadToCode','');\n");
+        builder.Append("FILE_DESCRIPTION((")
+            .Append(string.Join(",", exportContext.Descriptions.Select(Str)))
+            .Append("),'2;1');\n");
+        builder.Append("FILE_NAME(").Append(Str(exportContext.FileName)).Append(',').Append(Str(exportContext.Timestamp))
+            .Append(",(").Append(Str(options.Author)).Append("),(").Append(Str(options.Organization))
+            .Append("),'CadToCode STEP writer','CadToCode','');\n");
         builder.Append("FILE_SCHEMA(('AUTOMOTIVE_DESIGN { 1 0 10303 214 1 1 1 1 }'));\n");
         builder.Append("ENDSEC;\n");
         builder.Append("DATA;\n");
@@ -91,7 +207,14 @@ internal static class StepWriter
         builder.Append("ENDSEC;\n");
         builder.Append("END-ISO-10303-21;\n");
 
-        return builder.ToString();
+        var step = builder.ToString();
+
+        foreach (var hook in options.Hooks)
+        {
+            step = hook.AfterWrite(exportContext, step) ?? step;
+        }
+
+        return step;
     }
 
     private static int WritePrism(Emitter e, PrismSolid solid)

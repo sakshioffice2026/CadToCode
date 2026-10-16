@@ -35,6 +35,13 @@ public static class VisionParameterMapper
     private const int ComplexComponentCount = 4;
     private const string TruncationMarker = "cut off and repaired";
 
+    private static readonly HashSet<string> ViewLabelWords = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "front", "side", "top", "bottom", "back", "rear", "left", "right", "plan", "elevation",
+        "section", "sectional", "detail", "view", "views", "isometric", "iso", "auxiliary",
+        "cross", "longitudinal", "partial"
+    };
+
     private static readonly HashSet<string> NeutralEquipmentWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "system", "assembly", "unit", "equipment", "industrial", "machine", "plant", "drawing", "blueprint", "cad"
@@ -99,6 +106,12 @@ public static class VisionParameterMapper
 
         foreach (var dimension in vision.Dimensions)
         {
+            if (IsViewLabel(dimension.Label))
+            {
+                mapping.Unmapped.Add(new UnmappedDimension(dimension, "The label is a view name, not a dimension."));
+                continue;
+            }
+
             var candidates = Score(schema, dimension);
 
             if (candidates.Count == 0)
@@ -259,12 +272,38 @@ public static class VisionParameterMapper
             return EquipmentType.Cyclone;
         }
 
+        if (key.Contains("fan", StringComparison.OrdinalIgnoreCase))
+        {
+            return EquipmentType.AxialFan;
+        }
+
         if (key.Contains("pipe", StringComparison.OrdinalIgnoreCase))
         {
             return EquipmentType.PipingLayout;
         }
 
         return EquipmentType.Unknown;
+    }
+
+    private static bool IsViewLabel(string? label)
+    {
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return false;
+        }
+
+        try
+        {
+            var words = Regex.Split(label.ToLowerInvariant(), "[^a-z]+")
+                .Where(w => w.Length > 0)
+                .ToList();
+
+            return words.Count > 0 && words.All(w => ViewLabelWords.Contains(w));
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            return false;
+        }
     }
 
     private static bool SharesVocabulary(TemplateParameterSchema schema, string equipment)

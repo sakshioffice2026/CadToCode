@@ -96,7 +96,8 @@ public static class TemplateParameterCatalog
         BuildFlangePlate(),
         BuildWetScrubber(),
         BuildWetScrubberTankPump(),
-        BuildCycloneSeparator()
+        BuildCycloneSeparator(),
+        BuildAxialFan()
     };
 
     public static TemplateParameterSchema? Find(string? templateKey)
@@ -437,6 +438,27 @@ public static class TemplateParameterCatalog
                     errors.Add("InletDiameter must be smaller than BodyHeight.");
                 }
                 break;
+
+            case "builtin-axial-fan":
+                if (V("HubDiameter") >= V("TipDiameter"))
+                {
+                    errors.Add("HubDiameter must be smaller than TipDiameter.");
+                }
+                else if ((V("TipDiameter") - V("HubDiameter")) / 2.0 - V("TipClearance") <= 0)
+                {
+                    errors.Add("Blade span is not positive: hub radius plus TipClearance must be smaller than the tip radius.");
+                }
+                if (V("BladeThickness") >= V("BladeChord"))
+                {
+                    errors.Add("BladeThickness must be smaller than BladeChord.");
+                }
+                var pitchRad = Math.Abs(V("BladePitch")) * Math.PI / 180.0;
+                var axialExtent = V("BladeChord") * Math.Sin(pitchRad) + V("BladeThickness") * Math.Cos(pitchRad);
+                if (axialExtent > V("CasingLength"))
+                {
+                    errors.Add("The blade axial extent exceeds CasingLength.");
+                }
+                break;
         }
 
         return errors;
@@ -720,6 +742,34 @@ public static class TemplateParameterCatalog
                     new[] { "Wall", "DustDiameter", "DustLength" }),
                 C("inlet", "Tangential inlet", new[] { "inlet", "tangential inlet", "feed" }, new[] { "TangentialInlet" },
                     new[] { "Radius", "Wall", "BodyHeight", "ConeHeight", "InletDiameter", "InletLength" })
+            }
+        };
+    }
+
+    private static TemplateParameterSchema BuildAxialFan()
+    {
+        return new TemplateParameterSchema
+        {
+            TemplateKey = "builtin-axial-fan",
+            Title = "Axial fan",
+            Parameters = new[]
+            {
+                P("TipDiameter", "Impeller tip diameter", 500, 50, 5000, aliases: new[] { "tip dia", "impeller diameter", "fan diameter", "blade tip diameter" }),
+                P("HubDiameter", "Hub diameter", 150, 10, 4000, aliases: new[] { "hub dia", "hub od" }),
+                P("TipClearance", "Blade tip clearance", 5, 0.5, 50, aliases: new[] { "tip gap", "clearance", "radial clearance" }),
+                P("CasingWall", "Casing wall thickness", 4, 1, 50, aliases: new[] { "casing thickness", "wall thickness", "wall" }),
+                P("CasingLength", "Casing length", 200, 20, 5000, aliases: new[] { "casing length", "fan length", "housing length", "axial length" }),
+                P("BladeCount", "Number of blades", 6, 2, 64, "pcs", true, "blades", "blade count", "number of blades"),
+                P("BladeChord", "Blade chord", 80, 5, 1000, aliases: new[] { "chord", "blade width" }),
+                P("BladeThickness", "Blade thickness", 3, 0.5, 100, aliases: new[] { "blade thk", "blade thickness" }),
+                P("BladePitch", "Blade pitch angle", 25, -89, 89, "deg", false, "pitch", "blade angle", "pitch angle")
+            },
+            Components = new[]
+            {
+                C("casing", "Casing", new[] { "casing", "housing", "shroud", "duct", "tube" }, new[] { "Casing" },
+                    new[] { "TipDiameter", "TipClearance", "CasingWall", "CasingLength" }),
+                C("hub", "Hub and blades", new[] { "hub", "spinner", "rotor hub", "blades", "blade", "impeller", "rotor", "propeller" }, new[] { "Hub" },
+                    new[] { "TipDiameter", "HubDiameter", "TipClearance", "CasingLength", "BladeCount", "BladeChord", "BladeThickness", "BladePitch" })
             }
         };
     }

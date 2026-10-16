@@ -14,7 +14,12 @@
     "vane axial",
     "vaneaxial",
     "propeller fan",
-    "axial blower"
+    "axial blower",
+    "axial",
+    "ventilador",
+    "ventilator",
+    "fan",
+    "blower"
   ],
   "calculatorId": "AxialFan",
   "rulePackIds": [

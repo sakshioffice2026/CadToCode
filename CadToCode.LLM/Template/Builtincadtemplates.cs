@@ -68,6 +68,15 @@ public static class BuiltInCadTemplates
             Tags = new List<string> { "cyclone", "separator", "dust", "collector", "vortex", "tangential", "inlet", "cone", "hopper", "dedusting" },
             Description = "Cylindrical cyclone with a conical hopper, tangential inlet, vortex finder and dust outlet.",
             Script = CycloneSeparator
+        },
+        new()
+        {
+            Key = "builtin-axial-fan",
+            Title = "Axial fan",
+            Category = "Fan",
+            Tags = new List<string> { "axial fan", "fan", "axial", "impeller", "blade", "blades", "hub", "casing", "propeller", "rotor", "blower", "tip clearance", "tube axial", "vane axial", "ventilation" },
+            Description = "Axial fan with a cylindrical casing, central hub and evenly spaced pitched blades.",
+            Script = AxialFan
         }
     };
 
@@ -374,6 +383,60 @@ doc.Add.Pipe(
     Wall);
 
 var outputPath = Path.GetFullPath("CycloneSeparator.step");
+doc.Save(outputPath);
+Console.WriteLine("STEP saved to " + outputPath + " (" + doc.SolidCount + " solids)");
+""";
+
+    private const string AxialFan = """
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using CadToCode.Step;
+
+const double TipDiameter = 500;
+const double HubDiameter = 150;
+const double TipClearance = 5;
+const double CasingWall = 4;
+const double CasingLength = 200;
+const double BladeChord = 80;
+const double BladeThickness = 3;
+const double BladePitch = 25;
+const int BladeCount = 6;
+
+var doc = new StepDocument("AxialFan");
+var tipRadius = TipDiameter / 2.0;
+var hubRadius = HubDiameter / 2.0;
+var bladeSpan = tipRadius - TipClearance - hubRadius;
+var midZ = CasingLength / 2.0;
+
+doc.Add.Pipe(
+    "Casing",
+    SweepRoute.From(0, 0, 0).LineTo(0, 0, CasingLength),
+    TipDiameter + 2.0 * TipClearance + 2.0 * CasingWall,
+    CasingWall);
+
+doc.Add.Cylinder("Hub", 0, 0, hubRadius, CasingLength);
+
+var bladeProfile = Profile2D.Rectangle(0, -BladeChord / 2.0, bladeSpan, BladeChord);
+
+for (var i = 0; i < BladeCount; i++)
+{
+    var angle = 2.0 * Math.PI * i / BladeCount;
+    var radial = new Vec3(Math.Cos(angle), Math.Sin(angle), 0);
+    var tangent = new Vec3(-Math.Sin(angle), Math.Cos(angle), 0);
+    var root = radial * hubRadius + new Vec3(0, 0, midZ);
+    var origin = root - tangent * (BladeThickness / 2.0);
+
+    var blade = Solid.Extrude(bladeProfile, BladeThickness)
+        .Placed(Frame3D.FromAxes(origin, radial, tangent))
+        .RotateAbout(root, radial, BladePitch)
+        .Named("Blade" + (i + 1));
+
+    doc.Add.Part(blade);
+}
+
+var outputPath = Path.GetFullPath("AxialFan.step");
 doc.Save(outputPath);
 Console.WriteLine("STEP saved to " + outputPath + " (" + doc.SolidCount + " solids)");
 """;
