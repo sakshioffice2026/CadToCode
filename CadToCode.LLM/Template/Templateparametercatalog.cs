@@ -1,4 +1,6 @@
 ﻿using System.Globalization;
+using CadToCode.Core.Manifests;
+using CadToCode.Core.Mapping;
 
 namespace CadToCode.LLM.Templates;
 
@@ -61,6 +63,29 @@ public sealed class TemplateParameterSchema
     }
 }
 
+/// <summary>
+/// Result of checking a calculator mapping against a catalog template schema.
+/// Valid only when every template parameter is covered, none is unknown, and all values pass range and cross checks.
+/// </summary>
+public sealed class TemplateMappingValidation
+{
+    public string? TemplateKey { get; init; }
+
+    /// <summary>Mapped values in template units, keyed by template parameter.</summary>
+    public IReadOnlyDictionary<string, double> Values { get; init; } =
+        new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<string> Errors { get; init; } = Array.Empty<string>();
+
+    /// <summary>Template parameters the mapping did not provide. Never filled from defaults.</summary>
+    public IReadOnlyList<string> UncoveredKeys { get; init; } = Array.Empty<string>();
+
+    /// <summary>Mapped keys the template does not define.</summary>
+    public IReadOnlyList<string> UnknownKeys { get; init; } = Array.Empty<string>();
+
+    public bool IsValid => Errors.Count == 0 && UncoveredKeys.Count == 0 && UnknownKeys.Count == 0;
+}
+
 public static class TemplateParameterCatalog
 {
     public static IReadOnlyList<TemplateParameterSchema> All { get; } = new List<TemplateParameterSchema>
@@ -82,6 +107,140 @@ public static class TemplateParameterCatalog
         }
 
         return All.FirstOrDefault(s => string.Equals(s.TemplateKey, templateKey, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Finds the catalog schema an equipment manifest renders through. When <paramref name="templateKey"/> is given it must
+    /// be listed by the manifest; otherwise the first manifest template key present in the catalog is used.
+    /// Returns null when the manifest has no catalog template (for example the axial fan, which is composed from SI values).
+    /// </summary>
+    public static TemplateParameterSchema? FindForManifest(EquipmentManifest manifest, string? templateKey = null)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+
+        if (!string.IsNullOrWhiteSpace(templateKey))
+        {
+            var listed = manifest.TemplateKeys.Any(k => string.Equals(k, templateKey.Trim(), StringComparison.OrdinalIgnoreCase));
+
+            return listed ? Find(templateKey) : null;
+        }
+
+        foreach (var key in manifest.TemplateKeys)
+        {
+            var schema = Find(key);
+
+            if (schema is not null)
+            {
+                return schema;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Checks a mapper result against the template it targets: unit match, full parameter coverage, known keys only,
+    /// parameter ranges and template cross-checks. Missing parameters are reported, never filled from defaults.
+    /// </summary>
+    public static TemplateMappingValidation ValidateMapped(TemplateMappingResult mapping)
+    {
+        ArgumentNullException.ThrowIfNull(mapping);
+
+        if (!mapping.Succeeded)
+        {
+            return new TemplateMappingValidation
+            {
+                TemplateKey = mapping.TemplateKey,
+                Errors = mapping.GetBlockers()
+            };
+        }
+
+        if (string.IsNullOrWhiteSpace(mapping.TemplateKey))
+        {
+            return new TemplateMappingValidation
+            {
+                Errors = new[] { "The mapping does not target a catalog template." }
+            };
+        }
+
+        var schema = Find(mapping.TemplateKey);
+
+        if (schema is null)
+        {
+            return new TemplateMappingValidation
+            {
+                TemplateKey = mapping.TemplateKey,
+                Errors = new[] { "Template '" + mapping.TemplateKey + "' is not in the catalog." }
+            };
+        }
+
+        var errors = new List<string>();
+        var known = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var unknown = new List<string>();
+
+        foreach (var mapped in mapping.Parameters)
+        {
+            var def = schema.FindParameter(mapped.Key);
+
+            if (def is null)
+            {
+                unknown.Add(mapped.Key);
+                continue;
+            }
+
+            if (!UnitMatches(def, mapped.Unit))
+            {
+                errors.Add(
+                    def.Label + " was mapped in '" + mapped.Unit + "' but the template expects '" + def.Unit + "'.");
+                continue;
+            }
+
+            known[def.Key] = mapped.Value;
+        }
+
+        var uncovered = schema.Parameters
+            .Where(p => !known.ContainsKey(p.Key))
+            .Select(p => p.Key)
+            .ToList();
+
+        if (errors.Count == 0)
+        {
+            if (uncovered.Count == 0 && unknown.Count == 0)
+            {
+                errors.AddRange(ValidateSet(schema, known));
+            }
+            else
+            {
+                foreach (var pair in known)
+                {
+                    var error = ValidateValue(schema, pair.Key, pair.Value);
+
+                    if (error is not null)
+                    {
+                        errors.Add(error);
+                    }
+                }
+            }
+        }
+
+        return new TemplateMappingValidation
+        {
+            TemplateKey = schema.TemplateKey,
+            Values = known,
+            Errors = errors,
+            UncoveredKeys = uncovered,
+            UnknownKeys = unknown
+        };
+    }
+
+    private static bool UnitMatches(TemplateParameterDefinition def, string mappedUnit)
+    {
+        if (string.Equals(def.Unit, mappedUnit, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return string.Equals(def.Unit, "pcs", StringComparison.OrdinalIgnoreCase) && mappedUnit == "-";
     }
 
     public static string? ValidateValue(TemplateParameterSchema schema, string key, double value)
