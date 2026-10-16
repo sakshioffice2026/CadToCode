@@ -1,9 +1,10 @@
 {
+  // CadToCode.Core/EngineeringKnowledge/cyclone/equipment-manifest.json
   "id": "cyclone-separator",
   "domain": "process-equipment",
   "displayName": "Cyclone separator",
   "description": "Dry gas-solid cyclone separator sized from gas flow using published proportion families. Outputs are SI values; a mapper converts them to CAD template parameters.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "maxTier": "Engineered",
   "aliases": [
     "cyclone",
@@ -19,6 +20,29 @@
   "templateKeys": [
     "builtin-cyclone-separator"
   ],
+  "mapperId": "cyclone-template-mapper",
+  // Radius (template uses OUTER radius: barrel_diameter_m / 2 + wall) and InletDiameter
+  // (round template inlet from the rectangular inlet_height_m x inlet_width_m) cannot be a plain
+  // scale, so the code mapper "cyclone-template-mapper" produces them. All other keys are declared here.
+  "parameterMappings": [
+    { "sourceKey": "wall_thickness_m", "targetKey": "Wall", "scale": 1000 },
+    { "sourceKey": "barrel_height_m", "targetKey": "BodyHeight", "scale": 1000 },
+    { "sourceKey": "cone_height_m", "targetKey": "ConeHeight", "scale": 1000 },
+    { "sourceKey": "dust_outlet_diameter_m", "targetKey": "DustDiameter", "scale": 1000 },
+    { "sourceKey": "dust_outlet_length_m", "targetKey": "DustLength", "scale": 1000 },
+    { "sourceKey": "vortex_finder_diameter_m", "targetKey": "ExitDiameter", "scale": 1000 },
+    { "sourceKey": "vortex_finder_height_m", "targetKey": "ExitHeight", "scale": 1000 },
+    { "sourceKey": "vortex_finder_depth_m", "targetKey": "FinderDepth", "scale": 1000 },
+    { "sourceKey": "inlet_length_m", "targetKey": "InletLength", "scale": 1000 }
+  ],
+  "forbiddenSubstitutions": [
+    "builtin-straight-pipe",
+    "builtin-pipe-elbow",
+    "builtin-pipe-tee",
+    "builtin-flange-plate",
+    "builtin-wet-scrubber",
+    "builtin-wet-scrubber-tank-pump"
+  ],
   "references": [
     "Perry's Chemical Engineers' Handbook, cyclone separator design (gas-solid separation)",
     "Stairmand, C.J., The design and performance of cyclone separators, Trans. Inst. Chem. Eng., 1951",
@@ -33,6 +57,7 @@
       "max": 100,
       "isRequired": true,
       "description": "Inlet gas volumetric flow rate at operating conditions.",
+      "clarifyingQuestion": "What is the gas flow rate through the cyclone at operating conditions (m3/s)? If you have m3/h, give that and I will convert it.",
       "aliases": ["gas flow", "airflow", "flow rate", "flow"]
     },
     {
@@ -80,6 +105,7 @@
       "min": 100,
       "max": 20000,
       "description": "Solid particle density. Required to estimate the cut diameter.",
+      "clarifyingQuestion": "What is the density of the dust or solids being separated (kg/m3)? I need it to estimate the cut diameter.",
       "aliases": ["particle density", "dust density", "solids density"]
     },
     {
@@ -226,6 +252,49 @@
       "title": "Tangential inlet",
       "aliases": ["inlet", "tangential inlet", "feed"],
       "parameterKeys": ["airflow_m3s", "inlet_velocity_ms", "wall_thickness_m"]
+    }
+  ],
+  // Part keys match the body names in the template script so each part exports as its own solid.
+  "parts": [
+    {
+      "key": "Body",
+      "title": "Cyclone body and hopper",
+      "componentKeys": ["body"],
+      "templateKey": "builtin-cyclone-separator",
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "TopPlate",
+      "title": "Top plate",
+      "componentKeys": ["topplate"],
+      "templateKey": "builtin-cyclone-separator",
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "VortexFinder",
+      "title": "Vortex finder",
+      "componentKeys": ["vortexfinder"],
+      "templateKey": "builtin-cyclone-separator",
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "DustOutlet",
+      "title": "Dust outlet",
+      "componentKeys": ["dustoutlet"],
+      "templateKey": "builtin-cyclone-separator",
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "TangentialInlet",
+      "title": "Tangential inlet",
+      "componentKeys": ["inlet"],
+      "templateKey": "builtin-cyclone-separator",
+      "quantity": 1,
+      "isRequired": true
     }
   ]
 }

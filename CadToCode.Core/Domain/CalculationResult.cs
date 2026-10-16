@@ -68,6 +68,12 @@ public sealed class CalculationResult
 
     public EquipmentType EquipmentType { get; }
 
+    /// <summary>
+    /// Id of the calculator that produced this result, matching the manifest <c>calculatorId</c>.
+    /// Null when the calculator did not set one.
+    /// </summary>
+    public string? CalculatorId { get; }
+
     /// <summary>Calculated values in calculation order.</summary>
     public IReadOnlyList<CalculatedValue> Values { get; }
 
@@ -95,6 +101,12 @@ public sealed class CalculationResult
     /// <summary>True when any warning has <see cref="WarningSeverity.Caution"/> severity.</summary>
     public bool HasCautionWarnings => Warnings.Any(w => w.Severity == WarningSeverity.Caution);
 
+    /// <summary>Warnings that block CAD generation.</summary>
+    public IEnumerable<EngineeringWarning> CriticalWarnings => Warnings.Where(w => w.Severity == WarningSeverity.Critical);
+
+    /// <summary>Warnings that need the user's acknowledgement before CAD generation.</summary>
+    public IEnumerable<EngineeringWarning> CautionWarnings => Warnings.Where(w => w.Severity == WarningSeverity.Caution);
+
     /// <summary>
     /// True only when the result is safe to hand to CAD script generation:
     /// succeeded, all values finite, and no critical warnings.
@@ -107,9 +119,11 @@ public sealed class CalculationResult
         IEnumerable<EngineeringWarning> warnings,
         IEnumerable<string> errors,
         string calculatorVersion,
-        DateTimeOffset calculatedAtUtc)
+        DateTimeOffset calculatedAtUtc,
+        string? calculatorId)
     {
         EquipmentType = equipmentType;
+        CalculatorId = string.IsNullOrWhiteSpace(calculatorId) ? null : calculatorId.Trim();
         var valueList = values.ToList();
         _byKey = new Dictionary<string, CalculatedValue>(StringComparer.OrdinalIgnoreCase);
         foreach (var v in valueList)
@@ -149,19 +163,71 @@ public sealed class CalculationResult
     public double GetValue(string key)
         => Find(key)?.Value ?? throw new KeyNotFoundException($"Calculated value '{key}' not found for {EquipmentType}.");
 
+    /// <summary>
+    /// Case-insensitive copy of all calculated values as key to SI number.
+    /// This is what calculator-to-template mappers read.
+    /// </summary>
+    public IReadOnlyDictionary<string, double> AsDictionary()
+        => new ReadOnlyDictionary<string, double>(
+            Values.ToDictionary(v => v.Key, v => v.Value, StringComparer.OrdinalIgnoreCase));
+
+    /// <summary>
+    /// Returns the keys from <paramref name="requiredKeys"/> that were not calculated.
+    /// Used to check a result against the outputs an equipment manifest declares as required.
+    /// </summary>
+    public IReadOnlyList<string> MissingKeys(IEnumerable<string> requiredKeys)
+    {
+        if (requiredKeys is null) throw new ArgumentNullException(nameof(requiredKeys));
+
+        return requiredKeys
+            .Where(k => !string.IsNullOrWhiteSpace(k) && !_byKey.ContainsKey(k.Trim()))
+            .Select(k => k.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Plain-language reasons this result is not CAD ready. Empty when <see cref="IsCadReady"/> is true.
+    /// </summary>
+    public IReadOnlyList<string> GetCadBlockers()
+    {
+        var blockers = new List<string>();
+
+        blockers.AddRange(Errors);
+
+        if (Errors.Count == 0 && Values.Count == 0)
+        {
+            blockers.Add("No values were calculated.");
+        }
+
+        foreach (var warning in CriticalWarnings)
+        {
+            blockers.Add(warning.Message);
+        }
+
+        foreach (var value in Values.Where(v => !v.IsFinite))
+        {
+            blockers.Add($"Calculated value '{value.Key}' is not a finite number.");
+        }
+
+        return blockers;
+    }
+
     /// <summary>Returns a failed result containing only errors.</summary>
     public static CalculationResult Failure(
         EquipmentType equipmentType,
         IEnumerable<string> errors,
         string calculatorVersion = "0.0.0",
-        IEnumerable<EngineeringWarning>? warnings = null)
+        IEnumerable<EngineeringWarning>? warnings = null,
+        string? calculatorId = null)
         => new(
             equipmentType,
             Enumerable.Empty<CalculatedValue>(),
             warnings ?? Enumerable.Empty<EngineeringWarning>(),
             errors ?? throw new ArgumentNullException(nameof(errors)),
             calculatorVersion,
-            DateTimeOffset.UtcNow);
+            DateTimeOffset.UtcNow,
+            calculatorId);
 
     /// <summary>Starts building a result.</summary>
     public static Builder Create(EquipmentType equipmentType, string calculatorVersion)
@@ -175,6 +241,7 @@ public sealed class CalculationResult
         private readonly List<CalculatedValue> _values = new();
         private readonly List<EngineeringWarning> _warnings = new();
         private readonly List<string> _errors = new();
+        private string? _calculatorId;
 
         internal Builder(EquipmentType equipmentType, string calculatorVersion)
         {
@@ -184,6 +251,21 @@ public sealed class CalculationResult
             _equipmentType = equipmentType;
             _calculatorVersion = calculatorVersion;
         }
+
+        /// <summary>Records the id of the producing calculator (the manifest <c>calculatorId</c>).</summary>
+        public Builder ForCalculator(string calculatorId)
+        {
+            if (string.IsNullOrWhiteSpace(calculatorId))
+                throw new ArgumentException("Calculator id is required.", nameof(calculatorId));
+
+            _calculatorId = calculatorId;
+            return this;
+        }
+
+        /// <summary>True when a value with this key has already been added.</summary>
+        public bool HasValue(string key)
+            => !string.IsNullOrWhiteSpace(key)
+               && _values.Any(v => string.Equals(v.Key, key.Trim(), StringComparison.OrdinalIgnoreCase));
 
         public Builder AddValue(CalculatedValue value)
         {
@@ -239,6 +321,6 @@ public sealed class CalculationResult
         }
 
         public CalculationResult Build()
-            => new(_equipmentType, _values, _warnings, _errors, _calculatorVersion, DateTimeOffset.UtcNow);
+            => new(_equipmentType, _values, _warnings, _errors, _calculatorVersion, DateTimeOffset.UtcNow, _calculatorId);
     }
 }

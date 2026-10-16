@@ -59,6 +59,15 @@ public sealed class ManifestParameter
     public string Description { get; init; } = string.Empty;
 
     public IReadOnlyList<string> Aliases { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Question the gate asks when this value is missing or unverified.
+    /// When empty the gate builds a generic question from <see cref="DisplayName"/> and <see cref="Unit"/>.
+    /// </summary>
+    public string ClarifyingQuestion { get; init; } = string.Empty;
+
+    /// <summary>Optional fixed answers offered with the clarifying question.</summary>
+    public IReadOnlyList<string> Choices { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>A selectable part of the equipment (for example a shell, inlet or drain).</summary>
@@ -72,6 +81,41 @@ public sealed class ManifestComponent
 
     /// <summary>Keys of <see cref="EquipmentManifest.Inputs"/> this component depends on.</summary>
     public IReadOnlyList<string> ParameterKeys { get; init; } = Array.Empty<string>();
+}
+
+/// <summary>
+/// One manufacturable body in a multi-part export. Each part becomes its own
+/// body in the generated script so the STEP file stays clean and assemblable.
+/// </summary>
+public sealed class ManifestPart
+{
+    public string Key { get; init; } = string.Empty;
+
+    public string Title { get; init; } = string.Empty;
+
+    /// <summary>Keys of <see cref="EquipmentManifest.Components"/> built into this part.</summary>
+    public IReadOnlyList<string> ComponentKeys { get; init; } = Array.Empty<string>();
+
+    /// <summary>Optional template that builds this part. Must be listed in <see cref="EquipmentManifest.TemplateKeys"/>.</summary>
+    public string? TemplateKey { get; init; }
+
+    public int Quantity { get; init; } = 1;
+
+    /// <summary>When true the export is incomplete without this part.</summary>
+    public bool IsRequired { get; init; } = true;
+}
+
+/// <summary>
+/// Maps one SI calculator key (snake_case) to one template parameter (PascalCase).
+/// Scale defaults to 1000 (metres to millimetres). Use 1 for dimensionless or angle values.
+/// </summary>
+public sealed class ParameterMapping
+{
+    public string SourceKey { get; init; } = string.Empty;
+
+    public string TargetKey { get; init; } = string.Empty;
+
+    public double Scale { get; init; } = 1000.0;
 }
 
 /// <summary>
@@ -115,6 +159,27 @@ public sealed class EquipmentManifest
     public IReadOnlyList<ManifestParameter> Outputs { get; init; } = Array.Empty<ManifestParameter>();
 
     public IReadOnlyList<ManifestComponent> Components { get; init; } = Array.Empty<ManifestComponent>();
+
+    /// <summary>Manufacturable bodies for multi-part STEP export. Empty means single-body export.</summary>
+    public IReadOnlyList<ManifestPart> Parts { get; init; } = Array.Empty<ManifestPart>();
+
+    /// <summary>Id of the calculator-to-template mapper. Optional.</summary>
+    public string? MapperId { get; init; }
+
+    /// <summary>Declarative SI-to-template key mapping used by the mapper.</summary>
+    public IReadOnlyList<ParameterMapping> ParameterMappings { get; init; } = Array.Empty<ParameterMapping>();
+
+    /// <summary>
+    /// Ids of other manifests this equipment is easily mistaken for. When a drawing or request
+    /// matches more than one of these the gate must ask instead of choosing.
+    /// </summary>
+    public IReadOnlyList<string> ConfusableWith { get; init; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Template keys that must never stand in for this equipment (for example plain pipes or tees).
+    /// Enforces non-substitution.
+    /// </summary>
+    public IReadOnlyList<string> ForbiddenSubstitutions { get; init; } = Array.Empty<string>();
 }
 
 /// <summary>A single validation finding for a manifest.</summary>
@@ -133,6 +198,11 @@ public static class EquipmentManifestValidator
 
     private static readonly Regex KeyPattern = new(
         "^[A-Za-z][A-Za-z0-9_]*$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex TemplateKeyPattern = new(
+        "^[A-Z][A-Za-z0-9]*$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant,
         TimeSpan.FromMilliseconds(250));
 
@@ -170,10 +240,13 @@ public static class EquipmentManifestValidator
         ValidateAliases(issues, manifest.Aliases, root + "/Aliases");
 
         var inputKeys = ValidateParameters(issues, manifest.Inputs, root + "/Inputs");
-        ValidateParameters(issues, manifest.Outputs, root + "/Outputs");
+        var outputKeys = ValidateParameters(issues, manifest.Outputs, root + "/Outputs");
 
-        ValidateComponents(issues, manifest.Components, inputKeys, root);
+        var componentKeys = ValidateComponents(issues, manifest.Components, inputKeys, root);
         ValidateTier(issues, manifest, root);
+        ValidateParts(issues, manifest, componentKeys, root);
+        ValidateMappings(issues, manifest, inputKeys, outputKeys, root);
+        ValidateGuardrails(issues, manifest, root);
 
         return issues;
     }
@@ -216,6 +289,24 @@ public static class EquipmentManifestValidator
                 else
                 {
                     aliasOwners[normalized] = manifest.Id;
+                }
+            }
+        }
+
+        var ids = new HashSet<string>(
+            list.Where(m => !string.IsNullOrWhiteSpace(m.Id)).Select(m => m.Id),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var manifest in list.Where(m => !string.IsNullOrWhiteSpace(m.Id)))
+        {
+            foreach (var other in manifest.ConfusableWith.Where(c => !string.IsNullOrWhiteSpace(c)))
+            {
+                if (!ids.Contains(other.Trim()))
+                {
+                    issues.Add(new ManifestIssue(
+                        "MANIFEST_CONFUSABLE_UNKNOWN",
+                        "ConfusableWith references unknown manifest '" + other.Trim() + "'.",
+                        manifest.Id + "/ConfusableWith"));
                 }
             }
         }
@@ -270,6 +361,147 @@ public static class EquipmentManifestValidator
         if (manifest.TemplateKeys.Any(string.IsNullOrWhiteSpace))
         {
             issues.Add(new ManifestIssue("MANIFEST_BAD_TEMPLATE_KEY", "TemplateKeys must not contain empty values.", root));
+        }
+    }
+
+    private static void ValidateParts(
+        List<ManifestIssue> issues,
+        EquipmentManifest manifest,
+        HashSet<string> componentKeys,
+        string root)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var templates = new HashSet<string>(
+            manifest.TemplateKeys.Where(t => !string.IsNullOrWhiteSpace(t)),
+            StringComparer.OrdinalIgnoreCase);
+
+        for (var i = 0; i < manifest.Parts.Count; i++)
+        {
+            var part = manifest.Parts[i];
+            var here = root + "/Parts[" + i + "]";
+
+            if (string.IsNullOrWhiteSpace(part.Key) || !Matches(KeyPattern, part.Key))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_BAD_KEY", "Part key must start with a letter and contain only letters, digits or underscore.", here));
+            }
+            else if (!seen.Add(part.Key))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_DUPLICATE_KEY", "Duplicate part key '" + part.Key + "'.", here));
+            }
+
+            Require(issues, part.Title, "MANIFEST_PART_NO_TITLE", "Part Title is required.", here);
+
+            if (part.Quantity < 1)
+            {
+                issues.Add(new ManifestIssue("MANIFEST_PART_BAD_QUANTITY", "Part Quantity must be at least 1.", here));
+            }
+
+            if (part.ComponentKeys.Count == 0)
+            {
+                issues.Add(new ManifestIssue("MANIFEST_PART_EMPTY", "Part must reference at least one component.", here));
+            }
+
+            foreach (var key in part.ComponentKeys)
+            {
+                if (string.IsNullOrWhiteSpace(key) || !componentKeys.Contains(key))
+                {
+                    issues.Add(new ManifestIssue(
+                        "MANIFEST_PART_UNKNOWN_COMPONENT",
+                        "Part '" + part.Key + "' references unknown component '" + key + "'.",
+                        here));
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(part.TemplateKey) && !templates.Contains(part.TemplateKey))
+            {
+                issues.Add(new ManifestIssue(
+                    "MANIFEST_PART_UNKNOWN_TEMPLATE",
+                    "Part '" + part.Key + "' uses template '" + part.TemplateKey + "' which is not in TemplateKeys.",
+                    here));
+            }
+        }
+    }
+
+    private static void ValidateMappings(
+        List<ManifestIssue> issues,
+        EquipmentManifest manifest,
+        HashSet<string> inputKeys,
+        HashSet<string> outputKeys,
+        string root)
+    {
+        if (manifest.ParameterMappings.Count == 0)
+        {
+            return;
+        }
+
+        if (manifest.TemplateKeys.Count == 0)
+        {
+            issues.Add(new ManifestIssue("MANIFEST_MAPPING_NO_TEMPLATE", "ParameterMappings require at least one TemplateKey.", root));
+        }
+
+        var targets = new HashSet<string>(StringComparer.Ordinal);
+
+        for (var i = 0; i < manifest.ParameterMappings.Count; i++)
+        {
+            var map = manifest.ParameterMappings[i];
+            var here = root + "/ParameterMappings[" + i + "]";
+
+            if (string.IsNullOrWhiteSpace(map.SourceKey)
+                || (!outputKeys.Contains(map.SourceKey) && !inputKeys.Contains(map.SourceKey)))
+            {
+                issues.Add(new ManifestIssue(
+                    "MANIFEST_MAPPING_UNKNOWN_SOURCE",
+                    "SourceKey '" + map.SourceKey + "' is not a declared input or output.",
+                    here));
+            }
+
+            if (string.IsNullOrWhiteSpace(map.TargetKey) || !Matches(TemplateKeyPattern, map.TargetKey))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_MAPPING_BAD_TARGET", "TargetKey must be PascalCase (for example 'BodyHeight').", here));
+            }
+            else if (!targets.Add(map.TargetKey))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_MAPPING_DUPLICATE_TARGET", "Duplicate TargetKey '" + map.TargetKey + "'.", here));
+            }
+
+            if (double.IsNaN(map.Scale) || double.IsInfinity(map.Scale) || map.Scale <= 0)
+            {
+                issues.Add(new ManifestIssue("MANIFEST_MAPPING_BAD_SCALE", "Scale must be a finite number greater than zero.", here));
+            }
+        }
+    }
+
+    private static void ValidateGuardrails(List<ManifestIssue> issues, EquipmentManifest manifest, string root)
+    {
+        foreach (var other in manifest.ConfusableWith)
+        {
+            if (string.IsNullOrWhiteSpace(other) || !Matches(IdPattern, other.Trim()))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_BAD_CONFUSABLE", "ConfusableWith entries must be kebab-case manifest ids.", root + "/ConfusableWith"));
+            }
+            else if (string.Equals(other.Trim(), manifest.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_BAD_CONFUSABLE", "A manifest cannot be confusable with itself.", root + "/ConfusableWith"));
+            }
+        }
+
+        var templates = new HashSet<string>(
+            manifest.TemplateKeys.Where(t => !string.IsNullOrWhiteSpace(t)),
+            StringComparer.OrdinalIgnoreCase);
+
+        foreach (var forbidden in manifest.ForbiddenSubstitutions)
+        {
+            if (string.IsNullOrWhiteSpace(forbidden))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_BAD_FORBIDDEN", "ForbiddenSubstitutions must not contain empty values.", root + "/ForbiddenSubstitutions"));
+            }
+            else if (templates.Contains(forbidden.Trim()))
+            {
+                issues.Add(new ManifestIssue(
+                    "MANIFEST_FORBIDDEN_IS_TEMPLATE",
+                    "Template '" + forbidden.Trim() + "' is both a TemplateKey and a forbidden substitution.",
+                    root + "/ForbiddenSubstitutions"));
+            }
         }
     }
 
@@ -329,13 +561,14 @@ public static class EquipmentManifestValidator
                 }
             }
 
+            ValidateChoices(issues, p.Choices, here + "/Choices");
             ValidateAliases(issues, p.Aliases, here + "/Aliases");
         }
 
         return seen;
     }
 
-    private static void ValidateComponents(
+    private static HashSet<string> ValidateComponents(
         List<ManifestIssue> issues,
         IReadOnlyList<ManifestComponent> components,
         HashSet<string> inputKeys,
@@ -371,6 +604,27 @@ public static class EquipmentManifestValidator
             }
 
             ValidateAliases(issues, c.Aliases, here + "/Aliases");
+        }
+
+        return seen;
+    }
+
+    private static void ValidateChoices(List<ManifestIssue> issues, IReadOnlyList<string> choices, string path)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var choice in choices)
+        {
+            if (string.IsNullOrWhiteSpace(choice))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_BAD_CHOICE", "Choices must not be empty.", path));
+                continue;
+            }
+
+            if (!seen.Add(choice.Trim()))
+            {
+                issues.Add(new ManifestIssue("MANIFEST_DUPLICATE_CHOICE", "Duplicate choice '" + choice.Trim() + "'.", path));
+            }
         }
     }
 

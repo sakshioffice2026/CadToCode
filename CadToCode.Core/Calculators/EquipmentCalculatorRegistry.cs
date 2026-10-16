@@ -7,17 +7,22 @@ namespace CadToCode.Core.Calculators;
 
 /// <summary>
 /// Default <see cref="IEquipmentCalculatorRegistry"/>. Built from all calculators registered in dependency injection.
+/// Calculators can be found by equipment type or by the calculator id an equipment manifest declares.
 /// A missing calculator is never substituted with a generic fallback.
 /// </summary>
 public sealed class EquipmentCalculatorRegistry : IEquipmentCalculatorRegistry
 {
-    private readonly IReadOnlyDictionary<EquipmentType, IEquipmentCalculator> _calculators;
+    private readonly IReadOnlyDictionary<EquipmentType, IEquipmentCalculator> _byType;
+    private readonly IReadOnlyDictionary<string, IEquipmentCalculator> _byId;
+    private readonly IReadOnlyCollection<IEquipmentCalculator> _all;
+    private readonly IReadOnlyCollection<string> _ids;
 
     public EquipmentCalculatorRegistry(IEnumerable<IEquipmentCalculator> calculators)
     {
         if (calculators is null) throw new ArgumentNullException(nameof(calculators));
 
-        var map = new Dictionary<EquipmentType, IEquipmentCalculator>();
+        var byType = new Dictionary<EquipmentType, IEquipmentCalculator>();
+        var byId = new Dictionary<string, IEquipmentCalculator>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var calculator in calculators)
         {
@@ -29,21 +34,39 @@ public sealed class EquipmentCalculatorRegistry : IEquipmentCalculatorRegistry
                     $"Calculator '{calculator.GetType().Name}' declares EquipmentType.Unknown and cannot be registered.",
                     nameof(calculators));
 
-            if (!map.TryAdd(calculator.EquipmentType, calculator))
+            var id = calculator.CalculatorId;
+
+            if (string.IsNullOrWhiteSpace(id))
+                throw new ArgumentException(
+                    $"Calculator '{calculator.GetType().Name}' has an empty CalculatorId and cannot be registered.",
+                    nameof(calculators));
+
+            if (!byType.TryAdd(calculator.EquipmentType, calculator))
                 throw new ArgumentException(
                     $"More than one calculator is registered for {calculator.EquipmentType}: " +
-                    $"'{map[calculator.EquipmentType].GetType().Name}' and '{calculator.GetType().Name}'.",
+                    $"'{byType[calculator.EquipmentType].GetType().Name}' and '{calculator.GetType().Name}'.",
+                    nameof(calculators));
+
+            if (!byId.TryAdd(id.Trim(), calculator))
+                throw new ArgumentException(
+                    $"More than one calculator uses the id '{id.Trim()}': " +
+                    $"'{byId[id.Trim()].GetType().Name}' and '{calculator.GetType().Name}'.",
                     nameof(calculators));
         }
 
-        _calculators = map;
+        _byType = byType;
+        _byId = byId;
+        _all = byType.Values.ToList().AsReadOnly();
+        _ids = byId.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList().AsReadOnly();
     }
 
-    public IReadOnlyCollection<IEquipmentCalculator> All => _calculators.Values.ToList().AsReadOnly();
+    public IReadOnlyCollection<IEquipmentCalculator> All => _all;
+
+    public IReadOnlyCollection<string> Ids => _ids;
 
     public bool TryGet(EquipmentType type, out IEquipmentCalculator calculator)
     {
-        if (_calculators.TryGetValue(type, out var found))
+        if (_byType.TryGetValue(type, out var found))
         {
             calculator = found;
             return true;
@@ -58,4 +81,22 @@ public sealed class EquipmentCalculatorRegistry : IEquipmentCalculatorRegistry
             ? calculator
             : throw new NotSupportedException(
                 $"No calculator is registered for {type}. Ask the user to clarify the equipment or use the equipment schema; do not substitute a generic pipe.");
+
+    public bool TryGetById(string? calculatorId, out IEquipmentCalculator calculator)
+    {
+        if (!string.IsNullOrWhiteSpace(calculatorId) && _byId.TryGetValue(calculatorId.Trim(), out var found))
+        {
+            calculator = found;
+            return true;
+        }
+
+        calculator = null!;
+        return false;
+    }
+
+    public IEquipmentCalculator GetById(string? calculatorId)
+        => TryGetById(calculatorId, out var calculator)
+            ? calculator
+            : throw new NotSupportedException(
+                $"No calculator is registered with id '{calculatorId}'. Ask the user to clarify the equipment; do not substitute a generic pipe.");
 }

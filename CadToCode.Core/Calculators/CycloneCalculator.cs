@@ -15,7 +15,10 @@ namespace CadToCode.Core.Calculators;
 /// </summary>
 public sealed class CycloneCalculator : IEquipmentCalculator
 {
-    public const string CalculatorVersion = "1.0.0";
+    public const string CalculatorVersion = "1.1.0";
+
+    /// <summary>Calculator id used by the cyclone-separator equipment manifest.</summary>
+    public const string Id = "Cyclone";
 
     /// <summary>Input and output keys. Match the cyclone-separator equipment manifest.</summary>
     public static class Keys
@@ -87,6 +90,9 @@ public sealed class CycloneCalculator : IEquipmentCalculator
     private const string RefProportions = "Cyclone proportion family expressed as ratios of body diameter; Stairmand (1951), Perry's Chemical Engineers' Handbook";
     private const string RefPressureDrop = "Shepherd and Lapple (1939) tangential inlet cyclone pressure drop, as given in Perry's Chemical Engineers' Handbook";
     private const string RefCutDiameter = "Lapple (1951) cut diameter model; indicative estimate only";
+    private const string RefGeometry = "Cyclone geometry sanity checks derived from the sized proportions";
+
+    private const string GeometryCheckId = "CYC-F-005";
 
     private static readonly string[] OptionalPositiveKeys =
     {
@@ -98,6 +104,23 @@ public sealed class CycloneCalculator : IEquipmentCalculator
         Keys.WallThicknessM
     };
 
+    /// <summary>Outputs the equipment manifest marks as required. A result missing any of them is never returned as a success.</summary>
+    private static readonly string[] RequiredOutputKeys =
+    {
+        Keys.BarrelDiameterM,
+        Keys.BarrelHeightM,
+        Keys.ConeHeightM,
+        Keys.DustOutletDiameterM,
+        Keys.DustOutletLengthM,
+        Keys.VortexFinderDiameterM,
+        Keys.VortexFinderDepthM,
+        Keys.VortexFinderHeightM,
+        Keys.InletHeightM,
+        Keys.InletWidthM,
+        Keys.InletLengthM,
+        Keys.WallThicknessUsedM
+    };
+
     private readonly IDesignRulesProvider _rulesProvider;
 
     public CycloneCalculator(IDesignRulesProvider rulesProvider)
@@ -106,6 +129,8 @@ public sealed class CycloneCalculator : IEquipmentCalculator
     }
 
     public EquipmentType EquipmentType => EquipmentType.Cyclone;
+
+    public string CalculatorId => Id;
 
     public string Version => CalculatorVersion;
 
@@ -168,12 +193,13 @@ public sealed class CycloneCalculator : IEquipmentCalculator
             return CalculationResult.Failure(
                 EquipmentType.Cyclone,
                 validation.BlockingIssues.Select(i => i.Message),
-                Version);
+                Version,
+                calculatorId: Id);
         }
 
         if (!TryGetRules(out var rules, out var rulesIssue))
         {
-            return CalculationResult.Failure(EquipmentType.Cyclone, new[] { rulesIssue!.Message }, Version);
+            return CalculationResult.Failure(EquipmentType.Cyclone, new[] { rulesIssue!.Message }, Version, calculatorId: Id);
         }
 
         try
@@ -182,11 +208,11 @@ public sealed class CycloneCalculator : IEquipmentCalculator
         }
         catch (DesignRuleNotFoundException ex)
         {
-            return CalculationResult.Failure(EquipmentType.Cyclone, new[] { ex.Message }, Version);
+            return CalculationResult.Failure(EquipmentType.Cyclone, new[] { ex.Message }, Version, calculatorId: Id);
         }
         catch (InvalidOperationException ex)
         {
-            return CalculationResult.Failure(EquipmentType.Cyclone, new[] { ex.Message }, Version);
+            return CalculationResult.Failure(EquipmentType.Cyclone, new[] { ex.Message }, Version, calculatorId: Id);
         }
     }
 
@@ -196,7 +222,7 @@ public sealed class CycloneCalculator : IEquipmentCalculator
 
     private CalculationResult Compute(EquipmentInputs inputs, DesignRuleSet rules)
     {
-        var builder = CalculationResult.Create(EquipmentType.Cyclone, Version);
+        var builder = CalculationResult.Create(EquipmentType.Cyclone, Version).ForCalculator(Id);
 
         double q = inputs[Keys.AirflowM3s];
 
@@ -290,6 +316,39 @@ public sealed class CycloneCalculator : IEquipmentCalculator
         builder.AddValue(Keys.BarrelHeightM, "Barrel height", h, "m", rhRule.Id, rhRule.SourceReference, "h = rh * D");
         builder.AddValue(Keys.ConeHeightM, "Cone height", cone, "m", FProportions, RefProportions, "H - h = (rH - rh) * D");
         builder.AddValue(Keys.DustOutletDiameterM, "Dust outlet diameter", dustDiameter, "m", rBRule.Id, rBRule.SourceReference, "B = rB * D");
+
+        // 3b. Geometry sanity checks on the sized proportions
+        if (a >= h)
+        {
+            builder.AddWarning(
+                "CYC_INLET_TALLER_THAN_BARREL",
+                "Inlet height " + Format(a) + " m is not smaller than the barrel height " + Format(h)
+                + " m. The tangential inlet does not fit on the barrel. Check the proportion ratios in the rulepack.",
+                WarningSeverity.Critical,
+                Keys.InletHeightM,
+                GeometryCheckId);
+        }
+
+        if (s >= h + cone)
+        {
+            builder.AddWarning(
+                "CYC_FINDER_TOO_DEEP",
+                "Vortex finder depth " + Format(s) + " m is not shorter than the overall cyclone height " + Format(h + cone)
+                + " m. Check the proportion ratios in the rulepack.",
+                WarningSeverity.Critical,
+                Keys.VortexFinderDepthM,
+                GeometryCheckId);
+        }
+        else if (s < a)
+        {
+            builder.AddWarning(
+                "CYC_FINDER_SHORTER_THAN_INLET",
+                "Vortex finder depth " + Format(s) + " m is shorter than the inlet height " + Format(a)
+                + " m. Gas can short-circuit from the inlet to the gas outlet.",
+                WarningSeverity.Caution,
+                Keys.VortexFinderDepthM,
+                GeometryCheckId);
+        }
 
         // 4. Fabrication dimensions
         var vfHeightRule = rules.Get(RuleKeys.VortexFinderHeightRatio);
@@ -429,10 +488,13 @@ public sealed class CycloneCalculator : IEquipmentCalculator
         {
             if (d50.HasValue && d50.Value > target)
             {
+                // NOTE: d50 falls as inlet velocity rises and as body diameter falls, so the remedies are a higher
+                // inlet velocity within the supported range, or the flow split across several smaller cyclones.
                 builder.AddWarning(
                     "CYC_CUT_DIAMETER_NOT_MET",
                     "Estimated cut diameter " + Format(d50.Value) + " m is larger than the target " + Format(target)
-                    + " m. The design was not resized. Reduce inlet velocity limits or consider a smaller or multiple cyclones.",
+                    + " m. The design was not resized. Raise the inlet velocity within the supported range, "
+                    + "or split the flow across several smaller cyclones in parallel.",
                     WarningSeverity.Caution,
                     Keys.CutDiameterM,
                     FCutDiameter);
@@ -445,6 +507,15 @@ public sealed class CycloneCalculator : IEquipmentCalculator
                     WarningSeverity.Info,
                     Keys.CutDiameterM,
                     FCutDiameter);
+            }
+        }
+
+        // 9. Contract with the equipment manifest: every required output must exist.
+        foreach (var key in RequiredOutputKeys)
+        {
+            if (!builder.HasValue(key))
+            {
+                builder.AddError("Required output '" + key + "' was not produced.");
             }
         }
 

@@ -1,0 +1,265 @@
+{
+  // CadToCode.Core/EngineeringKnowledge/fans/equipment-manifest.json
+  "id": "axial-fan",
+  "domain": "air-moving",
+  "displayName": "Axial fan",
+  "description": "Single-stage axial fan (propeller, tube-axial or vane-axial) sized from airflow, static pressure and rotational speed using dimensional analysis and free-vortex blade design. Outputs are SI values.",
+  "version": "1.0.0",
+  "maxTier": "Engineered",
+  "aliases": [
+    "axial fan",
+    "axial flow fan",
+    "tube axial",
+    "tubeaxial",
+    "vane axial",
+    "vaneaxial",
+    "propeller fan",
+    "axial blower"
+  ],
+  "calculatorId": "AxialFan",
+  "rulePackIds": [
+    "fans-design-rules"
+  ],
+  // The fan script is composed directly from SI values (AxialFanScriptComposer), not from a catalog template,
+  // so no templateKeys are declared. "axial-fan-script-mapper" renames calculator outputs to composer keys
+  // (casing_wall_thickness_m -> casing_wall_m) and supplies blade_chord_m, blade_thickness_m and blade_pitch_deg,
+  // which the calculator does not produce.
+  "mapperId": "axial-fan-script-mapper",
+  "forbiddenSubstitutions": [
+    "builtin-straight-pipe",
+    "builtin-pipe-elbow",
+    "builtin-pipe-tee",
+    "builtin-flange-plate",
+    "builtin-cyclone-separator",
+    "builtin-wet-scrubber",
+    "builtin-wet-scrubber-tank-pump"
+  ],
+  "references": [
+    "Wright, T., Fluid Machinery: Performance, Analysis, and Design (axial fan dimensional analysis and velocity triangles)",
+    "Eck, B., Fans: Design and Operation of Centrifugal, Axial-Flow and Cross-Flow Fans (free-vortex blade design)",
+    "AMCA 210 / ISO 5801, Industrial fans: performance testing using standardized airways (air power and static efficiency)",
+    "ASHRAE Handbook, HVAC Systems and Equipment, Fans chapter (tip speed and noise guidance)"
+  ],
+  "inputs": [
+    {
+      "key": "airflow_m3s",
+      "displayName": "Airflow",
+      "unit": "m3/s",
+      "min": 0.05,
+      "max": 300,
+      "isRequired": true,
+      "description": "Required volumetric flow rate.",
+      "clarifyingQuestion": "What airflow must the fan deliver (m3/s)? If you have m3/h or CFM, give that and I will convert it.",
+      "aliases": ["airflow", "air flow", "flow rate", "flow", "capacity", "volume flow"]
+    },
+    {
+      "key": "static_pressure_pa",
+      "displayName": "Static pressure",
+      "unit": "Pa",
+      "min": 10,
+      "max": 5000,
+      "isRequired": true,
+      "description": "Required fan static pressure.",
+      "clarifyingQuestion": "What static pressure must the fan develop (Pa)? This is the system resistance it works against.",
+      "aliases": ["static pressure", "pressure", "system resistance", "static head"]
+    },
+    {
+      "key": "speed_rad_s",
+      "displayName": "Rotational speed",
+      "unit": "rad/s",
+      "min": 0.001,
+      "isRequired": true,
+      "description": "Shaft angular speed. Derived from RPM: rad/s = RPM x 2 x pi / 60.",
+      "clarifyingQuestion": "What is the fan shaft speed (RPM)? I will convert it to rad/s.",
+      "aliases": ["speed", "rpm", "rotational speed", "shaft speed", "angular speed"]
+    },
+    {
+      "key": "air_density_kgm3",
+      "displayName": "Air density",
+      "unit": "kg/m3",
+      "min": 0.001,
+      "description": "Air density at operating conditions. When omitted the rulepack standard air density is used.",
+      "aliases": ["air density", "gas density", "density"]
+    },
+    {
+      "key": "static_efficiency",
+      "displayName": "Static efficiency",
+      "unit": "-",
+      "min": 0.3,
+      "max": 0.85,
+      "description": "Target static efficiency as a fraction (0 to 1). When omitted the rulepack default is used.",
+      "aliases": ["static efficiency", "efficiency", "fan efficiency"]
+    }
+  ],
+  "outputs": [
+    {
+      "key": "tip_diameter_m",
+      "displayName": "Tip diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Impeller outer diameter."
+    },
+    {
+      "key": "hub_diameter_m",
+      "displayName": "Hub diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Hub outer diameter."
+    },
+    {
+      "key": "hub_to_tip_ratio",
+      "displayName": "Hub-to-tip ratio",
+      "unit": "-",
+      "isRequired": true,
+      "description": "Hub diameter divided by tip diameter."
+    },
+    {
+      "key": "tip_speed_ms",
+      "displayName": "Tip speed",
+      "unit": "m/s",
+      "isRequired": true,
+      "description": "Blade tip peripheral speed."
+    },
+    {
+      "key": "blade_count",
+      "displayName": "Blade count",
+      "unit": "-",
+      "isRequired": true,
+      "isInteger": true,
+      "description": "Number of blades."
+    },
+    {
+      "key": "blade_angle_hub_deg",
+      "displayName": "Blade angle at hub",
+      "unit": "deg",
+      "isRequired": true,
+      "description": "Blade pitch angle at hub."
+    },
+    {
+      "key": "blade_angle_tip_deg",
+      "displayName": "Blade angle at tip",
+      "unit": "deg",
+      "isRequired": true,
+      "description": "Blade pitch angle at tip."
+    },
+    {
+      "key": "casing_inner_diameter_m",
+      "displayName": "Casing inner diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Casing bore including tip clearance."
+    },
+    {
+      "key": "casing_outer_diameter_m",
+      "displayName": "Casing outer diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Casing outer diameter."
+    },
+    {
+      "key": "casing_length_m",
+      "displayName": "Casing length",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Axial casing length."
+    },
+    {
+      "key": "air_density_used_kgm3",
+      "displayName": "Air density used",
+      "unit": "kg/m3",
+      "description": "Air density applied in the design."
+    },
+    {
+      "key": "flow_coefficient",
+      "displayName": "Flow coefficient",
+      "unit": "-",
+      "description": "Dimensionless flow coefficient of the sized design."
+    },
+    {
+      "key": "axial_velocity_ms",
+      "displayName": "Axial velocity",
+      "unit": "m/s",
+      "description": "Mean axial velocity through the annulus."
+    },
+    {
+      "key": "static_pressure_coefficient",
+      "displayName": "Static pressure coefficient",
+      "unit": "-",
+      "description": "Dimensionless static pressure coefficient of the sized design."
+    },
+    {
+      "key": "total_pressure_pa",
+      "displayName": "Total pressure",
+      "unit": "Pa",
+      "description": "Static pressure plus axial velocity pressure."
+    },
+    {
+      "key": "blade_circulation_m2s",
+      "displayName": "Blade circulation",
+      "unit": "m2/s",
+      "description": "Free-vortex blade circulation from Euler work."
+    },
+    {
+      "key": "tip_clearance_m",
+      "displayName": "Tip clearance",
+      "unit": "m",
+      "description": "Radial clearance between blade tip and casing."
+    },
+    {
+      "key": "casing_wall_thickness_m",
+      "displayName": "Casing wall thickness",
+      "unit": "m",
+      "description": "Casing wall thickness applied in the design."
+    },
+    {
+      "key": "shaft_power_w",
+      "displayName": "Shaft power",
+      "unit": "W",
+      "description": "Estimated shaft power at the given static efficiency."
+    }
+  ],
+  "components": [
+    {
+      "key": "casing",
+      "title": "Casing",
+      "aliases": ["casing", "housing", "shroud", "duct", "tube"],
+      "parameterKeys": ["airflow_m3s", "static_pressure_pa", "speed_rad_s"]
+    },
+    {
+      "key": "hub",
+      "title": "Hub",
+      "aliases": ["hub", "spinner", "rotor hub"],
+      "parameterKeys": ["airflow_m3s", "static_pressure_pa", "speed_rad_s"]
+    },
+    {
+      "key": "blades",
+      "title": "Blades",
+      "aliases": ["blades", "blade", "impeller", "rotor", "propeller"],
+      "parameterKeys": ["airflow_m3s", "static_pressure_pa", "speed_rad_s", "air_density_kgm3", "static_efficiency"]
+    }
+  ],
+  // Part keys match the body names the script composer emits so each part exports as its own solid.
+  "parts": [
+    {
+      "key": "Casing",
+      "title": "Casing",
+      "componentKeys": ["casing"],
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "Hub",
+      "title": "Hub",
+      "componentKeys": ["hub"],
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "Blades",
+      "title": "Blades",
+      "componentKeys": ["blades"],
+      "quantity": 1,
+      "isRequired": true
+    }
+  ]
+}

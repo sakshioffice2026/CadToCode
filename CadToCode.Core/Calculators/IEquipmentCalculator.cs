@@ -61,6 +61,22 @@ public sealed class EquipmentInputs : IReadOnlyDictionary<string, double>
         return new EquipmentInputs(copy);
     }
 
+    /// <summary>Returns a copy without the given key. Unchanged copy when the key is absent.</summary>
+    public EquipmentInputs Without(string key)
+    {
+        var copy = _values.ToDictionary(k => k.Key, k => k.Value, StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(key))
+        {
+            copy.Remove(key.Trim());
+        }
+
+        return new EquipmentInputs(copy);
+    }
+
+    /// <summary>Case-insensitive read-only view of the values, for mappers and audit snapshots.</summary>
+    public IReadOnlyDictionary<string, double> AsDictionary() => _values;
+
     public IEnumerator<KeyValuePair<string, double>> GetEnumerator() => _values.GetEnumerator();
     IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
 }
@@ -111,6 +127,13 @@ public interface IEquipmentCalculator
     /// <summary>Equipment type handled by this calculator.</summary>
     EquipmentType EquipmentType { get; }
 
+    /// <summary>
+    /// Id that equipment manifests use in <c>calculatorId</c>. Defaults to the <see cref="EquipmentType"/> name
+    /// (for example "AxialFan", "Cyclone"), which matches the existing manifests. Override it for calculators
+    /// whose manifest id differs.
+    /// </summary>
+    string CalculatorId => EquipmentType.ToString();
+
     /// <summary>Semantic version of the calculation logic, recorded in every result for audit.</summary>
     string Version { get; }
 
@@ -129,7 +152,7 @@ public interface IEquipmentCalculator
 }
 
 /// <summary>
-/// Resolves calculators by equipment type.
+/// Resolves calculators by equipment type or by the calculator id declared in an equipment manifest.
 /// </summary>
 public interface IEquipmentCalculatorRegistry
 {
@@ -142,4 +165,41 @@ public interface IEquipmentCalculatorRegistry
     /// <summary>Returns the calculator for the type.</summary>
     /// <exception cref="NotSupportedException">Thrown when no calculator is registered. Callers must not substitute a generic pipe.</exception>
     IEquipmentCalculator Get(EquipmentType type);
+
+    /// <summary>Ids of all registered calculators. Feeds <c>ConsistencyInputs.CalculatorIds</c>.</summary>
+    IReadOnlyCollection<string> Ids
+        => All.Select(c => c.CalculatorId)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList()
+            .AsReadOnly();
+
+    /// <summary>
+    /// Returns the calculator whose <see cref="IEquipmentCalculator.CalculatorId"/> matches the id
+    /// (case-insensitive), or false when none does.
+    /// </summary>
+    bool TryGetById(string? calculatorId, out IEquipmentCalculator calculator)
+    {
+        if (!string.IsNullOrWhiteSpace(calculatorId))
+        {
+            var id = calculatorId.Trim();
+            var found = All.FirstOrDefault(c => string.Equals(c.CalculatorId, id, StringComparison.OrdinalIgnoreCase));
+
+            if (found is not null)
+            {
+                calculator = found;
+                return true;
+            }
+        }
+
+        calculator = null!;
+        return false;
+    }
+
+    /// <summary>Returns the calculator for a manifest calculator id.</summary>
+    /// <exception cref="NotSupportedException">Thrown when no calculator has that id. Callers must not substitute a generic pipe.</exception>
+    IEquipmentCalculator GetById(string? calculatorId)
+        => TryGetById(calculatorId, out var calculator)
+            ? calculator
+            : throw new NotSupportedException(
+                $"No calculator is registered with id '{calculatorId}'. Ask the user to clarify the equipment; do not substitute a generic pipe.");
 }

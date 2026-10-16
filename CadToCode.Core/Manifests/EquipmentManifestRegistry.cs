@@ -3,6 +3,61 @@ using System.Text.RegularExpressions;
 
 namespace CadToCode.Core.Manifests;
 
+/// <summary>Outcome class of resolving free text to an equipment manifest.</summary>
+public enum ManifestResolutionStatus
+{
+    /// <summary>Nothing in the text names a known equipment type.</summary>
+    NoMatch = 0,
+
+    /// <summary>Exactly one equipment type matches and no confusable type also matches.</summary>
+    Resolved = 1,
+
+    /// <summary>
+    /// More than one equipment type matches equally well, or a declared confusable type also matches.
+    /// The gate must ask the user instead of choosing.
+    /// </summary>
+    Ambiguous = 2
+}
+
+/// <summary>Result of resolving free text to an equipment manifest.</summary>
+public sealed record ManifestResolution
+{
+    private static readonly IReadOnlyList<EquipmentManifest> NoCandidates = Array.Empty<EquipmentManifest>();
+
+    public ManifestResolutionStatus Status { get; init; }
+
+    /// <summary>The chosen manifest. Set only when <see cref="Status"/> is <see cref="ManifestResolutionStatus.Resolved"/>.</summary>
+    public EquipmentManifest? Manifest { get; init; }
+
+    /// <summary>
+    /// Manifests the text may refer to. One item when resolved, several when ambiguous, empty on no match.
+    /// </summary>
+    public IReadOnlyList<EquipmentManifest> Candidates { get; init; } = NoCandidates;
+
+    /// <summary>Stable machine reason, e.g. "TIE" or "CONFUSABLE". Empty when resolved or no match.</summary>
+    public string Reason { get; init; } = string.Empty;
+
+    public bool IsResolved => Status == ManifestResolutionStatus.Resolved && Manifest is not null;
+
+    public bool IsAmbiguous => Status == ManifestResolutionStatus.Ambiguous;
+
+    public static ManifestResolution None() => new() { Status = ManifestResolutionStatus.NoMatch };
+
+    public static ManifestResolution Single(EquipmentManifest manifest) => new()
+    {
+        Status = ManifestResolutionStatus.Resolved,
+        Manifest = manifest,
+        Candidates = new[] { manifest }
+    };
+
+    public static ManifestResolution Ambiguity(IReadOnlyList<EquipmentManifest> candidates, string reason) => new()
+    {
+        Status = ManifestResolutionStatus.Ambiguous,
+        Candidates = candidates,
+        Reason = reason
+    };
+}
+
 /// <summary>Read access to the loaded, validated equipment manifests.</summary>
 public interface IEquipmentManifestRegistry
 {
@@ -16,9 +71,30 @@ public interface IEquipmentManifestRegistry
 
     /// <summary>
     /// Finds the manifest named in free text by id, display name or alias.
-    /// Returns null when nothing matches or when two manifests match equally well.
+    /// Returns null when nothing matches, when two manifests match equally well,
+    /// or when a declared confusable manifest also matches.
     /// </summary>
     EquipmentManifest? Resolve(string? text);
+
+    /// <summary>
+    /// Same matching as <see cref="Resolve"/> but reports why nothing was chosen,
+    /// so the gate can ask a structured clarifying question.
+    /// </summary>
+    ManifestResolution ResolveDetailed(string? text)
+    {
+        var manifest = Resolve(text);
+
+        return manifest is null
+            ? ManifestResolution.None()
+            : ManifestResolution.Single(manifest);
+    }
+
+    /// <summary>
+    /// Manifests easily mistaken for the given one, in either direction of
+    /// <see cref="EquipmentManifest.ConfusableWith"/>.
+    /// </summary>
+    IReadOnlyList<EquipmentManifest> GetConfusables(string id)
+        => Array.Empty<EquipmentManifest>();
 
     /// <summary>Reloads all manifest files from disk.</summary>
     void Reload();
@@ -86,42 +162,87 @@ public sealed class JsonEquipmentManifestRegistry : IEquipmentManifestRegistry
 
     public EquipmentManifest? Resolve(string? text)
     {
+        var resolution = ResolveDetailed(text);
+
+        return resolution.IsResolved ? resolution.Manifest : null;
+    }
+
+    public ManifestResolution ResolveDetailed(string? text)
+    {
         var normalized = Normalize(text);
 
         if (normalized.Length == 0)
         {
-            return null;
+            return ManifestResolution.None();
         }
 
         var padded = " " + normalized + " ";
         var snapshot = Volatile.Read(ref _snapshot);
 
-        EquipmentManifest? best = null;
-        var bestScore = 0;
-        var tie = false;
+        var matches = new List<(EquipmentManifest Manifest, int Score)>();
 
         foreach (var manifest in snapshot.Manifests)
         {
             var score = Score(manifest, padded);
 
-            if (score == 0)
+            if (score > 0)
             {
-                continue;
-            }
-
-            if (score > bestScore)
-            {
-                best = manifest;
-                bestScore = score;
-                tie = false;
-            }
-            else if (score == bestScore)
-            {
-                tie = true;
+                matches.Add((manifest, score));
             }
         }
 
-        return tie ? null : best;
+        if (matches.Count == 0)
+        {
+            return ManifestResolution.None();
+        }
+
+        matches = matches
+            .OrderByDescending(m => m.Score)
+            .ThenBy(m => m.Manifest.Id, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var top = matches[0];
+
+        var tied = matches
+            .Where(m => m.Score == top.Score)
+            .Select(m => m.Manifest)
+            .ToList();
+
+        if (tied.Count > 1)
+        {
+            return ManifestResolution.Ambiguity(tied, "TIE");
+        }
+
+        var confusable = matches
+            .Skip(1)
+            .Where(m => AreConfusable(top.Manifest, m.Manifest))
+            .Select(m => m.Manifest)
+            .ToList();
+
+        if (confusable.Count > 0)
+        {
+            var candidates = new List<EquipmentManifest> { top.Manifest };
+            candidates.AddRange(confusable);
+
+            return ManifestResolution.Ambiguity(candidates, "CONFUSABLE");
+        }
+
+        return ManifestResolution.Single(top.Manifest);
+    }
+
+    public IReadOnlyList<EquipmentManifest> GetConfusables(string id)
+    {
+        var snapshot = Volatile.Read(ref _snapshot);
+
+        if (string.IsNullOrWhiteSpace(id) || !snapshot.ById.TryGetValue(id.Trim(), out var source))
+        {
+            return Array.Empty<EquipmentManifest>();
+        }
+
+        return snapshot.Manifests
+            .Where(m => !string.Equals(m.Id, source.Id, StringComparison.OrdinalIgnoreCase)
+                        && AreConfusable(source, m))
+            .ToList();
     }
 
     public void Reload()
@@ -131,6 +252,14 @@ public sealed class JsonEquipmentManifestRegistry : IEquipmentManifestRegistry
             Volatile.Write(ref _snapshot, Load());
         }
     }
+
+    private static bool AreConfusable(EquipmentManifest a, EquipmentManifest b)
+        => Lists(a, b.Id) || Lists(b, a.Id);
+
+    private static bool Lists(EquipmentManifest owner, string otherId)
+        => owner.ConfusableWith.Any(c =>
+            !string.IsNullOrWhiteSpace(c)
+            && string.Equals(c.Trim(), otherId, StringComparison.OrdinalIgnoreCase));
 
     private Snapshot Load()
     {
@@ -169,12 +298,18 @@ public sealed class JsonEquipmentManifestRegistry : IEquipmentManifestRegistry
             }
         }
 
-        var collisions = EquipmentManifestValidator
-            .ValidateSet(valid)
+        var setIssues = EquipmentManifestValidator.ValidateSet(valid);
+
+        var collisions = setIssues
             .Where(i => i.Code is "MANIFEST_DUPLICATE_ID" or "MANIFEST_ALIAS_CONFLICT")
             .ToList();
 
+        var reportOnly = setIssues
+            .Where(i => i.Code == "MANIFEST_CONFUSABLE_UNKNOWN")
+            .ToList();
+
         issues.AddRange(collisions);
+        issues.AddRange(reportOnly);
 
         var excluded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 

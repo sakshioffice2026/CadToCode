@@ -24,7 +24,20 @@ public sealed record GateValue(string Key, double Value, ValueOrigin Origin, boo
 /// <summary>Everything the gate needs to decide. Built by the caller; the gate does no I/O.</summary>
 public sealed class GateContext
 {
+    /// <summary>The resolved equipment. Leave null when equipment is unknown or ambiguous.</summary>
     public EquipmentManifest? Manifest { get; init; }
+
+    /// <summary>
+    /// Result of <see cref="IEquipmentManifestRegistry.ResolveDetailed"/>. When it is ambiguous the gate
+    /// asks which equipment is meant, even if <see cref="Manifest"/> is also set.
+    /// </summary>
+    public ManifestResolution? Resolution { get; init; }
+
+    /// <summary>
+    /// Equipment the user can pick from when nothing matched. When empty and nothing matched,
+    /// the gate refuses instead of asking.
+    /// </summary>
+    public IReadOnlyList<EquipmentManifest> AvailableManifests { get; init; } = Array.Empty<EquipmentManifest>();
 
     /// <summary>Highest tier the caller wants. The gate may lower it, never raise it.</summary>
     public DesignTier RequestedTier { get; init; } = DesignTier.Engineered;
@@ -44,20 +57,47 @@ public sealed class GateContext
     public double? MatchConfidence { get; init; }
 
     public double MinMatchConfidence { get; init; } = 0.6;
+
+    /// <summary>Template the caller intends to use. Checked against the manifest's allowed and forbidden templates.</summary>
+    public string? RequestedTemplateKey { get; init; }
+
+    /// <summary>Part keys selected for export. Null means the caller has no part selection to check.</summary>
+    public IReadOnlyList<string>? RequestedPartKeys { get; init; }
+
+    /// <summary>True once the user has confirmed that exporting without some required parts is intended.</summary>
+    public bool PartialExportConfirmed { get; init; }
 }
 
 /// <summary>A question the assistant must put to the user before continuing.</summary>
 /// <param name="Code">Stable machine code.</param>
 /// <param name="Key">Related parameter key, when there is one.</param>
 /// <param name="Prompt">Plain-language question.</param>
-public sealed record GateQuestion(string Code, string? Key, string Prompt);
+public sealed record GateQuestion(string Code, string? Key, string Prompt)
+{
+    /// <summary>Fixed answers to offer. Empty means free text.</summary>
+    public IReadOnlyList<string> Choices { get; init; } = Array.Empty<string>();
+}
 
 public sealed record GateDecision(
     GateStatus Status,
     DesignTier EffectiveTier,
     IReadOnlyList<GateQuestion> Questions,
     IReadOnlyList<ManifestIssue> Blockers,
-    bool RequiresGenericLabel);
+    bool RequiresGenericLabel)
+{
+    /// <summary>True when the session must pause and wait for the user's answers.</summary>
+    public bool PausesSession => Status == GateStatus.NeedInfo;
+
+    /// <summary>
+    /// Stable fingerprint of what is pending. Equal values mean the same questions and blockers are still open,
+    /// so a stored session can tell whether the user's reply moved things forward.
+    /// </summary>
+    public string PendingKey => string.Join(
+        "|",
+        Questions.Select(q => q.Code + ":" + (q.Key ?? string.Empty))
+            .Concat(Blockers.Select(b => b.Code + ":" + b.Path))
+            .OrderBy(s => s, StringComparer.Ordinal));
+}
 
 /// <summary>
 /// Decides what the system is allowed to do for a request. Values from vision, OCR or an LLM are
@@ -69,10 +109,26 @@ public static class DesignGate
     {
         ArgumentNullException.ThrowIfNull(context);
 
+        if (context.Resolution is { IsAmbiguous: true } ambiguous)
+        {
+            return NeedEquipment(
+                "GATE_AMBIGUOUS_EQUIPMENT",
+                ambiguous.Candidates,
+                "This could be more than one type of equipment. Which one do you mean?");
+        }
+
         var manifest = context.Manifest;
 
         if (manifest is null)
         {
+            if (context.AvailableManifests.Count > 0)
+            {
+                return NeedEquipment(
+                    "GATE_IDENTIFY_EQUIPMENT",
+                    context.AvailableManifests,
+                    "I could not identify the equipment. Which type of equipment do you want to design?");
+            }
+
             return Refuse("GATE_NO_MANIFEST", "No equipment definition matches this request.");
         }
 
@@ -89,7 +145,10 @@ public static class DesignGate
             questions.Add(new GateQuestion(
                 "GATE_CONFIRM_EQUIPMENT",
                 null,
-                "I am not confident this is a " + manifest.DisplayName + ". Please confirm the equipment type."));
+                "I am not confident this is a " + manifest.DisplayName + ". Please confirm the equipment type.")
+            {
+                Choices = new[] { "Yes, it is a " + manifest.DisplayName, "No, it is a different equipment type" }
+            });
         }
 
         var tier = ResolveTier(context, manifest, blockers);
@@ -101,10 +160,15 @@ public static class DesignGate
                 null,
                 "A fully engineered design is not available for " + manifest.DisplayName
                 + ". I can build a generic parametric model from dimensions you confirm. "
-                + "It will be labelled as not engineered and will make no sizing or compliance claims. Do you want that?"));
+                + "It will be labelled as not engineered and will make no sizing or compliance claims. Do you want that?")
+            {
+                Choices = new[] { "Yes, build a generic model", "No, stop here" }
+            });
         }
 
         CheckValues(context, manifest, tier, questions, blockers);
+        CheckTemplate(context, manifest, questions, blockers);
+        CheckParts(context, manifest, questions, blockers);
 
         var status = questions.Count == 0 && blockers.Count == 0
             ? GateStatus.Proceed
@@ -195,8 +259,10 @@ public static class DesignGate
                     questions.Add(new GateQuestion(
                         "GATE_MISSING_INPUT",
                         parameter.Key,
-                        "Please provide " + parameter.DisplayName + " (" + parameter.Unit + ")."
-                        + (string.IsNullOrWhiteSpace(parameter.Description) ? string.Empty : " " + parameter.Description)));
+                        BuildMissingPrompt(parameter))
+                    {
+                        Choices = parameter.Choices
+                    });
                 }
 
                 continue;
@@ -221,6 +287,119 @@ public static class DesignGate
         }
     }
 
+    private static void CheckTemplate(
+        GateContext context,
+        EquipmentManifest manifest,
+        List<GateQuestion> questions,
+        List<ManifestIssue> blockers)
+    {
+        if (string.IsNullOrWhiteSpace(context.RequestedTemplateKey))
+        {
+            return;
+        }
+
+        var key = context.RequestedTemplateKey.Trim();
+        var path = manifest.Id + "/" + key;
+
+        var isForbidden = manifest.ForbiddenSubstitutions.Any(f =>
+            !string.IsNullOrWhiteSpace(f) && string.Equals(f.Trim(), key, StringComparison.OrdinalIgnoreCase));
+
+        var isAllowed = manifest.TemplateKeys.Any(t =>
+            !string.IsNullOrWhiteSpace(t) && string.Equals(t.Trim(), key, StringComparison.OrdinalIgnoreCase));
+
+        if (isForbidden)
+        {
+            blockers.Add(new ManifestIssue(
+                "GATE_FORBIDDEN_SUBSTITUTION",
+                "Template '" + key + "' must not stand in for " + manifest.DisplayName + ".",
+                path));
+        }
+        else if (manifest.TemplateKeys.Count > 0 && !isAllowed)
+        {
+            blockers.Add(new ManifestIssue(
+                "GATE_TEMPLATE_NOT_ALLOWED",
+                "Template '" + key + "' is not defined for " + manifest.DisplayName + ".",
+                path));
+        }
+        else
+        {
+            return;
+        }
+
+        if (manifest.TemplateKeys.Count > 0)
+        {
+            questions.Add(new GateQuestion(
+                "GATE_CHOOSE_TEMPLATE",
+                null,
+                "Which template should be used for " + manifest.DisplayName + "?")
+            {
+                Choices = manifest.TemplateKeys
+            });
+        }
+    }
+
+    private static void CheckParts(
+        GateContext context,
+        EquipmentManifest manifest,
+        List<GateQuestion> questions,
+        List<ManifestIssue> blockers)
+    {
+        if (manifest.Parts.Count == 0 || context.RequestedPartKeys is null)
+        {
+            return;
+        }
+
+        var known = new HashSet<string>(manifest.Parts.Select(p => p.Key), StringComparer.OrdinalIgnoreCase);
+        var selected = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var key in context.RequestedPartKeys)
+        {
+            if (string.IsNullOrWhiteSpace(key) || !known.Contains(key.Trim()))
+            {
+                blockers.Add(new ManifestIssue(
+                    "GATE_UNKNOWN_PART",
+                    "'" + key + "' is not a part of " + manifest.DisplayName + ".",
+                    manifest.Id + "/" + key));
+                continue;
+            }
+
+            selected.Add(key.Trim());
+        }
+
+        if (context.PartialExportConfirmed)
+        {
+            return;
+        }
+
+        var missing = manifest.Parts
+            .Where(p => p.IsRequired && !selected.Contains(p.Key))
+            .Select(p => string.IsNullOrWhiteSpace(p.Title) ? p.Key : p.Title)
+            .ToList();
+
+        if (missing.Count > 0)
+        {
+            questions.Add(new GateQuestion(
+                "GATE_CONFIRM_PARTS",
+                null,
+                "These required parts are not selected: " + string.Join(", ", missing)
+                + ". The export is incomplete without them. Include them, or confirm a partial export?")
+            {
+                Choices = new[] { "Include all required parts", "Confirm partial export" }
+            });
+        }
+    }
+
+    private static string BuildMissingPrompt(ManifestParameter parameter)
+    {
+        if (!string.IsNullOrWhiteSpace(parameter.ClarifyingQuestion))
+        {
+            return parameter.ClarifyingQuestion;
+        }
+
+        return "Please provide " + parameter.DisplayName + " (" + parameter.Unit + ")."
+               + (string.IsNullOrWhiteSpace(parameter.Description) ? string.Empty : " " + parameter.Description);
+    }
+
     private static string? CheckRange(ManifestParameter parameter, double value)
     {
         if (double.IsNaN(value) || double.IsInfinity(value))
@@ -243,6 +422,21 @@ public static class DesignGate
         }
 
         return null;
+    }
+
+    private static GateDecision NeedEquipment(string code, IReadOnlyList<EquipmentManifest> options, string prompt)
+    {
+        var choices = options
+            .Select(m => string.IsNullOrWhiteSpace(m.DisplayName) ? m.Id : m.DisplayName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return new GateDecision(
+            GateStatus.NeedInfo,
+            DesignTier.Refuse,
+            new[] { new GateQuestion(code, null, prompt) { Choices = choices } },
+            Array.Empty<ManifestIssue>(),
+            false);
     }
 
     private static GateDecision Refuse(string code, string message)
