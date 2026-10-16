@@ -10,7 +10,7 @@ public static class VisionResultParser
     private const int MaxTextChars = 300;
     private const int MaxViews = 20;
     private const int MaxUncertainties = 30;
-    private const int MaxRepairAttempts = 400;
+    private const int MaxRepairAttempts = 800;
     private const double MaxLengthMm = 100000.0;
     private const double MaxCount = 1000.0;
 
@@ -38,7 +38,7 @@ public static class VisionResultParser
             return null;
         }
 
-        var json = ExtractJsonObject(raw, out var repaired);
+        var json = ExtractJsonObject(Normalize(raw), out var repaired);
 
         if (json is null)
         {
@@ -382,13 +382,17 @@ public static class VisionResultParser
     {
         repaired = false;
 
-        var start = raw.IndexOf('{');
+        var first = raw.IndexOf('{');
 
-        if (start < 0)
+        if (first < 0)
         {
             return null;
         }
 
+        first = SkipDuplicateBraces(raw, first);
+        raw = EscapeControlCharsInStrings(raw.Substring(first));
+
+        var start = 0;
         var depth = 0;
         var inString = false;
         var escaped = false;
@@ -478,6 +482,14 @@ public static class VisionResultParser
             {
                 case '"':
                     inString = true;
+
+                    var close = FindStringEnd(raw, i);
+
+                    if (close > 0)
+                    {
+                        cuts.Add((close + 1, BuildClosers(stack)));
+                    }
+
                     break;
                 case '{':
                     stack.Add('}');
@@ -523,6 +535,129 @@ public static class VisionResultParser
         }
 
         return null;
+    }
+
+    private static string Normalize(string raw)
+    {
+        var text = raw.Replace("\uFEFF", string.Empty)
+            .Replace("```json", string.Empty, StringComparison.OrdinalIgnoreCase)
+            .Replace("```", string.Empty);
+
+        var marker = text.IndexOf("<|", StringComparison.Ordinal);
+
+        if (marker >= 0)
+        {
+            text = text.Substring(0, marker);
+        }
+
+        return text;
+    }
+
+    private static int SkipDuplicateBraces(string raw, int start)
+    {
+        while (true)
+        {
+            var next = start + 1;
+
+            while (next < raw.Length && char.IsWhiteSpace(raw[next]))
+            {
+                next++;
+            }
+
+            if (next < raw.Length && raw[next] == '{')
+            {
+                start = next;
+                continue;
+            }
+
+            return start;
+        }
+    }
+
+    private static int FindStringEnd(string text, int openIndex)
+    {
+        var escaped = false;
+
+        for (var j = openIndex + 1; j < text.Length; j++)
+        {
+            var c = text[j];
+
+            if (escaped)
+            {
+                escaped = false;
+            }
+            else if (c == '\\')
+            {
+                escaped = true;
+            }
+            else if (c == '"')
+            {
+                return j;
+            }
+        }
+
+        return -1;
+    }
+
+    private static string EscapeControlCharsInStrings(string text)
+    {
+        var sb = new StringBuilder(text.Length + 16);
+        var inString = false;
+        var escaped = false;
+
+        foreach (var c in text)
+        {
+            if (!inString)
+            {
+                if (c == '"')
+                {
+                    inString = true;
+                }
+
+                sb.Append(c);
+                continue;
+            }
+
+            if (escaped)
+            {
+                escaped = false;
+                sb.Append(c);
+                continue;
+            }
+
+            if (c == '\\')
+            {
+                escaped = true;
+                sb.Append(c);
+            }
+            else if (c == '"')
+            {
+                inString = false;
+                sb.Append(c);
+            }
+            else if (c == '\n')
+            {
+                sb.Append("\\n");
+            }
+            else if (c == '\r')
+            {
+                sb.Append("\\r");
+            }
+            else if (c == '\t')
+            {
+                sb.Append("\\t");
+            }
+            else if (c < 0x20)
+            {
+                sb.Append("\\u").Append(((int)c).ToString("x4"));
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+
+        return sb.ToString();
     }
 
     private static string BuildClosers(List<char> stack)

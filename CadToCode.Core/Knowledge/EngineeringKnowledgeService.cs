@@ -29,7 +29,7 @@ public sealed class EngineeringKnowledgeService : IEngineeringKnowledgeService
             ["cyclones"] = EquipmentType.Cyclone,
             ["scrubbers"] = EquipmentType.WetScrubber,
             ["pressurevessels"] = EquipmentType.PressureVessel,
-            ["piping"] = EquipmentType.Piping
+            ["piping"] = EquipmentType.PipingLayout
         };
 
     private static readonly string[] SupportedExtensions = { ".json", ".txt", ".md" };

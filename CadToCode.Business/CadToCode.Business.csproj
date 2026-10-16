@@ -16,6 +16,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
+		<ProjectReference Include="..\CadToCode.Core\CadToCode.Core.csproj" />
 		<ProjectReference Include="..\CadToCode.Repositories\CadToCode.Repositories.csproj" />
 		<ProjectReference Include="..\CadToCode.Models\CadToCode.Models.csproj" />
 		<ProjectReference Include="..\CadToCode.LLM\CadToCode.LLM.csproj" />

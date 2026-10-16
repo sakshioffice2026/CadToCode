@@ -1,6 +1,8 @@
 using CadToCode.Business.Interfaces;
 using CadToCode.Business.Sandbox;
 using CadToCode.Business.Services;
+using CadToCode.Core;
+using CadToCode.Core.Services;
 using CadToCode.Database;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
@@ -35,6 +37,21 @@ builder.Services.Configure<LocalAiOptions>(builder.Configuration.GetSection(Loca
 builder.Services.Configure<VisionOptions>(builder.Configuration.GetSection(VisionOptions.SectionName));
 builder.Services.Configure<QdrantOptions>(builder.Configuration.GetSection(QdrantOptions.SectionName));
 builder.Services.Configure<GeminiEmbeddingOptions>(builder.Configuration.GetSection(GeminiEmbeddingOptions.SectionName));
+
+builder.Services.Configure<TavilyOptions>(builder.Configuration.GetSection(TavilyOptions.SectionName));
+builder.Services.Configure<DuckDuckGoOptions>(builder.Configuration.GetSection(DuckDuckGoOptions.SectionName));
+
+builder.Services.AddCadToCodeCore();
+builder.Services.AddScoped<IDesignSessionStore, DesignSessionStore>();
+
+// Web search is advisory only. Tavily is used when configured, otherwise DuckDuckGo.
+builder.Services.AddHttpClient<TavilyWebSearchService>();
+builder.Services.AddHttpClient<DuckDuckGoWebSearchService>();
+builder.Services.AddScoped<IWebSearchService>(sp =>
+{
+    var tavily = sp.GetRequiredService<TavilyWebSearchService>();
+    return tavily.IsAvailable ? tavily : sp.GetRequiredService<DuckDuckGoWebSearchService>();
+});
 
 builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 

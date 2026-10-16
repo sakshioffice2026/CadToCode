@@ -1,5 +1,6 @@
 ﻿using System.Globalization;
 using System.Text.RegularExpressions;
+using CadToCode.Core.Domain;
 using CadToCode.LLM.Templates;
 
 namespace CadToCode.LLM.Vision;
@@ -79,6 +80,20 @@ public static class VisionParameterMapper
         var mapping = new VisionParameterMapping();
 
         AddMismatchWarnings(mapping, schema, vision, matchScore);
+
+        var blockReason = GetEquipmentBlockReason(schema, vision);
+
+        if (blockReason is not null)
+        {
+            foreach (var blocked in vision.Dimensions)
+            {
+                mapping.Unmapped.Add(new UnmappedDimension(blocked, blockReason));
+            }
+
+            mapping.Warnings.Add(blockReason + " No values were applied.");
+            return mapping;
+        }
+
         var ocrNumbers = ExtractNumbers(ocrText);
         var accepted = new Dictionary<string, List<(VisionDimension Dimension, double Value)>>(StringComparer.OrdinalIgnoreCase);
 
@@ -201,6 +216,55 @@ public static class VisionParameterMapper
         mapping.Warnings.Add(
             "Possible template mismatch with " + schema.Title + ": " + string.Join("; ", reasons)
             + ". If this is wrong, tell me the real equipment, for example `this is a wet scrubber`.");
+    }
+
+    private static string? GetEquipmentBlockReason(TemplateParameterSchema schema, VisionInspectionResult vision)
+    {
+        var equipment = vision.EquipmentType;
+
+        if (string.IsNullOrWhiteSpace(equipment))
+        {
+            return null;
+        }
+
+        var schemaType = ResolveSchemaEquipment(schema);
+        var visionType = EquipmentRegistry.Resolve(equipment);
+
+        if (visionType != EquipmentType.Unknown && schemaType != EquipmentType.Unknown && visionType != schemaType)
+        {
+            return "The drawing shows '" + equipment.Trim() + "' but the template " + schema.Title
+                   + " is for a different equipment type.";
+        }
+
+        if (schemaType == EquipmentType.PipingLayout && !SharesVocabulary(schema, equipment))
+        {
+            return "The drawing shows '" + equipment.Trim() + "', which is not piping, so the pipe template "
+                   + schema.Title + " was not used.";
+        }
+
+        return null;
+    }
+
+    private static EquipmentType ResolveSchemaEquipment(TemplateParameterSchema schema)
+    {
+        var key = schema.TemplateKey ?? string.Empty;
+
+        if (key.Contains("scrubber", StringComparison.OrdinalIgnoreCase))
+        {
+            return EquipmentType.WetScrubber;
+        }
+
+        if (key.Contains("cyclone", StringComparison.OrdinalIgnoreCase))
+        {
+            return EquipmentType.Cyclone;
+        }
+
+        if (key.Contains("pipe", StringComparison.OrdinalIgnoreCase))
+        {
+            return EquipmentType.PipingLayout;
+        }
+
+        return EquipmentType.Unknown;
     }
 
     private static bool SharesVocabulary(TemplateParameterSchema schema, string equipment)

@@ -4,11 +4,12 @@
 		<TargetFramework>net8.0</TargetFramework>
 		<Nullable>enable</Nullable>
 		<ImplicitUsings>enable</ImplicitUsings>
-	  <UserSecretsId>d53bd485-39a9-42ea-bdc0-4c5787b318de</UserSecretsId>
-  </PropertyGroup>
+		<UserSecretsId>d53bd485-39a9-42ea-bdc0-4c5787b318de</UserSecretsId>
+	</PropertyGroup>
 
 	<ItemGroup>
 		<ProjectReference Include="..\CadToCode.Business\CadToCode.Business.csproj" />
+		<ProjectReference Include="..\CadToCode.Core\CadToCode.Core.csproj" />
 		<ProjectReference Include="..\CadToCode.Database\CadToCode.Database.csproj" />
 		<ProjectReference Include="..\CadToCode.Models\CadToCode.Models.csproj" />
 		<ProjectReference Include="..\CadToCode.Repositories\CadToCode.Repositories.csproj" />

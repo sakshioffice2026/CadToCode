@@ -1,6 +1,8 @@
 ﻿using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using CadToCode.Core.Domain;
+using CadToCode.Core.Units;
 using CadToCode.LLM.Templates;
 
 namespace CadToCode.LLM.Services;
@@ -11,6 +13,14 @@ public sealed class ParsedIntent
     public List<string> ComponentKeys { get; } = new();
     public List<string> UnrecognizedAssignments { get; } = new();
     public string? UnmatchedComponentText { get; set; }
+
+    /// <summary>Equipment named in the text, or Unknown. Never defaults to a pipe.</summary>
+    public EquipmentType Equipment { get; set; } = EquipmentType.Unknown;
+
+    /// <summary>Engineering inputs found in the text, already converted to SI and keyed by calculator input key.</summary>
+    public Dictionary<string, double> EngineeringInputs { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    public bool HasEngineeringInputs => EngineeringInputs.Count > 0;
 
     public bool UseDefaults { get; set; }
     public bool Confirm { get; set; }
@@ -24,7 +34,7 @@ public sealed class ParsedIntent
     public bool HasScope => FullAssembly || ComponentKeys.Count > 0;
 
     public bool HasAnyAction =>
-        HasParameters || HasScope || UseDefaults || Confirm || Regenerate || Reset || ShowParameters;
+        HasParameters || HasScope || UseDefaults || Confirm || Regenerate || Reset || ShowParameters || HasEngineeringInputs;
 }
 
 public static class CadAssistIntentParser
@@ -60,7 +70,11 @@ public static class CadAssistIntentParser
     private static readonly Regex AssignmentRegex = Make(
         @"(?<label>[A-Za-z][A-Za-z ]{1,24}?)\s*[=:]\s*(?<num>" + Number + ")");
 
-    public static ParsedIntent Parse(string? text, TemplateParameterSchema? schema, bool awaitingScope = false)
+    public static ParsedIntent Parse(
+        string? text,
+        TemplateParameterSchema? schema,
+        bool awaitingScope = false,
+        EquipmentType contextEquipment = EquipmentType.Unknown)
     {
         var intent = new ParsedIntent();
 
@@ -76,6 +90,10 @@ public static class CadAssistIntentParser
         {
             ParseParameters(normalized, schema, intent, consumed);
         }
+
+        var named = EquipmentRegistry.Resolve(normalized);
+        intent.Equipment = named != EquipmentType.Unknown ? named : contextEquipment;
+        ParseEngineeringInputs(normalized, intent, consumed);
 
         var masked = Mask(normalized, consumed);
 
@@ -113,6 +131,167 @@ public static class CadAssistIntentParser
         }
 
         return intent;
+    }
+
+    private static readonly Regex FlowRegex = Make(
+        @"(?<![\d.,])(?<num>" + Number + @")\s*(?<unit>m3/s|m³/s|m3/hr|m3/h|m³/h|cmh|cfm|l/s|lps)(?![A-Za-z])");
+
+    private static readonly Regex PressureRegex = Make(
+        @"(?<![\d.,])(?<num>" + Number + @")\s*(?<unit>kpa|mm\s?wg|mmh2o|in\.?\s?wg|inwg|psi|bar|pa)(?![A-Za-z])");
+
+    private static readonly Regex SpeedRegex = Make(
+        @"(?<![\d.,])(?<num>" + Number + @")\s*(?<unit>rpm|rad/s)(?![A-Za-z])");
+
+    private static readonly Regex DensityRegex = Make(
+        @"(?<![\d.,])(?<num>" + Number + @")\s*(?<unit>kg/m3|kg/m³)");
+
+    private static readonly Regex EfficiencyRegex = Make(
+        @"efficiency\s*(?:of|is|=|:|at)?\s*(?<num>" + Number + @")\s*(?<pct>%)?");
+
+    private static void ParseEngineeringInputs(
+        string text,
+        ParsedIntent intent,
+        List<(int Start, int End)> consumed)
+    {
+        var equipment = intent.Equipment;
+
+        if (equipment == EquipmentType.Unknown)
+        {
+            return;
+        }
+
+        var flowKey = equipment switch
+        {
+            EquipmentType.AxialFan or EquipmentType.Cyclone or EquipmentType.WetScrubber => "airflow_m3s",
+            EquipmentType.PipingLayout => "flow_rate_m3s",
+            _ => null
+        };
+
+        var pressureKey = equipment switch
+        {
+            EquipmentType.AxialFan => "static_pressure_pa",
+            EquipmentType.PressureVessel or EquipmentType.PipingLayout => "design_pressure_pa",
+            _ => null
+        };
+
+        var isFan = equipment == EquipmentType.AxialFan;
+
+        ApplyEngineering(text, intent, consumed, FlowRegex, flowKey, m => ConvertFlow(m));
+        ApplyEngineering(text, intent, consumed, PressureRegex, pressureKey, m => ConvertPressure(m));
+        ApplyEngineering(text, intent, consumed, SpeedRegex, isFan ? "speed_rad_s" : null, m => ConvertSpeed(m));
+        ApplyEngineering(text, intent, consumed, DensityRegex, isFan ? "air_density_kgm3" : null, m => ReadNumber(m));
+        ApplyEngineering(text, intent, consumed, EfficiencyRegex, isFan ? "static_efficiency" : null, m => ConvertEfficiency(m));
+    }
+
+    private static void ApplyEngineering(
+        string text,
+        ParsedIntent intent,
+        List<(int Start, int End)> consumed,
+        Regex regex,
+        string? key,
+        Func<Match, double?> convert)
+    {
+        if (key is null)
+        {
+            return;
+        }
+
+        foreach (var match in SafeMatches(regex, text))
+        {
+            if (Overlaps(consumed, match.Index, match.Index + match.Length))
+            {
+                continue;
+            }
+
+            var value = convert(match);
+
+            if (value is null || !double.IsFinite(value.Value) || value.Value <= 0)
+            {
+                continue;
+            }
+
+            intent.EngineeringInputs[key] = value.Value;
+            consumed.Add((match.Index, match.Index + match.Length));
+        }
+    }
+
+    private static double? ReadNumber(Match match)
+    {
+        var raw = match.Groups["num"].Value.Replace(',', '.');
+
+        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed)
+            ? parsed
+            : null;
+    }
+
+    private static double? ConvertFlow(Match match)
+    {
+        var n = ReadNumber(match);
+
+        if (n is null)
+        {
+            return null;
+        }
+
+        return match.Groups["unit"].Value.ToLowerInvariant() switch
+        {
+            "m3/s" or "m³/s" => n.Value,
+            "m3/h" or "m³/h" or "m3/hr" or "cmh" => UnitConversions.CubicMetersPerHourToCubicMetersPerSecond(n.Value),
+            "cfm" => UnitConversions.CfmToCubicMetersPerSecond(n.Value),
+            "l/s" or "lps" => UnitConversions.LitersPerSecondToCubicMetersPerSecond(n.Value),
+            _ => null
+        };
+    }
+
+    private static double? ConvertPressure(Match match)
+    {
+        var n = ReadNumber(match);
+
+        if (n is null)
+        {
+            return null;
+        }
+
+        var unit = Regex.Replace(match.Groups["unit"].Value.ToLowerInvariant(), @"[\s.]", string.Empty);
+
+        return unit switch
+        {
+            "pa" => n.Value,
+            "kpa" => UnitConversions.KilopascalsToPascals(n.Value),
+            "mmwg" or "mmh2o" => UnitConversions.MmWaterGaugeToPascals(n.Value),
+            "inwg" => UnitConversions.InchesWaterGaugeToPascals(n.Value),
+            "psi" => UnitConversions.PsiToPascals(n.Value),
+            "bar" => UnitConversions.BarToPascals(n.Value),
+            _ => null
+        };
+    }
+
+    private static double? ConvertSpeed(Match match)
+    {
+        var n = ReadNumber(match);
+
+        if (n is null)
+        {
+            return null;
+        }
+
+        return string.Equals(match.Groups["unit"].Value, "rpm", StringComparison.OrdinalIgnoreCase)
+            ? UnitConversions.RpmToRadiansPerSecond(n.Value)
+            : n.Value;
+    }
+
+    private static double? ConvertEfficiency(Match match)
+    {
+        var n = ReadNumber(match);
+
+        if (n is null)
+        {
+            return null;
+        }
+
+        var fraction = match.Groups["pct"].Success || n.Value > 1.0 ? n.Value / 100.0 : n.Value;
+
+        return fraction is > 0 and <= 1.0 ? fraction : null;
     }
 
     private static void ParseParameters(

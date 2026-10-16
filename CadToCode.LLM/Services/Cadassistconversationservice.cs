@@ -1,6 +1,7 @@
 ﻿using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using CadToCode.Core.Domain;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
 using CadToCode.LLM.Templates;
@@ -101,8 +102,12 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             input.Attachments,
             cancellationToken);
 
-        var template = ResolveTemplate(match)
-                       ?? FindTemplateByText(input.Prompt + " " + input.DrawingType + " " + Path.GetFileNameWithoutExtension(input.FileName));
+        var requestedEquipment = ResolveRequestedEquipment(input);
+
+        var template = GuardTemplate(ResolveTemplate(match), requestedEquipment)
+                       ?? GuardTemplate(
+                           FindTemplateByText(input.Prompt + " " + input.DrawingType + " " + Path.GetFileNameWithoutExtension(input.FileName)),
+                           requestedEquipment);
 
         var score = match?.Score ?? 0.0;
         var accepted = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
@@ -162,7 +167,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
 
         if (!snapshot.HasTemplate || snapshot.Schema is null)
         {
-            reply = BuildNoMatch(input.FileName);
+            reply = BuildNoMatch(input.FileName, requestedEquipment);
         }
         else if (snapshot.MissingParameters().Count == 0)
         {
@@ -204,11 +209,12 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
 
         if (!current.HasTemplate)
         {
-            var template = FindTemplateByText(text);
+            var messageEquipment = EquipmentRegistry.Resolve(text);
+            var template = GuardTemplate(FindTemplateByText(text), messageEquipment);
 
             if (template is null)
             {
-                reply = BuildNoMatch(current.SourceFileName);
+                reply = BuildNoMatch(current.SourceFileName, messageEquipment);
             }
             else
             {
@@ -879,9 +885,97 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         message.Content = text.ToString();
     }
 
-    private static CadAssistMessageDto BuildNoMatch(string? fileName)
+    private static EquipmentType ResolveRequestedEquipment(CadAssistUploadInput input)
+    {
+        var fromVision = EquipmentRegistry.Resolve(input.Vision?.EquipmentType);
+
+        if (fromVision != EquipmentType.Unknown)
+        {
+            return fromVision;
+        }
+
+        return EquipmentRegistry.Resolve(
+            input.Prompt + " " + input.DrawingType + " " + Path.GetFileNameWithoutExtension(input.FileName));
+    }
+
+    private static CadTemplateDefinition? GuardTemplate(CadTemplateDefinition? template, EquipmentType requested)
+    {
+        if (template is null || requested == EquipmentType.Unknown)
+        {
+            return template;
+        }
+
+        var templateType = ClassifyTemplate(template.Category, template.Title);
+
+        return templateType == EquipmentType.Unknown || templateType == requested ? template : null;
+    }
+
+    private static EquipmentType ClassifyTemplate(string? category, string? title)
+    {
+        var text = Normalize((category ?? string.Empty) + " " + (title ?? string.Empty));
+
+        if (text.Contains("scrubber", StringComparison.Ordinal))
+        {
+            return EquipmentType.WetScrubber;
+        }
+
+        if (text.Contains("cyclone", StringComparison.Ordinal))
+        {
+            return EquipmentType.Cyclone;
+        }
+
+        if (text.Contains("fan", StringComparison.Ordinal))
+        {
+            return EquipmentType.AxialFan;
+        }
+
+        if (text.Contains("pressure vessel", StringComparison.Ordinal))
+        {
+            return EquipmentType.PressureVessel;
+        }
+
+        if (text.Contains("pipe", StringComparison.Ordinal)
+            || text.Contains("elbow", StringComparison.Ordinal)
+            || text.Contains("flange", StringComparison.Ordinal))
+        {
+            return EquipmentType.PipingLayout;
+        }
+
+        return EquipmentType.Unknown;
+    }
+
+    private static CadAssistMessageDto BuildNoMatch(string? fileName, EquipmentType equipment = EquipmentType.Unknown)
     {
         var text = new StringBuilder();
+
+        if (equipment != EquipmentType.Unknown && EquipmentRegistry.TryGet(equipment, out var metadata))
+        {
+            text.AppendLine("This looks like a **" + metadata.DisplayName + "**. There is no matching CAD template for it, "
+                            + "and I will not substitute a pipe or any other shape.");
+            text.AppendLine();
+
+            if (metadata.CalculatorStatus == CalculatorStatus.NotImplemented)
+            {
+                text.AppendLine("The deterministic calculator for this equipment is not implemented yet.");
+            }
+            else
+            {
+                text.AppendLine("To size it I need:");
+                text.AppendLine();
+
+                foreach (var input in metadata.RequiredInputs)
+                {
+                    text.AppendLine("- " + input.DisplayName + " (" + input.SiUnit + ")");
+                }
+            }
+
+            return new CadAssistMessageDto
+            {
+                Role = CadAssistRole.Assistant,
+                Content = text.ToString().TrimEnd(),
+                Status = "equipment-no-template"
+            };
+        }
 
         text.AppendLine("I could not match " + (string.IsNullOrWhiteSpace(fileName) ? "this drawing" : "**" + fileName + "**") +
                         " to a template with enough confidence, so I will not guess.");

@@ -6,16 +6,6 @@ namespace CadToCode.Core.Workflow;
 
 public sealed class DesignWorkflowEngine : IDesignWorkflowEngine
 {
-    private static readonly IReadOnlyDictionary<DesignWorkflowState, DesignWorkflowState[]> Transitions =
-        new Dictionary<DesignWorkflowState, DesignWorkflowState[]>
-        {
-            [DesignWorkflowState.Requirements] = new[] { DesignWorkflowState.FormulaValidation },
-            [DesignWorkflowState.FormulaValidation] = new[] { DesignWorkflowState.DesignReview, DesignWorkflowState.Requirements },
-            [DesignWorkflowState.DesignReview] = new[] { DesignWorkflowState.ScriptGeneration, DesignWorkflowState.Requirements },
-            [DesignWorkflowState.ScriptGeneration] = new[] { DesignWorkflowState.StepExport },
-            [DesignWorkflowState.StepExport] = Array.Empty<DesignWorkflowState>()
-        };
-
     private readonly IDesignSessionStore _store;
     private readonly EquipmentCalculatorRegistry _calculators;
 
@@ -33,15 +23,8 @@ public sealed class DesignWorkflowEngine : IDesignWorkflowEngine
         if (string.IsNullOrWhiteSpace(userId))
             throw new ArgumentException("userId is required.", nameof(userId));
 
-        var session = new DesignSession
-        {
-            Id = Guid.NewGuid(),
-            UserId = userId,
-            EquipmentType = equipmentType,
-            State = DesignWorkflowState.Requirements,
-            CreatedUtc = DateTime.UtcNow,
-            UpdatedUtc = DateTime.UtcNow
-        };
+        var session = new DesignSession(userId, "Untitled design");
+        session.SetEquipmentType(equipmentType);
 
         return await _store.CreateAsync(session, cancellationToken).ConfigureAwait(false);
     }
@@ -54,10 +37,17 @@ public sealed class DesignWorkflowEngine : IDesignWorkflowEngine
         ArgumentNullException.ThrowIfNull(inputsSi);
 
         var session = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
-        EnsureState(session, DesignWorkflowState.Requirements);
+        EnsureState(session, DesignWorkflowState.RequirementsGathering);
 
-        session.Inputs = new Dictionary<string, double>(inputsSi);
-        session.RejectionReason = null;
+        var stale = session.Inputs.Keys
+            .Where(k => !inputsSi.Keys.Any(n => string.Equals(n?.Trim(), k, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        foreach (var key in stale)
+            session.RemoveInput(key);
+
+        foreach (var kv in inputsSi)
+            session.SetInput(kv.Key, kv.Value);
 
         return await TransitionAsync(session, DesignWorkflowState.FormulaValidation, cancellationToken)
             .ConfigureAwait(false);
@@ -71,13 +61,13 @@ public sealed class DesignWorkflowEngine : IDesignWorkflowEngine
         EnsureState(session, DesignWorkflowState.FormulaValidation);
 
         var calculator = _calculators.Get(session.EquipmentType);
-        var result = calculator.Calculate(session.Inputs);
+        var result = calculator.Calculate(new EquipmentInputs(session.Inputs));
 
-        session.Result = result;
+        session.RecordCalculation(result, string.Empty, "Formula validation");
 
-        var next = result.IsValid
+        var next = result.Succeeded
             ? DesignWorkflowState.DesignReview
-            : DesignWorkflowState.Requirements;
+            : DesignWorkflowState.RequirementsGathering;
 
         return await TransitionAsync(session, next, cancellationToken).ConfigureAwait(false);
     }
@@ -89,7 +79,10 @@ public sealed class DesignWorkflowEngine : IDesignWorkflowEngine
         var session = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
         EnsureState(session, DesignWorkflowState.DesignReview);
 
-        session.RejectionReason = null;
+        if (!session.HasCadReadyCalculation)
+            throw new InvalidOperationException("The latest calculation is not CAD ready and cannot be approved.");
+
+        session.Approve(DesignWorkflowState.DesignReview, session.OwnerId);
 
         return await TransitionAsync(session, DesignWorkflowState.ScriptGeneration, cancellationToken)
             .ConfigureAwait(false);
@@ -106,9 +99,7 @@ public sealed class DesignWorkflowEngine : IDesignWorkflowEngine
         var session = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
         EnsureState(session, DesignWorkflowState.DesignReview);
 
-        session.RejectionReason = reason;
-
-        return await TransitionAsync(session, DesignWorkflowState.Requirements, cancellationToken)
+        return await TransitionAsync(session, DesignWorkflowState.RequirementsGathering, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -130,16 +121,15 @@ public sealed class DesignWorkflowEngine : IDesignWorkflowEngine
         var session = await LoadAsync(sessionId, cancellationToken).ConfigureAwait(false);
         EnsureState(session, DesignWorkflowState.StepExport);
 
-        session.UpdatedUtc = DateTime.UtcNow;
-        await _store.UpdateAsync(session, cancellationToken).ConfigureAwait(false);
-        return session;
+        return await TransitionAsync(session, DesignWorkflowState.Completed, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public bool CanTransition(DesignWorkflowState from, DesignWorkflowState to) =>
-        Transitions.TryGetValue(from, out var allowed) && Array.IndexOf(allowed, to) >= 0;
+        DesignWorkflowStates.CanTransition(from, to);
 
     public IReadOnlyList<DesignWorkflowState> GetAllowedTransitions(DesignWorkflowState from) =>
-        Transitions.TryGetValue(from, out var allowed) ? allowed : Array.Empty<DesignWorkflowState>();
+        DesignWorkflowStates.AllowedNext(from);
 
     private async Task<DesignSession> LoadAsync(Guid sessionId, CancellationToken cancellationToken)
     {
@@ -163,8 +153,7 @@ public sealed class DesignWorkflowEngine : IDesignWorkflowEngine
             throw new InvalidOperationException(
                 $"Transition '{session.State}' -> '{next}' is not allowed.");
 
-        session.State = next;
-        session.UpdatedUtc = DateTime.UtcNow;
+        session.SetState(next);
 
         await _store.UpdateAsync(session, cancellationToken).ConfigureAwait(false);
         return session;

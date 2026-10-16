@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using System.Text.RegularExpressions;
+using CadToCode.Core.Domain;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Templates;
 using CadToCode.Models.Dtos;
@@ -42,7 +43,8 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
         CancellationToken cancellationToken = default)
     {
         var corpus = BuildCorpus(project, tree, prompt, drawingType, attachments);
-        var keywordMatch = MatchBuiltIn(corpus);
+        var requested = EquipmentRegistry.Resolve(corpus);
+        var keywordMatch = MatchBuiltIn(corpus, requested);
 
         if (!_rag.IsAvailable)
         {
@@ -58,6 +60,7 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
 
             var best = hits
                 .Where(h => !string.IsNullOrWhiteSpace(h.CodeSnippet))
+                .Where(h => IsCompatible(h.Category, h.Title, requested, h.Score))
                 .OrderByDescending(h => h.Score)
                 .FirstOrDefault();
 
@@ -92,7 +95,7 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
         }
     }
 
-    private static CadTemplateMatch? MatchBuiltIn(string corpus)
+    private static CadTemplateMatch? MatchBuiltIn(string corpus, EquipmentType requested)
     {
         if (string.IsNullOrWhiteSpace(corpus))
         {
@@ -144,6 +147,11 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
                 continue;
             }
 
+            if (!IsCompatible(template.Category, template.Title, requested, score))
+            {
+                continue;
+            }
+
             best = new CadTemplateMatch
             {
                 Title = template.Title,
@@ -157,6 +165,54 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
         }
 
         return best;
+    }
+
+    private static bool IsCompatible(string? category, string? title, EquipmentType requested, double score)
+    {
+        var templateType = ClassifyTemplate(category, title);
+
+        if (requested != EquipmentType.Unknown)
+        {
+            return templateType == EquipmentType.Unknown || templateType == requested;
+        }
+
+        // Equipment not identified: a piping template is only accepted on strong evidence.
+        return templateType != EquipmentType.PipingLayout || score >= StrongKeywordScore;
+    }
+
+    private static EquipmentType ClassifyTemplate(string? category, string? title)
+    {
+        var text = Normalize((category ?? string.Empty) + " " + (title ?? string.Empty));
+
+        if (text.Contains("scrubber", StringComparison.Ordinal))
+        {
+            return EquipmentType.WetScrubber;
+        }
+
+        if (text.Contains("cyclone", StringComparison.Ordinal))
+        {
+            return EquipmentType.Cyclone;
+        }
+
+        if (text.Contains("fan", StringComparison.Ordinal))
+        {
+            return EquipmentType.AxialFan;
+        }
+
+        if (text.Contains("pressure vessel", StringComparison.Ordinal))
+        {
+            return EquipmentType.PressureVessel;
+        }
+
+        if (text.Contains("pipe", StringComparison.Ordinal)
+            || text.Contains("piping", StringComparison.Ordinal)
+            || text.Contains("elbow", StringComparison.Ordinal)
+            || text.Contains("flange", StringComparison.Ordinal))
+        {
+            return EquipmentType.PipingLayout;
+        }
+
+        return EquipmentType.Unknown;
     }
 
     private static bool ContainsTerm(string paddedText, HashSet<string> tokens, string term)

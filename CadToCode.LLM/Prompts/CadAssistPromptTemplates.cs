@@ -89,6 +89,8 @@ public static class CadAssistPromptTemplates
 
     public const string ParametersOnlyMarker = "MODE: PARAMETERS ONLY";
 
+    public const string CalculatedParametersMarker = "MODE: CALCULATED DESIGN PARAMETERS";
+
     public const string StrictDataRules =
         "STRICT DATA RULES: use only the exact data or the verified template given in the drawing data below. "
         + "Never invent, guess, round, add, move or remove any dimension, coordinate, radius, angle, hole or part that is not in that data. "
@@ -112,12 +114,31 @@ public static class CadAssistPromptTemplates
         + "Do not add new solids, do not remove solids and do not change any value that has no matching drawing parameter.";
 
     public const string ParametersOnlyRules =
-        "PARAMETER RULES: no verified template matched. Build the simplest single solid that uses only the listed drawing parameters as named const double values, "
-        + "choose a sensible named default for any missing value with a // assumed comment, and add no extra solids.";
+        "PARAMETER RULES: no verified template matched. Use only the listed drawing parameters as named const double values and add no extra solids. "
+        + "Never substitute a pipe, tube or any other generic shape for equipment that is not a pipe. "
+        + "If the equipment cannot be built from the listed parameters, say what is missing and ask for it instead of generating a script.";
+
+    public const string CalculatedParametersRules =
+        "CALCULATED PARAMETER RULES: the design parameters in the drawing data come from the deterministic engineering calculators and were approved by the user. "
+        + "Copy each value digit for digit into a named const double, converting meters to millimeters only by multiplying by 1000. "
+        + "Never recalculate, adjust, round or replace any calculated value, and never invent a value that is not listed. "
+        + "If a required parameter is missing, stop and ask for it instead of assuming a default.";
+
+    public const string EngineeringRules =
+        "ENGINEERING RULES: you support axial fans, cyclone separators, wet scrubbers, pressure vessels and piping layouts. "
+        + "Never perform engineering arithmetic yourself: sizes, pressures, flows, speeds and thicknesses come only from the calculated design parameters. "
+        + "Never treat equipment as a pipe unless the user or the drawing says it is piping; when the equipment type is unclear, ask which one it is. "
+        + "Web search results, when given, are advisory references only and are never a source of design numbers. "
+        + "When a value is outside a validated range, state the warning and do not proceed to script generation until it is resolved.";
 
     public static string ResolveModeRules(string? geometryContext)
     {
         var text = geometryContext ?? string.Empty;
+
+        if (text.Contains(CalculatedParametersMarker, StringComparison.Ordinal))
+        {
+            return CalculatedParametersRules;
+        }
 
         if (text.Contains(ExactGeometryMarker, StringComparison.Ordinal))
         {
@@ -239,7 +260,12 @@ public static class CadAssistPromptTemplates
         {
             var modeRules = ResolveModeRules(geometryContext);
 
-            system = system + " " + StrictDataRules + (modeRules.Length > 0 ? " " + modeRules : string.Empty);
+            system = system + " " + StrictDataRules + " " + EngineeringRules
+                     + (modeRules.Length > 0 ? " " + modeRules : string.Empty);
+        }
+        else
+        {
+            system = system + " " + EngineeringRules;
         }
 
         var remaining = Math.Max(800, total - system.Length - 300);
