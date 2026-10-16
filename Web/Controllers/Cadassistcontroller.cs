@@ -1,5 +1,12 @@
-﻿using CadToCode.Business.Interfaces;
+﻿// Repo path: Web/Controllers/Cadassistcontroller.cs
+using System.Text;
+using CadToCode.Business.Interfaces;
 using CadToCode.Business.Services;
+using CadToCode.Core.Calculators;
+using CadToCode.Core.Domain;
+using CadToCode.Core.Knowledge;
+using CadToCode.Core.Services;
+using CadToCode.Core.Workflow;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
 using CadToCode.LLM.Prompts;
@@ -19,8 +26,70 @@ public class CadAssistResetRequest
     public string? SessionId { get; set; }
 }
 
+public class DesignStartRequest
+{
+    public string? Equipment { get; set; }
+
+    public string? Title { get; set; }
+}
+
+public class DesignRequirementsRequest
+{
+    public Guid SessionId { get; set; }
+
+    public Dictionary<string, double>? Inputs { get; set; }
+}
+
+public class DesignIdRequest
+{
+    public Guid SessionId { get; set; }
+}
+
+public class DesignRejectRequest
+{
+    public Guid SessionId { get; set; }
+
+    public string? Reason { get; set; }
+}
+
+public class DesignScriptRequest
+{
+    public Guid SessionId { get; set; }
+
+    public double? BladeChordM { get; set; }
+
+    public double? BladeThicknessM { get; set; }
+
+    public double? BladePitchDeg { get; set; }
+}
+
+public class DesignExportRequest
+{
+    public Guid SessionId { get; set; }
+
+    public string? Script { get; set; }
+}
+
+public class WebAdvisoryRequest
+{
+    public string? Query { get; set; }
+
+    public string? Purpose { get; set; }
+
+    public string? Equipment { get; set; }
+
+    public int? MaxResults { get; set; }
+
+    public List<string>? AllowedDomains { get; set; }
+}
+
 public class CadAssistController : Controller
 {
+    private const string OwnerCookieName = "cadtocode_owner";
+    private const int MaxKnowledgeChars = 1200;
+    private const int MaxQueryChars = 300;
+    private const int MaxScriptChars = 200_000;
+
     private const int MaxRequestBytes = 2_097_152;
     private const int MaxFileNameChars = 120;
     private const int MaxFieldChars = 400;
@@ -42,6 +111,10 @@ public class CadAssistController : Controller
     private readonly IDrawingProcessingService _drawingProcessing;
     private readonly ICadAssistConversationService _conversation;
     private readonly ICadAssistSessionStore _sessionStore;
+    private readonly IDesignWorkflowEngine _workflow;
+    private readonly IDesignSessionStore _designStore;
+    private readonly IEngineeringKnowledgeService _knowledge;
+    private readonly IWebSearchService _webSearch;
     private readonly LocalAiOptions _options;
     private readonly ILogger<CadAssistController> _logger;
 
@@ -54,9 +127,17 @@ public class CadAssistController : Controller
         IDrawingProcessingService drawingProcessing,
         ICadAssistConversationService conversation,
         ICadAssistSessionStore sessionStore,
+        IDesignWorkflowEngine workflow,
+        IDesignSessionStore designStore,
+        IEngineeringKnowledgeService knowledge,
+        IWebSearchService webSearch,
         IOptions<LocalAiOptions> options,
         ILogger<CadAssistController> logger)
     {
+        _workflow = workflow;
+        _designStore = designStore;
+        _knowledge = knowledge;
+        _webSearch = webSearch;
         _ai = ai;
         _processingService = processingService;
         _codeGenerationService = codeGenerationService;
@@ -511,6 +592,725 @@ public class CadAssistController : Controller
             unverified,
             processing = summaries
         });
+    }
+
+    [HttpGet]
+    public IActionResult DesignEquipment()
+    {
+        var items = EquipmentRegistry.All.Select(m => new
+        {
+            code = m.Code,
+            name = m.DisplayName,
+            description = m.Description,
+            calculatorStatus = m.CalculatorStatus.ToString(),
+            canDriveCadGeneration = m.CanDriveCadGeneration,
+            requiredInputs = m.Inputs.Where(i => i.IsRequired).Select(DescribeParameter),
+            optionalInputs = m.Inputs.Where(i => !i.IsRequired).Select(DescribeParameter)
+        });
+
+        return Json(new { equipment = items });
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> DesignGet(Guid sessionId, CancellationToken cancellationToken)
+    {
+        var session = await LoadOwnedAsync(sessionId, cancellationToken);
+
+        if (session is null)
+        {
+            return NotFound(new { success = false, error = "The design session was not found." });
+        }
+
+        return Json(new { success = true, design = BuildDesignSummary(session) });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> DesignStart([FromBody] DesignStartRequest? request, CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return BadRequest(new { success = false, error = "The request was not valid." });
+        }
+
+        var type = EquipmentRegistry.Resolve(request.Equipment);
+
+        if (type == EquipmentType.Unknown)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                clarificationNeeded = true,
+                error = "The equipment type was not recognised. Choose one of: "
+                    + string.Join(", ", EquipmentRegistry.All.Select(m => m.DisplayName)) + "."
+            });
+        }
+
+        var metadata = EquipmentRegistry.Get(type);
+
+        if (!metadata.CanDriveCadGeneration)
+        {
+            return UnprocessableEntity(new
+            {
+                success = false,
+                equipment = metadata.Code,
+                error = metadata.DisplayName + " does not have a deterministic calculator yet, so a design cannot be started."
+            });
+        }
+
+        try
+        {
+            var session = await _workflow.StartAsync(GetOwnerId(), type, cancellationToken);
+            var title = Limit(request.Title, MaxFieldChars);
+
+            if (title is not null)
+            {
+                session.Rename(title);
+                await _designStore.UpdateAsync(session, cancellationToken);
+            }
+
+            return Json(new { success = true, design = BuildDesignSummary(session) });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return DesignError(ex);
+        }
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> DesignRequirements([FromBody] DesignRequirementsRequest? request, CancellationToken cancellationToken)
+    {
+        if (request is null || request.Inputs is null || request.Inputs.Count == 0)
+        {
+            return BadRequest(new { success = false, error = "Provide the design inputs in SI units." });
+        }
+
+        var session = await LoadOwnedAsync(request.SessionId, cancellationToken);
+
+        if (session is null)
+        {
+            return NotFound(new { success = false, error = "The design session was not found." });
+        }
+
+        if (!EquipmentRegistry.TryGet(session.EquipmentType, out var metadata))
+        {
+            return Conflict(new { success = false, error = "The design session has no equipment type." });
+        }
+
+        var supplied = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pair in request.Inputs)
+        {
+            var key = pair.Key?.Trim();
+
+            if (string.IsNullOrEmpty(key))
+            {
+                return BadRequest(new { success = false, error = "An input key was empty." });
+            }
+
+            if (!double.IsFinite(pair.Value))
+            {
+                return BadRequest(new { success = false, error = "Input '" + key + "' must be a finite number." });
+            }
+
+            supplied[key] = pair.Value;
+        }
+
+        var unknown = supplied.Keys
+            .Where(k => !metadata.Inputs.Any(i => string.Equals(i.Key, k, StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        if (unknown.Count > 0)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                error = "Unknown input for " + metadata.DisplayName + ": " + string.Join(", ", unknown) + "."
+            });
+        }
+
+        var missing = metadata.Inputs
+            .Where(i => i.IsRequired && !supplied.ContainsKey(i.Key))
+            .Select(DescribeParameter)
+            .ToList();
+
+        if (missing.Count > 0)
+        {
+            return UnprocessableEntity(new
+            {
+                success = false,
+                clarificationNeeded = true,
+                missing,
+                error = "Required inputs are missing: " + string.Join(", ", missing.Select(m => m.Key)) + "."
+            });
+        }
+
+        try
+        {
+            var updated = await _workflow.SubmitRequirementsAsync(request.SessionId, supplied, cancellationToken);
+            return Json(new { success = true, design = BuildDesignSummary(updated) });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return DesignError(ex);
+        }
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> DesignValidate([FromBody] DesignIdRequest? request, CancellationToken cancellationToken)
+    {
+        return await RunTransitionAsync(request?.SessionId, (id, ct) => _workflow.ValidateFormulasAsync(id, ct), cancellationToken);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> DesignApprove([FromBody] DesignIdRequest? request, CancellationToken cancellationToken)
+    {
+        return await RunTransitionAsync(request?.SessionId, (id, ct) => _workflow.ApproveDesignReviewAsync(id, ct), cancellationToken);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> DesignReject([FromBody] DesignRejectRequest? request, CancellationToken cancellationToken)
+    {
+        var reason = Limit(request?.Reason, MaxFieldChars);
+
+        if (reason is null)
+        {
+            return BadRequest(new { success = false, error = "A rejection reason is required." });
+        }
+
+        return await RunTransitionAsync(request?.SessionId, (id, ct) => _workflow.RejectDesignReviewAsync(id, reason, ct), cancellationToken);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> DesignScript([FromBody] DesignScriptRequest? request, CancellationToken cancellationToken)
+    {
+        if (request is null)
+        {
+            return BadRequest(new { success = false, error = "The request was not valid." });
+        }
+
+        var session = await LoadOwnedAsync(request.SessionId, cancellationToken);
+
+        if (session is null)
+        {
+            return NotFound(new { success = false, error = "The design session was not found." });
+        }
+
+        if (session.EquipmentType != EquipmentType.AxialFan)
+        {
+            return UnprocessableEntity(new
+            {
+                success = false,
+                error = "CAD script generation is not available for " + session.EquipmentType + " yet."
+            });
+        }
+
+        if (session.State != DesignWorkflowState.ScriptGeneration)
+        {
+            return Conflict(new
+            {
+                success = false,
+                error = "The design is in '" + DesignWorkflowStates.DisplayName(session.State) + "'. Approve the design review first."
+            });
+        }
+
+        var latest = session.LatestRevision;
+
+        if (latest is null || !session.HasCadReadyCalculation || session.IsCalculationStale)
+        {
+            return Conflict(new { success = false, error = "There is no current, CAD-ready calculation to build from." });
+        }
+
+        var missingInputs = new List<string>();
+
+        if (request.BladeChordM is null) missingInputs.Add(AxialFanScriptComposer.BladeChordM);
+        if (request.BladeThicknessM is null) missingInputs.Add(AxialFanScriptComposer.BladeThicknessM);
+        if (request.BladePitchDeg is null) missingInputs.Add(AxialFanScriptComposer.BladePitchDeg);
+
+        if (missingInputs.Count > 0)
+        {
+            return UnprocessableEntity(new
+            {
+                success = false,
+                clarificationNeeded = true,
+                missing = missingInputs,
+                error = "Blade geometry is not produced by the calculator and must be provided: " + string.Join(", ", missingInputs) + "."
+            });
+        }
+
+        var calculated = latest.Calculation.Values;
+        var composerInputs = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var missingCalculated = new List<string>();
+
+        var mapping = new (string ComposerKey, string CalculatedKey)[]
+        {
+            (AxialFanScriptComposer.TipDiameterM, "tip_diameter_m"),
+            (AxialFanScriptComposer.HubDiameterM, "hub_diameter_m"),
+            (AxialFanScriptComposer.TipClearanceM, "tip_clearance_m"),
+            (AxialFanScriptComposer.CasingWallM, "casing_wall_thickness_m"),
+            (AxialFanScriptComposer.CasingLengthM, "casing_length_m"),
+            (AxialFanScriptComposer.BladeCount, "blade_count")
+        };
+
+        foreach (var (composerKey, calculatedKey) in mapping)
+        {
+            if (calculated.TryGetValue(calculatedKey, out var value))
+            {
+                composerInputs[composerKey] = value;
+            }
+            else
+            {
+                missingCalculated.Add(calculatedKey);
+            }
+        }
+
+        if (missingCalculated.Count > 0)
+        {
+            return Conflict(new
+            {
+                success = false,
+                error = "The calculation is missing: " + string.Join(", ", missingCalculated) + "."
+            });
+        }
+
+        composerInputs[AxialFanScriptComposer.BladeChordM] = request.BladeChordM!.Value;
+        composerInputs[AxialFanScriptComposer.BladeThicknessM] = request.BladeThicknessM!.Value;
+        composerInputs[AxialFanScriptComposer.BladePitchDeg] = request.BladePitchDeg!.Value;
+
+        var composed = AxialFanScriptComposer.Compose(composerInputs);
+
+        if (!composed.Success)
+        {
+            return UnprocessableEntity(new
+            {
+                success = false,
+                error = "The script could not be generated: " + string.Join(" ", composed.Errors),
+                errors = composed.Errors
+            });
+        }
+
+        try
+        {
+            var updated = await _workflow.MarkScriptGeneratedAsync(request.SessionId, cancellationToken);
+
+            return Json(new
+            {
+                success = true,
+                design = BuildDesignSummary(updated),
+                script = composed.Script,
+                fileBaseName = composed.FileBaseName,
+                appliedValues = composed.AppliedValues
+            });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return DesignError(ex);
+        }
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> DesignExport([FromBody] DesignExportRequest? request, CancellationToken cancellationToken)
+    {
+        if (request is null || string.IsNullOrWhiteSpace(request.Script))
+        {
+            return BadRequest(new { success = false, error = "The generated script is required." });
+        }
+
+        if (request.Script.Length > MaxScriptChars)
+        {
+            return BadRequest(new { success = false, error = "The script is too large." });
+        }
+
+        var session = await LoadOwnedAsync(request.SessionId, cancellationToken);
+
+        if (session is null)
+        {
+            return NotFound(new { success = false, error = "The design session was not found." });
+        }
+
+        if (session.State != DesignWorkflowState.StepExport)
+        {
+            return Conflict(new
+            {
+                success = false,
+                error = "The design is in '" + DesignWorkflowStates.DisplayName(session.State) + "'. Generate the script first."
+            });
+        }
+
+        try
+        {
+            var run = await _stepScriptRunner.RunAsync(request.Script, cancellationToken);
+
+            if (!run.Success || string.IsNullOrWhiteSpace(run.StepContent))
+            {
+                return UnprocessableEntity(new
+                {
+                    success = false,
+                    error = run.Message ?? "The script did not produce a STEP file.",
+                    diagnostics = run.Diagnostics
+                        .Take(10)
+                        .Select(d => new { line = d.Line, column = d.Column, message = d.Message })
+                });
+            }
+
+            var updated = await _workflow.MarkStepExportedAsync(request.SessionId, cancellationToken);
+
+            return Json(new
+            {
+                success = true,
+                design = BuildDesignSummary(updated),
+                fileName = SafeStepFileName(run.FileName),
+                stepContent = run.StepContent,
+                solidCount = run.SolidCount,
+                faceCount = run.FaceCount,
+                elapsedMs = run.ElapsedMs
+            });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return DesignError(ex);
+        }
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> DesignKnowledge(string? query, string? equipment, int topK = 5, CancellationToken cancellationToken = default)
+    {
+        var text = Limit(query, MaxQueryChars);
+
+        if (text is null)
+        {
+            return BadRequest(new { success = false, error = "A search query is required." });
+        }
+
+        EquipmentType? type = null;
+
+        if (!string.IsNullOrWhiteSpace(equipment))
+        {
+            var resolved = EquipmentRegistry.Resolve(equipment);
+
+            if (resolved == EquipmentType.Unknown)
+            {
+                return BadRequest(new { success = false, error = "The equipment type was not recognised." });
+            }
+
+            type = resolved;
+        }
+
+        try
+        {
+            var results = await _knowledge.SearchAsync(text, type, Math.Clamp(topK, 1, 10), cancellationToken);
+
+            return Json(new
+            {
+                success = true,
+                notice = "Reference material only. Numeric design values come from the deterministic calculators.",
+                results = results.Select(r => new
+                {
+                    id = r.Chunk.Id,
+                    equipment = r.Chunk.EquipmentType.ToString(),
+                    source = r.Chunk.Source,
+                    title = r.Chunk.Title,
+                    content = Limit(r.Chunk.Content, MaxKnowledgeChars),
+                    tags = r.Chunk.Tags,
+                    score = r.Score
+                })
+            });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Engineering knowledge search failed.");
+            return StatusCode(500, new { success = false, error = "The engineering knowledge search failed." });
+        }
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> DesignWebAdvisory([FromBody] WebAdvisoryRequest? request, CancellationToken cancellationToken)
+    {
+        var text = Limit(request?.Query, MaxQueryChars);
+
+        if (request is null || text is null)
+        {
+            return BadRequest(new { success = false, error = "A search query is required." });
+        }
+
+        var purpose = WebSearchPurpose.GeneralReference;
+
+        if (!string.IsNullOrWhiteSpace(request.Purpose)
+            && !Enum.TryParse(request.Purpose.Trim(), true, out purpose))
+        {
+            return BadRequest(new
+            {
+                success = false,
+                error = "The search purpose must be one of: " + string.Join(", ", Enum.GetNames<WebSearchPurpose>()) + "."
+            });
+        }
+
+        var equipmentType = EquipmentType.Unknown;
+
+        if (!string.IsNullOrWhiteSpace(request.Equipment))
+        {
+            equipmentType = EquipmentRegistry.Resolve(request.Equipment);
+
+            if (equipmentType == EquipmentType.Unknown)
+            {
+                return BadRequest(new { success = false, error = "The equipment type was not recognised." });
+            }
+        }
+
+        if (!_webSearch.IsAvailable)
+        {
+            return StatusCode(503, new
+            {
+                success = false,
+                advisoryOnly = true,
+                provider = _webSearch.ProviderName,
+                error = "Web search is not configured. Local engineering knowledge is still available."
+            });
+        }
+
+        WebSearchRequest searchRequest;
+
+        try
+        {
+            searchRequest = new WebSearchRequest(
+                text,
+                purpose,
+                equipmentType,
+                Math.Clamp(request.MaxResults ?? WebSearchRequest.DefaultMaxResults, 1, WebSearchRequest.MaxAllowedResults),
+                WebSearchRequest.DefaultMaxSnippetCharacters,
+                request.AllowedDomains?.Take(10));
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { success = false, error = ex.Message });
+        }
+
+        var result = await _webSearch.SearchAsync(searchRequest, cancellationToken);
+
+        if (!result.Succeeded)
+        {
+            return StatusCode(502, new
+            {
+                success = false,
+                advisoryOnly = true,
+                provider = result.Provider,
+                error = result.Error ?? "The web search failed."
+            });
+        }
+
+        return Json(new
+        {
+            success = true,
+            advisoryOnly = true,
+            notice = WebSearchResult.AdvisoryNotice,
+            provider = result.Provider,
+            retrievedAtUtc = result.RetrievedAtUtc,
+            snippets = result.Snippets.Select(s => new
+            {
+                title = s.Title,
+                url = s.Url,
+                domain = s.Domain,
+                snippet = s.Snippet,
+                publishedUtc = s.PublishedUtc,
+                relevance = s.Relevance
+            })
+        });
+    }
+
+    private async Task<IActionResult> RunTransitionAsync(
+        Guid? sessionId,
+        Func<Guid, CancellationToken, Task<DesignSession>> transition,
+        CancellationToken cancellationToken)
+    {
+        if (sessionId is null)
+        {
+            return BadRequest(new { success = false, error = "The request was not valid." });
+        }
+
+        var session = await LoadOwnedAsync(sessionId.Value, cancellationToken);
+
+        if (session is null)
+        {
+            return NotFound(new { success = false, error = "The design session was not found." });
+        }
+
+        try
+        {
+            var updated = await transition(sessionId.Value, cancellationToken);
+            return Json(new { success = true, design = BuildDesignSummary(updated) });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return DesignError(ex);
+        }
+    }
+
+    private IActionResult DesignError(Exception ex)
+    {
+        switch (ex)
+        {
+            case KeyNotFoundException:
+                return NotFound(new { success = false, error = ex.Message });
+
+            case NotSupportedException:
+                return UnprocessableEntity(new { success = false, error = ex.Message });
+
+            case ArgumentException:
+                return BadRequest(new { success = false, error = ex.Message });
+
+            case InvalidOperationException:
+                return Conflict(new { success = false, error = ex.Message });
+
+            default:
+                _logger.LogError(ex, "A design workflow request failed.");
+                return StatusCode(500, new { success = false, error = "The design request could not be completed." });
+        }
+    }
+
+    private string GetOwnerId()
+    {
+        var name = User.Identity?.Name;
+
+        if (!string.IsNullOrWhiteSpace(name))
+        {
+            return name;
+        }
+
+        if (Request.Cookies.TryGetValue(OwnerCookieName, out var existing) && Guid.TryParse(existing, out var parsed))
+        {
+            return parsed.ToString("N");
+        }
+
+        var created = Guid.NewGuid().ToString("N");
+
+        Response.Cookies.Append(OwnerCookieName, created, new CookieOptions
+        {
+            HttpOnly = true,
+            IsEssential = true,
+            SameSite = SameSiteMode.Lax,
+            Secure = Request.IsHttps,
+            Expires = DateTimeOffset.UtcNow.AddYears(1)
+        });
+
+        return created;
+    }
+
+    private async Task<DesignSession?> LoadOwnedAsync(Guid sessionId, CancellationToken cancellationToken)
+    {
+        if (sessionId == Guid.Empty)
+        {
+            return null;
+        }
+
+        var session = await _designStore.GetAsync(sessionId, cancellationToken);
+
+        return session is not null && string.Equals(session.OwnerId, GetOwnerId(), StringComparison.Ordinal)
+            ? session
+            : null;
+    }
+
+    private sealed record ParameterInfo(string Key, string Name, string Unit, string Description);
+
+    private static ParameterInfo DescribeParameter(ParameterDescriptor p)
+    {
+        return new ParameterInfo(p.Key, p.DisplayName, p.SiUnit, p.Description);
+    }
+
+    private static string SafeStepFileName(string? name)
+    {
+        var clean = Path.GetFileName(name ?? string.Empty);
+
+        foreach (var invalid in Path.GetInvalidFileNameChars())
+        {
+            clean = clean.Replace(invalid.ToString(), string.Empty);
+        }
+
+        if (string.IsNullOrWhiteSpace(clean))
+        {
+            clean = "AxialFan";
+        }
+
+        if (clean.Length > MaxFileNameChars)
+        {
+            clean = clean[..MaxFileNameChars];
+        }
+
+        var extension = Path.GetExtension(clean);
+
+        return extension.Equals(".step", StringComparison.OrdinalIgnoreCase) || extension.Equals(".stp", StringComparison.OrdinalIgnoreCase)
+            ? clean
+            : clean + ".step";
+    }
+
+    private static object BuildDesignSummary(DesignSession session)
+    {
+        EquipmentMetadata? metadata = EquipmentRegistry.TryGet(session.EquipmentType, out var found) ? found : null;
+        var latest = session.LatestRevision;
+
+        var missing = metadata is null
+            ? new List<string>()
+            : metadata.Inputs.Where(i => i.IsRequired && !session.Inputs.ContainsKey(i.Key)).Select(i => i.Key).ToList();
+
+        return new
+        {
+            sessionId = session.Id,
+            title = session.Title,
+            equipment = metadata?.Code,
+            equipmentName = metadata?.DisplayName,
+            state = session.State.ToString(),
+            stateName = DesignWorkflowStates.DisplayName(session.State),
+            stateDescription = DesignWorkflowStates.Description(session.State),
+            allowedNext = DesignWorkflowStates.AllowedNext(session.State).Select(s => s.ToString()),
+            inputs = session.Inputs,
+            missingRequiredInputs = missing,
+            isCalculationStale = session.IsCalculationStale,
+            hasCadReadyCalculation = session.HasCadReadyCalculation,
+            revisionCount = session.Revisions.Count,
+            approvals = session.Approvals.Select(a => new
+            {
+                stage = a.State.ToString(),
+                revision = a.RevisionNumber,
+                approvedUtc = a.ApprovedUtc,
+                approvedBy = a.ApprovedBy
+            }),
+            latest = latest is null
+                ? null
+                : new
+                {
+                    revision = latest.Number,
+                    changeNote = latest.ChangeNote,
+                    calculatedAtUtc = latest.Calculation.CalculatedAtUtc,
+                    calculatorVersion = latest.Calculation.CalculatorVersion,
+                    knowledgeVersion = latest.Calculation.KnowledgeVersion,
+                    isCadReady = latest.Calculation.IsCadReady,
+                    values = latest.Calculation.Values,
+                    formulaIds = latest.Calculation.FormulaIdsUsed,
+                    warnings = latest.Calculation.Warnings.Select(w => new
+                    {
+                        code = w.Code,
+                        message = w.Message,
+                        severity = w.Severity.ToString(),
+                        key = w.RelatedKey,
+                        formulaId = w.FormulaId
+                    }),
+                    errors = latest.Calculation.Errors
+                }
+        };
     }
 
     private bool ShouldUseConversation(int projectId, string sessionId, string? prompt)

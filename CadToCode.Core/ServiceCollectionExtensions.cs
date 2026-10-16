@@ -26,7 +26,8 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton(knowledgeOptions);
 
-        services.TryAddSingleton<IDesignRulesProvider, JsonDesignRulesProvider>();
+        services.TryAddSingleton<IDesignRulesProvider>(sp =>
+            new JsonDesignRulesProvider(sp.GetRequiredService<EngineeringKnowledgeOptions>().RootPath));
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, AxialFanCalculator>());
         services.TryAddSingleton<EquipmentCalculatorRegistry>();

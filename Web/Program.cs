@@ -2,6 +2,7 @@ using CadToCode.Business.Interfaces;
 using CadToCode.Business.Sandbox;
 using CadToCode.Business.Services;
 using CadToCode.Core;
+using CadToCode.Core.Rules;
 using CadToCode.Core.Services;
 using CadToCode.Database;
 using CadToCode.LLM.Interfaces;
@@ -92,7 +93,8 @@ builder.Services.AddSingleton<IDxfGeometryParser, DxfGeometryParser>();
 builder.Services.AddSingleton<IBlueprintOcrService, BlueprintOcrService>();
 builder.Services.AddScoped<IDrawingProcessingService, DrawingProcessingService>();
 builder.Services.AddScoped<ICadLibraryService, CadLibraryService>();
-
+builder.Services.AddSingleton<IDesignRulesProvider>(_ =>
+    new JsonDesignRulesProvider(Path.Combine(AppContext.BaseDirectory, "EngineeringKnowledge")));
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())

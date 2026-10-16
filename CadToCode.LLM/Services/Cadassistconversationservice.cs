@@ -103,11 +103,13 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             cancellationToken);
 
         var requestedEquipment = ResolveRequestedEquipment(input);
+        var unrecognisedEquipment = GetUnrecognisedVisionEquipment(input, requestedEquipment);
 
-        var template = GuardTemplate(ResolveTemplate(match), requestedEquipment)
+        var template = GuardTemplate(ResolveTemplate(match), requestedEquipment, unrecognisedEquipment)
                        ?? GuardTemplate(
                            FindTemplateByText(input.Prompt + " " + input.DrawingType + " " + Path.GetFileNameWithoutExtension(input.FileName)),
-                           requestedEquipment);
+                           requestedEquipment,
+                           unrecognisedEquipment);
 
         var score = match?.Score ?? 0.0;
         var accepted = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
@@ -167,7 +169,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
 
         if (!snapshot.HasTemplate || snapshot.Schema is null)
         {
-            reply = BuildNoMatch(input.FileName, requestedEquipment);
+            reply = BuildNoMatch(input.FileName, requestedEquipment, unrecognisedEquipment);
         }
         else if (snapshot.MissingParameters().Count == 0)
         {
@@ -898,8 +900,56 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             input.Prompt + " " + input.DrawingType + " " + Path.GetFileNameWithoutExtension(input.FileName));
     }
 
-    private static CadTemplateDefinition? GuardTemplate(CadTemplateDefinition? template, EquipmentType requested)
+    private static readonly string[] PipingVocabulary =
     {
+        "pipe", "piping", "tube", "tee", "elbow", "flange", "duct", "reducer", "manifold", "bend"
+    };
+
+    private static string? GetUnrecognisedVisionEquipment(CadAssistUploadInput input, EquipmentType requested)
+    {
+        if (requested != EquipmentType.Unknown)
+        {
+            return null;
+        }
+
+        var raw = input.Vision?.EquipmentType;
+
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var name = new string(raw.Where(c => char.IsLetterOrDigit(c) || c == ' ' || c == '-' || c == '/').ToArray()).Trim();
+
+        if (name.Length == 0)
+        {
+            return null;
+        }
+
+        var words = name.ToLowerInvariant()
+            .Split(new[] { ' ', '-', '/' }, StringSplitOptions.RemoveEmptyEntries)
+            .Select(w => w.Length > 3 && w.EndsWith('s') ? w[..^1] : w);
+
+        if (words.Any(w => PipingVocabulary.Contains(w, StringComparer.Ordinal)))
+        {
+            return null;
+        }
+
+        return name.Length > 60 ? name[..60] : name;
+    }
+
+    private static CadTemplateDefinition? GuardTemplate(
+        CadTemplateDefinition? template,
+        EquipmentType requested,
+        string? unrecognisedEquipment = null)
+    {
+        if (template is not null
+            && unrecognisedEquipment is not null
+            && ClassifyTemplate(template.Category, template.Title) == EquipmentType.PipingLayout)
+        {
+            return null;
+        }
+
         if (template is null || requested == EquipmentType.Unknown)
         {
             return template;
