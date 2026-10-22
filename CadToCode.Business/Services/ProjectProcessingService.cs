@@ -161,6 +161,8 @@ public class ProjectProcessingService : IProjectProcessingService
         try
         {
             await _storage.DeleteAsync(storedPath, cancellationToken);
+            await _storage.DeleteAsync(storedPath + ChatSnapshotSuffix, cancellationToken);
+            await _storage.DeleteAsync(storedPath + ".pipeline.json", cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -193,6 +195,31 @@ public class ProjectProcessingService : IProjectProcessingService
         }
 
         return await _storage.OpenReadAsync(path, cancellationToken);
+    }
+
+    private const string ChatSnapshotSuffix = ".chat.json";
+
+    public async Task<bool> SaveChatSnapshotAsync(int projectId, string json, CancellationToken cancellationToken = default)
+    {
+        var path = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        await _storage.WriteTextAsync(path + ChatSnapshotSuffix, json, cancellationToken);
+        return true;
+    }
+
+    public async Task<string?> LoadChatSnapshotAsync(int projectId, CancellationToken cancellationToken = default)
+    {
+        var path = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return null;
+        }
+
+        return await _storage.ReadTextAsync(path + ChatSnapshotSuffix, cancellationToken);
     }
 
     private async Task<long> GetStoredFileSizeAsync(string storedPath, CancellationToken cancellationToken)
@@ -267,4 +294,4 @@ public class ProjectProcessingService : IProjectProcessingService
     {
         return value.Length <= maxLength ? value : value[..maxLength];
     }
-}
+} 

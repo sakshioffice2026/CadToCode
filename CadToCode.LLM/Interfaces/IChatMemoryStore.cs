@@ -11,4 +11,8 @@ public interface IChatMemoryStore
     IReadOnlyList<CadAssistMessageDto> GetMessages(int projectId, string sessionId);
 
     void Reset(int projectId, string sessionId);
+
+    void Restore(int projectId, string sessionId, IEnumerable<CadAssistMessageDto> messages);
+
+    void Rebind(int fromProjectId, int toProjectId, string sessionId);
 }

@@ -94,6 +94,27 @@ public class FileStorageService : IFileStorageService
         return Task.CompletedTask;
     }
 
+    public async Task WriteTextAsync(string relativePath, string content, CancellationToken cancellationToken = default)
+    {
+        var fullPath = ResolveSafePath(relativePath);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);
+
+        await File.WriteAllTextAsync(fullPath, content ?? string.Empty, cancellationToken);
+    }
+
+    public async Task<string?> ReadTextAsync(string relativePath, CancellationToken cancellationToken = default)
+    {
+        var fullPath = ResolveSafePath(relativePath);
+
+        if (!File.Exists(fullPath))
+        {
+            return null;
+        }
+
+        return await File.ReadAllTextAsync(fullPath, cancellationToken);
+    }
+
     private string ResolveSafePath(string relativePath)
     {
         if (string.IsNullOrWhiteSpace(relativePath))

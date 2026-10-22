@@ -104,6 +104,7 @@ public class CadAssistController : Controller
     private const int MaxUploadFiles = 5;
 
     private readonly ILocalAiService _ai;
+    private readonly IChatMemoryStore _memory;
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
     private readonly IStepScriptRunner _stepScriptRunner;
@@ -120,6 +121,7 @@ public class CadAssistController : Controller
 
     public CadAssistController(
         ILocalAiService ai,
+        IChatMemoryStore memory,
         IProjectProcessingService processingService,
         ICodeGenerationService codeGenerationService,
         IStepScriptRunner stepScriptRunner,
@@ -139,6 +141,7 @@ public class CadAssistController : Controller
         _knowledge = knowledge;
         _webSearch = webSearch;
         _ai = ai;
+        _memory = memory;
         _processingService = processingService;
         _codeGenerationService = codeGenerationService;
         _stepScriptRunner = stepScriptRunner;
@@ -157,18 +160,169 @@ public class CadAssistController : Controller
     }
 
     [HttpGet]
-    public IActionResult History(int projectId, string? sessionId)
+    public async Task<IActionResult> History(int projectId, string? sessionId, CancellationToken cancellationToken)
     {
-        if (projectId < 0 || string.IsNullOrWhiteSpace(sessionId))
+        if (projectId < 0)
         {
             return Json(new CadAssistHistoryResponse { SessionId = string.Empty });
+        }
+
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            if (projectId == 0)
+            {
+                return Json(new CadAssistHistoryResponse { SessionId = string.Empty });
+            }
+
+            sessionId = _ai.EnsureSession(projectId, null);
+        }
+
+        var messages = _ai.GetHistory(projectId, sessionId).ToList();
+
+        if (messages.Count == 0 && projectId > 0)
+        {
+            var json = await _processingService.LoadChatSnapshotAsync(projectId, cancellationToken);
+
+            if (!string.IsNullOrWhiteSpace(json))
+            {
+                try
+                {
+                    var saved = System.Text.Json.JsonSerializer.Deserialize<List<CadAssistMessageDto>>(json);
+
+                    if (saved is not null && saved.Count > 0)
+                    {
+                        _memory.Restore(projectId, sessionId, saved);
+                        messages = saved;
+                    }
+                }
+                catch (System.Text.Json.JsonException ex)
+                {
+                    _logger.LogWarning(ex, "Saved chat for project {ProjectId} could not be read.", projectId);
+                }
+            }
         }
 
         return Json(new CadAssistHistoryResponse
         {
             SessionId = sessionId,
-            Messages = _ai.GetHistory(projectId, sessionId).ToList()
+            Messages = messages
         });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxUploadBytes)]
+    [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBytes)]
+    public async Task<IActionResult> SaveAsProject(
+        List<IFormFile>? files,
+        int projectId,
+        string? sessionId,
+        string? title,
+        CancellationToken cancellationToken)
+    {
+        if (projectId < 0 || string.IsNullOrWhiteSpace(sessionId))
+        {
+            return BadRequest(new { success = false, error = "There is no chat to save yet." });
+        }
+
+        var messages = _ai.GetHistory(projectId, sessionId).ToList();
+
+        if (messages.Count == 0)
+        {
+            return BadRequest(new { success = false, error = "There is no chat to save yet." });
+        }
+
+        var snapshot = System.Text.Json.JsonSerializer.Serialize(messages);
+
+        if (projectId > 0)
+        {
+            var updated = await _processingService.SaveChatSnapshotAsync(projectId, snapshot, cancellationToken);
+
+            return updated
+                ? Json(new { success = true, projectId, sessionId, created = false })
+                : NotFound(new { success = false, error = "That project no longer exists." });
+        }
+
+        var file = (files ?? new List<IFormFile>()).FirstOrDefault(f => f is not null && f.Length > 0);
+
+        if (file is null)
+        {
+            return BadRequest(new
+            {
+                success = false,
+                error = "Attach a DXF, PNG or JPG drawing in this chat first. A project needs a drawing to be saved."
+            });
+        }
+
+        var fileName = Path.GetFileName(file.FileName ?? string.Empty);
+
+        if (!_drawingProcessing.IsSupported(fileName))
+        {
+            return BadRequest(new { success = false, error = fileName + ": unsupported file type. Use .dxf, .png, .jpg or .jpeg." });
+        }
+
+        if (file.Length > _options.MaxAttachmentBytes)
+        {
+            return BadRequest(new { success = false, error = fileName + ": the file is too large." });
+        }
+
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+
+        if (extension is ".png" or ".jpg" or ".jpeg")
+        {
+            var header = new byte[8];
+            int headerRead;
+
+            await using (var headerStream = file.OpenReadStream())
+            {
+                headerRead = await headerStream.ReadAsync(header.AsMemory(0, header.Length), cancellationToken);
+            }
+
+            if (!HasImageSignature(header.AsSpan(0, headerRead)))
+            {
+                return BadRequest(new { success = false, error = fileName + ": the file content is not a real PNG or JPEG image." });
+            }
+        }
+
+        try
+        {
+            await using var stream = file.OpenReadStream();
+
+            var upload = await _processingService.ProcessUploadAsync(stream, fileName, cancellationToken);
+
+            if (!upload.Success || !upload.ProjectId.HasValue)
+            {
+                return UnprocessableEntity(new
+                {
+                    success = false,
+                    error = upload.ErrorMessage ?? "The drawing could not be saved as a project."
+                });
+            }
+
+            var newId = upload.ProjectId.Value;
+
+            await _processingService.SaveChatSnapshotAsync(newId, snapshot, cancellationToken);
+
+            _memory.Rebind(projectId, newId, sessionId);
+
+            return Json(new
+            {
+                success = true,
+                projectId = newId,
+                sessionId,
+                created = true,
+                title = Limit(title, MaxFieldChars)
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Saving the chat as a project failed.");
+            return StatusCode(500, new { success = false, error = "The chat could not be saved as a project." });
+        }
     }
 
     [HttpPost]

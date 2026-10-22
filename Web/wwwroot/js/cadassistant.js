@@ -15,6 +15,8 @@
         chat: root.getAttribute("data-ca-chat-url"),
         history: root.getAttribute("data-ca-history-url"),
         reset: root.getAttribute("data-ca-reset-url"),
+        save: root.getAttribute("data-ca-save-url"),
+        projectPage: root.getAttribute("data-ca-project-url"),
         status: root.getAttribute("data-ca-status-url"),
         upload: root.getAttribute("data-ca-upload-url")
     };
@@ -58,6 +60,9 @@
     var liveTimer = null;
     var lastSend = null;
     var historyLoaded = false;
+    var lastDrawingFile = null;
+    var saveButton = root.querySelector("[data-ca-save]");
+    var saving = false;
     var dragDepth = 0;
     var contextFiles = [];
     var contextPending = false;
@@ -756,6 +761,10 @@
         });
         var useUpload = !!urls.upload && uploadFiles.some(function (f) { return isImageName(f.fileName); });
 
+        if (uploadFiles.length > 0) {
+            lastDrawingFile = uploadFiles[0];
+        }
+
         addUser(prompt || "Attached files", files.map(function (f) { return f.fileName; }));
 
         if (!replay) {
@@ -847,16 +856,21 @@
     /* ---------- History / reset ---------- */
 
     function loadHistory() {
-        if (historyLoaded || !sessionId) {
+        if (historyLoaded || (!sessionId && projectId <= 0)) {
             return;
         }
 
         historyLoaded = true;
 
-        fetch(urls.history + "?projectId=" + encodeURIComponent(projectId) + "&sessionId=" + encodeURIComponent(sessionId),
+        fetch(urls.history + "?projectId=" + encodeURIComponent(projectId) + "&sessionId=" + encodeURIComponent(sessionId || ""),
             { credentials: "same-origin", headers: { "Accept": "application/json" } })
             .then(function (response) { return response.json(); })
             .then(function (data) {
+                if (data && data.sessionId && data.sessionId !== sessionId) {
+                    sessionId = data.sessionId;
+                    writeStore(SESSION_KEY, sessionId);
+                }
+
                 (data.messages || []).forEach(function (message) {
                     if (message.role === "user") {
                         addUser(message.content, message.attachments || []);
@@ -866,6 +880,84 @@
                 });
             })
             .catch(function () { /* history is optional */ });
+    }
+
+    function saveProject() {
+        if (saving) {
+            addNote("Already saving\u2026");
+            return;
+        }
+
+        if (busy) {
+            addNote("Wait for the current reply to finish, then save.");
+            return;
+        }
+
+        if (!urls.save) {
+            addError("Save is not configured. Replace _CadAssistantChat.cshtml with the updated file and rebuild.");
+            return;
+        }
+
+        if (!sessionId) {
+            addError("There is no chat to save yet.");
+            return;
+        }
+
+        addNote("Saving\u2026");
+
+        var form = new FormData();
+        form.append("projectId", String(projectId));
+        form.append("sessionId", sessionId);
+
+        if (projectId <= 0 && lastDrawingFile && lastDrawingFile.file) {
+            form.append("files", lastDrawingFile.file, lastDrawingFile.fileName);
+        }
+
+        saving = true;
+
+        if (saveButton) {
+            saveButton.disabled = true;
+        }
+
+        postForm(urls.save, form)
+            .then(function (response) {
+                return response.json().then(
+                    function (data) { return data; },
+                    function () { return null; });
+            })
+            .then(function (data) {
+                if (!data || !data.success) {
+                    addError((data && data.error) || "The chat could not be saved as a project.");
+                    return;
+                }
+
+                if (data.created && data.projectId) {
+                    writeStore("cadassistant:session:" + data.projectId, data.sessionId || sessionId);
+                    notify("Saved as a project. Find it in History.");
+
+                    var box = el("div", "ca-note");
+                    box.appendChild(document.createTextNode("Saved as a project. "));
+
+                    var link = el("a", "", "Open project");
+                    link.href = (urls.projectPage || "/Project/Details") + "?id=" + encodeURIComponent(data.projectId);
+                    box.appendChild(link);
+
+                    thread.appendChild(box);
+                    scrollToEnd();
+                } else {
+                    notify("Chat saved to this project.");
+                }
+            })
+            .catch(function () {
+                addError("The chat could not be saved as a project.");
+            })
+            .then(function () {
+                saving = false;
+
+                if (saveButton) {
+                    saveButton.disabled = false;
+                }
+            });
     }
 
     function resetChat() {
@@ -878,6 +970,7 @@
         contextFiles = [];
         contextPending = false;
         contextSignature = "";
+        lastDrawingFile = null;
 
         thread.querySelectorAll(".ca-msg").forEach(function (node) { node.remove(); });
         attachments = [];
@@ -946,6 +1039,16 @@
             autoGrow();
             input.focus();
         });
+    });
+
+    root.addEventListener("click", function (event) {
+        var target = event.target;
+        var button = target && target.closest ? target.closest("[data-ca-save]") : null;
+
+        if (button) {
+            event.preventDefault();
+            saveProject();
+        }
     });
 
     root.querySelector("[data-ca-reset]").addEventListener("click", resetChat);

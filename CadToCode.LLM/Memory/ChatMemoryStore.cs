@@ -70,6 +70,32 @@ public sealed class ChatMemoryStore : IChatMemoryStore
         _sessions.TryRemove(Key(projectId, sessionId), out _);
     }
 
+    public void Restore(int projectId, string sessionId, IEnumerable<CadAssistMessageDto> messages)
+    {
+        var session = _sessions.GetOrAdd(Key(projectId, sessionId), _ => new Session());
+
+        lock (session.Lock)
+        {
+            if (session.Messages.Count > 0)
+            {
+                return;
+            }
+
+            session.Messages.AddRange(messages);
+            session.LastUsedUtc = DateTime.UtcNow;
+        }
+    }
+
+    public void Rebind(int fromProjectId, int toProjectId, string sessionId)
+    {
+        if (!_sessions.TryRemove(Key(fromProjectId, sessionId), out var session))
+        {
+            return;
+        }
+
+        _sessions[Key(toProjectId, sessionId)] = session;
+    }
+
     private void Evict()
     {
         var idle = TimeSpan.FromMinutes(Math.Max(1, _options.SessionIdleMinutes));

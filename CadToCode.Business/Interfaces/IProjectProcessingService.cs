@@ -17,4 +17,8 @@ public interface IProjectProcessingService
     Task<bool> UpdateComponentAsync(ComponentDto component, CancellationToken cancellationToken = default);
 
     Task<Stream?> OpenSourceFileAsync(int projectId, CancellationToken cancellationToken = default);
+
+    Task<bool> SaveChatSnapshotAsync(int projectId, string json, CancellationToken cancellationToken = default);
+
+    Task<string?> LoadChatSnapshotAsync(int projectId, CancellationToken cancellationToken = default);
 }

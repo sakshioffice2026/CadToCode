@@ -69,6 +69,70 @@ public class CodeGenerationService : ICodeGenerationService
 
     private sealed record ImagePipelineOutcome(string? Script, IReadOnlyList<string> Warnings, string? Error);
 
+    private const string PipelineSidecarSuffix = ".pipeline.json";
+
+    private static readonly ConcurrentDictionary<int, ImagePipelineOutcome> PipelineCache = new();
+
+    private sealed class PipelineSidecar
+    {
+        public string? Script { get; set; }
+
+        public List<string> Warnings { get; set; } = new();
+    }
+
+    private async Task<ImagePipelineOutcome?> ReadPipelineSidecarAsync(string storedPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = await _storage.ReadTextAsync(storedPath + PipelineSidecarSuffix, cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return null;
+            }
+
+            var saved = JsonSerializer.Deserialize<PipelineSidecar>(json);
+
+            if (saved is null || string.IsNullOrWhiteSpace(saved.Script))
+            {
+                return null;
+            }
+
+            return new ImagePipelineOutcome(saved.Script, saved.Warnings ?? new List<string>(), null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The saved image analysis could not be read.");
+            return null;
+        }
+    }
+
+    private async Task WritePipelineSidecarAsync(string storedPath, ImagePipelineOutcome outcome, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(new PipelineSidecar
+            {
+                Script = outcome.Script,
+                Warnings = outcome.Warnings.ToList()
+            });
+
+            await _storage.WriteTextAsync(storedPath + PipelineSidecarSuffix, json, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The image analysis could not be saved for reuse.");
+        }
+    }
+
     private async Task<ImagePipelineOutcome> RunImagePipelineAsync(
         int projectId,
         string title,
@@ -81,6 +145,24 @@ public class CodeGenerationService : ICodeGenerationService
         if (string.IsNullOrWhiteSpace(path))
         {
             return new ImagePipelineOutcome(null, Array.Empty<string>(), "The stored file path is missing.");
+        }
+
+        var useCache = keyDimensions is not { HasAny: true };
+
+        if (useCache)
+        {
+            if (PipelineCache.TryGetValue(projectId, out var memoryHit))
+            {
+                return memoryHit;
+            }
+
+            var diskHit = await ReadPipelineSidecarAsync(path, cancellationToken);
+
+            if (diskHit is not null)
+            {
+                PipelineCache[projectId] = diskHit;
+                return diskHit;
+            }
         }
 
         await using var stream = await _storage.OpenReadAsync(path, cancellationToken);
@@ -130,7 +212,15 @@ public class CodeGenerationService : ICodeGenerationService
             }
         }
 
-        return new ImagePipelineOutcome(script, warnings, null);
+        var finished = new ImagePipelineOutcome(script, warnings, null);
+
+        if (useCache)
+        {
+            PipelineCache[projectId] = finished;
+            await WritePipelineSidecarAsync(path, finished, cancellationToken);
+        }
+
+        return finished;
     }
 
     private async Task<AssemblyGenerationResult> BuildImageAssemblyAsync(

@@ -7,4 +7,8 @@ public interface IFileStorageService
     Task<Stream?> OpenReadAsync(string relativePath, CancellationToken cancellationToken = default);
 
     Task DeleteAsync(string relativePath, CancellationToken cancellationToken = default);
+
+    Task WriteTextAsync(string relativePath, string content, CancellationToken cancellationToken = default);
+
+    Task<string?> ReadTextAsync(string relativePath, CancellationToken cancellationToken = default);
 }
