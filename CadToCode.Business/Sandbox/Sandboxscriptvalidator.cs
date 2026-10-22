@@ -80,17 +80,27 @@ public static class SandboxScriptValidator
         ["System.Collections.Generic.IReadOnlyList"] = null,
         ["System.Array"] = Set("Length"),
         ["System.String"] = Set(
-            "Length", "Contains", "StartsWith", "EndsWith", "IndexOf", "Substring", "Trim", "TrimStart", "TrimEnd",
+            "Length", "Contains", "StartsWith", "EndsWith", "IndexOf", "LastIndexOf", "Substring", "Trim", "TrimStart", "TrimEnd",
             "ToUpper", "ToLower", "ToUpperInvariant", "ToLowerInvariant", "Join", "Concat", "IsNullOrEmpty",
-            "IsNullOrWhiteSpace", "Equals", "CompareTo", "ToString", "GetHashCode", "Split", "Empty", "Item", "this[]"),
+            "IsNullOrWhiteSpace", "Equals", "CompareTo", "Compare", "ToString", "GetHashCode", "Split", "Empty",
+            "Replace", "PadLeft", "PadRight", "Format", "Item", "this[]"),
         ["System.Collections.Generic.List"] = Set(
-            ".ctor", "Add", "AddRange", "Count", "Contains", "Clear", "Insert", "Remove", "RemoveAt", "IndexOf",
-            "Reverse", "ToArray", "GetEnumerator", "Item", "this[]"),
+            ".ctor", "Add", "AddRange", "Count", "Contains", "Clear", "Insert", "InsertRange", "Remove", "RemoveAt",
+            "RemoveAll", "IndexOf", "Exists", "Find", "FindAll", "GetRange", "Reverse", "Sort", "ToArray",
+            "GetEnumerator", "Item", "this[]"),
+        ["System.Collections.Generic.Dictionary"] = Set(
+            ".ctor", "Add", "Remove", "Clear", "Count", "ContainsKey", "ContainsValue", "TryGetValue", "Keys", "Values",
+            "GetEnumerator", "Item", "this[]"),
+        ["System.Collections.Generic.HashSet"] = Set(
+            ".ctor", "Add", "Remove", "Clear", "Count", "Contains", "GetEnumerator"),
+        ["System.Collections.Generic.KeyValuePair"] = null,
+        ["System.Collections.Generic.IDictionary"] = null,
+        ["System.Collections.Generic.IReadOnlyCollection"] = null,
         ["System.Linq.Enumerable"] = Set(
-            "Select", "SelectMany", "Where", "ToList", "ToArray", "Any", "All", "Count", "Sum", "Min", "Max",
-            "Average", "First", "FirstOrDefault", "Last", "LastOrDefault", "ElementAt", "OrderBy",
+            "Select", "SelectMany", "Where", "ToList", "ToArray", "ToDictionary", "Any", "All", "Count", "Sum", "Min", "Max",
+            "Average", "Aggregate", "First", "FirstOrDefault", "Last", "LastOrDefault", "ElementAt", "OrderBy",
             "OrderByDescending", "ThenBy", "ThenByDescending", "Reverse", "Take", "Skip", "Concat", "Distinct",
-            "Contains", "Range", "Repeat", "Zip"),
+            "Union", "Intersect", "Except", "SequenceEqual", "Contains", "Range", "Repeat", "Zip"),
         ["System.Console"] = Set("WriteLine"),
         ["System.IO.Path"] = Set("GetFullPath")
     };

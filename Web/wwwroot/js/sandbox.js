@@ -170,7 +170,15 @@
 
             var THREE = window.THREE;
 
-            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            try {
+                renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            } catch (error) {
+                failed = true;
+                renderer = null;
+                setStatus("WebGL not available");
+                return false;
+            }
+
             renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
             renderer.domElement.className = "cc-viewer-canvas";
             host.appendChild(renderer.domElement);
@@ -622,7 +630,14 @@
                         return;
                     }
 
-                    Viewer.render(result.solids);
+                    try {
+                        Viewer.render(result.solids);
+                    } catch (viewerError) {
+                        if (window.console && typeof window.console.error === "function") {
+                            window.console.error("CadToCode 3D view failed", viewerError);
+                        }
+                        notify("3D view failed: " + (viewerError && viewerError.message ? viewerError.message : "unknown error"));
+                    }
 
                     if (result.stepContent) {
                         downloadStep(result.stepContent, result.fileName);

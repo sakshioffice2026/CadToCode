@@ -178,8 +178,9 @@ public class CadAssistController : Controller
         }
 
         var messages = _ai.GetHistory(projectId, sessionId).ToList();
+        string? editorCode = null;
 
-        if (messages.Count == 0 && projectId > 0)
+        if (projectId > 0)
         {
             var json = await _processingService.LoadChatSnapshotAsync(projectId, cancellationToken);
 
@@ -187,12 +188,22 @@ public class CadAssistController : Controller
             {
                 try
                 {
-                    var saved = System.Text.Json.JsonSerializer.Deserialize<List<CadAssistMessageDto>>(json);
+                    var snapshot = ReadSnapshot(json);
 
-                    if (saved is not null && saved.Count > 0)
+                    if (snapshot is not null)
                     {
-                        _memory.Restore(projectId, sessionId, saved);
-                        messages = saved;
+                        editorCode = snapshot.EditorCode;
+
+                        if (messages.Count == 0 && snapshot.Messages.Count > 0)
+                        {
+                            for (var i = 0; i < snapshot.Messages.Count && i < snapshot.ModelContents.Count; i++)
+                            {
+                                snapshot.Messages[i].ModelContent = snapshot.ModelContents[i];
+                            }
+
+                            _memory.Restore(projectId, sessionId, snapshot.Messages);
+                            messages = snapshot.Messages;
+                        }
                     }
                 }
                 catch (System.Text.Json.JsonException ex)
@@ -205,8 +216,23 @@ public class CadAssistController : Controller
         return Json(new CadAssistHistoryResponse
         {
             SessionId = sessionId,
-            Messages = messages
+            Messages = messages,
+            EditorCode = editorCode
         });
+    }
+
+    private static CadAssistSnapshotDto? ReadSnapshot(string json)
+    {
+        using var document = System.Text.Json.JsonDocument.Parse(json);
+
+        if (document.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+        {
+            var legacy = System.Text.Json.JsonSerializer.Deserialize<List<CadAssistMessageDto>>(json);
+
+            return legacy is null ? null : new CadAssistSnapshotDto { Messages = legacy };
+        }
+
+        return System.Text.Json.JsonSerializer.Deserialize<CadAssistSnapshotDto>(json);
     }
 
     [HttpPost]
@@ -218,6 +244,7 @@ public class CadAssistController : Controller
         int projectId,
         string? sessionId,
         string? title,
+        string? editorCode,
         CancellationToken cancellationToken)
     {
         if (projectId < 0 || string.IsNullOrWhiteSpace(sessionId))
@@ -232,7 +259,12 @@ public class CadAssistController : Controller
             return BadRequest(new { success = false, error = "There is no chat to save yet." });
         }
 
-        var snapshot = System.Text.Json.JsonSerializer.Serialize(messages);
+        var snapshot = System.Text.Json.JsonSerializer.Serialize(new CadAssistSnapshotDto
+        {
+            Messages = messages,
+            ModelContents = messages.Select(m => m.ModelContent).ToList(),
+            EditorCode = editorCode
+        });
 
         if (projectId > 0)
         {

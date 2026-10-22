@@ -19,10 +19,10 @@ public sealed class StepScriptRunner : IStepScriptRunner
     private const long MaxSteps = 200_000;
     private const long MaxAllocatedBytes = 256L * 1024 * 1024;
 
-    private static readonly TimeSpan CompileLimit = TimeSpan.FromSeconds(20);
-    private static readonly TimeSpan RunLimit = TimeSpan.FromSeconds(5);
-    private static readonly TimeSpan GraceLimit = TimeSpan.FromSeconds(2);
-    private static readonly TimeSpan QueueLimit = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan CompileLimit = TimeSpan.FromSeconds(90);
+    private static readonly TimeSpan RunLimit = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan GraceLimit = TimeSpan.FromSeconds(3);
+    private static readonly TimeSpan QueueLimit = TimeSpan.FromSeconds(10);
 
     private static readonly SemaphoreSlim Gate = new(2, 2);
 

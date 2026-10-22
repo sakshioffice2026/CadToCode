@@ -118,6 +118,14 @@ public class CadAssistHistoryResponse
 {
     public string SessionId { get; set; } = string.Empty;
     public List<CadAssistMessageDto> Messages { get; set; } = new();
+    public string? EditorCode { get; set; }
+}
+
+public class CadAssistSnapshotDto
+{
+    public List<CadAssistMessageDto> Messages { get; set; } = new();
+    public List<string?> ModelContents { get; set; } = new();
+    public string? EditorCode { get; set; }
 }
 
 public class CadAssistStatusDto

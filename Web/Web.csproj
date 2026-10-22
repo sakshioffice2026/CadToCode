@@ -8,6 +8,13 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<None Update="tessdata\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
 		<ProjectReference Include="..\CadToCode.Business\CadToCode.Business.csproj" />
 		<ProjectReference Include="..\CadToCode.Core\CadToCode.Core.csproj" />
 		<ProjectReference Include="..\CadToCode.Database\CadToCode.Database.csproj" />

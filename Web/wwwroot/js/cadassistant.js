@@ -878,6 +878,10 @@
                         addAssistant(message);
                     }
                 });
+
+                if (data && data.editorCode && editorInput && !editorInput.value) {
+                    applyCode(data.editorCode);
+                }
             })
             .catch(function () { /* history is optional */ });
     }
@@ -908,6 +912,7 @@
         var form = new FormData();
         form.append("projectId", String(projectId));
         form.append("sessionId", sessionId);
+        form.append("editorCode", editorInput ? editorInput.value : "");
 
         if (projectId <= 0 && lastDrawingFile && lastDrawingFile.file) {
             form.append("files", lastDrawingFile.file, lastDrawingFile.fileName);

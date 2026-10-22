@@ -540,7 +540,16 @@
 </dialog>
 
 @section Scripts {
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="~/lib/three/three.min.js"></script>
+    <script>
+        window.THREE || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+    </script>
+    <script>
+        window.THREE || document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"><\/script>');
+    </script>
+    <script>
+        window.THREE || document.write('<script src="https://unpkg.com/three@0.128.0/build/three.min.js"><\/script>');
+    </script>
     <script src="~/js/entity-hover.js" asp-append-version="true"></script>
     <script src="~/js/sandbox.js" asp-append-version="true"></script>
     <script src="~/js/workspace.js" asp-append-version="true"></script>

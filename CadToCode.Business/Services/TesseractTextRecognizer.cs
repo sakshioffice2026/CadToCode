@@ -11,8 +11,9 @@ namespace CadToCode.Business.Services;
 
 /// <summary>
 /// Local OCR adapter for image drawings. OCR is deliberately best-effort: unavailable
-/// tessdata or a recognition failure returns no words so the geometric extractor can
-/// continue with line/curve analysis. Returned boxes are mapped back to source-image pixels.
+/// tessdata, a recognition failure or a cancelled request returns the words found so far
+/// (possibly none) so the geometric extractor can continue with line/curve analysis.
+/// Returned boxes are mapped back to source-image pixels.
 /// </summary>
 public sealed class TesseractTextRecognizer : IImageTextRecognizer, IDisposable
 {
@@ -48,23 +49,35 @@ public sealed class TesseractTextRecognizer : IImageTextRecognizer, IDisposable
         }
     }
 
-    public Task<IReadOnlyList<RecognizedWord>> RecognizeAsync(
+    public async Task<IReadOnlyList<RecognizedWord>> RecognizeAsync(
         byte[] imageBytes,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(imageBytes);
-        return Task.Run(() => Recognize(imageBytes, cancellationToken), cancellationToken);
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return Array.Empty<RecognizedWord>();
+        }
+
+        try
+        {
+            return await Task.Run(() => Recognize(imageBytes, cancellationToken)).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return Array.Empty<RecognizedWord>();
+        }
     }
 
     private IReadOnlyList<RecognizedWord> Recognize(byte[] imageBytes, CancellationToken cancellationToken)
     {
         var words = new List<RecognizedWord>();
-        if (imageBytes.Length == 0)
+        if (imageBytes.Length == 0 || cancellationToken.IsCancellationRequested)
         {
             return words;
         }
 
-        cancellationToken.ThrowIfCancellationRequested();
         var threshold = Math.Clamp(_options.OcrConfidenceThreshold, 0.0, 1.0) * 100.0;
 
         lock (_gate)
@@ -110,6 +123,11 @@ public sealed class TesseractTextRecognizer : IImageTextRecognizer, IDisposable
                 source.SaveAsPng(processedStream);
                 var processedBytes = processedStream.ToArray();
 
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    return words;
+                }
+
                 using var pix = Pix.LoadFromMemory(processedBytes);
                 using var page = _engine.Process(pix, PageSegMode.SparseText);
                 using var iterator = page.GetIterator();
@@ -117,7 +135,11 @@ public sealed class TesseractTextRecognizer : IImageTextRecognizer, IDisposable
 
                 do
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        break;
+                    }
+
                     var text = iterator.GetText(PageIteratorLevel.Word);
                     if (string.IsNullOrWhiteSpace(text))
                     {
@@ -157,7 +179,7 @@ public sealed class TesseractTextRecognizer : IImageTextRecognizer, IDisposable
             }
             catch (OperationCanceledException)
             {
-                throw;
+                words.Clear();
             }
             catch (Exception ex)
             {

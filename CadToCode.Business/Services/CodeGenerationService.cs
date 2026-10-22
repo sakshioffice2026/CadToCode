@@ -73,6 +73,20 @@ public class CodeGenerationService : ICodeGenerationService
 
     private static readonly ConcurrentDictionary<int, ImagePipelineOutcome> PipelineCache = new();
 
+    private static readonly ConcurrentDictionary<int, (ImagePipelineOutcome Outcome, DateTime StoredUtc)> FailureCache = new();
+
+    private static readonly TimeSpan FailureCacheLifetime = TimeSpan.FromMinutes(10);
+
+    private static ImagePipelineOutcome RememberFailure(int projectId, bool useCache, ImagePipelineOutcome outcome)
+    {
+        if (useCache)
+        {
+            FailureCache[projectId] = (outcome, DateTime.UtcNow);
+        }
+
+        return outcome;
+    }
+
     private sealed class PipelineSidecar
     {
         public string? Script { get; set; }
@@ -156,6 +170,16 @@ public class CodeGenerationService : ICodeGenerationService
                 return memoryHit;
             }
 
+            if (FailureCache.TryGetValue(projectId, out var failureHit))
+            {
+                if (DateTime.UtcNow - failureHit.StoredUtc < FailureCacheLifetime)
+                {
+                    return failureHit.Outcome;
+                }
+
+                FailureCache.TryRemove(projectId, out _);
+            }
+
             var diskHit = await ReadPipelineSidecarAsync(path, cancellationToken);
 
             if (diskHit is not null)
@@ -178,7 +202,7 @@ public class CodeGenerationService : ICodeGenerationService
 
         if (!processed.Success)
         {
-            return new ImagePipelineOutcome(null, processed.Warnings, processed.Error);
+            return RememberFailure(projectId, useCache, new ImagePipelineOutcome(null, processed.Warnings, processed.Error));
         }
 
         var script = processed.Mode == DrawingProcessingMode.TemplateInjection
@@ -187,10 +211,13 @@ public class CodeGenerationService : ICodeGenerationService
 
         if (string.IsNullOrWhiteSpace(script))
         {
-            return new ImagePipelineOutcome(
-                null,
-                processed.Warnings,
-                "No verified template matched this image, so no geometry was generated. Pixel guessing is disabled for images. Upload a DXF file, or add a clearer drawing with dimension labels.");
+            return RememberFailure(
+                projectId,
+                useCache,
+                new ImagePipelineOutcome(
+                    null,
+                    processed.Warnings,
+                    "No verified template matched this image, so no geometry was generated. Pixel guessing is disabled for images. Upload a DXF file, or add a clearer drawing with dimension labels."));
         }
 
         var warnings = processed.Warnings.ToList();
@@ -217,6 +244,7 @@ public class CodeGenerationService : ICodeGenerationService
         if (useCache)
         {
             PipelineCache[projectId] = finished;
+            FailureCache.TryRemove(projectId, out _);
             await WritePipelineSidecarAsync(path, finished, cancellationToken);
         }
 
