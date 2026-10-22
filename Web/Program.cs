@@ -2,6 +2,7 @@ using CadToCode.Business.Interfaces;
 using CadToCode.Business.Sandbox;
 using CadToCode.Business.Services;
 using CadToCode.Core;
+using CadToCode.Core.Calculators;
 using CadToCode.Core.Rules;
 using CadToCode.Core.Services;
 using CadToCode.Database;
@@ -44,6 +45,14 @@ builder.Services.Configure<DuckDuckGoOptions>(builder.Configuration.GetSection(D
 
 builder.Services.AddCadToCodeCore();
 builder.Services.AddScoped<IDesignSessionStore, DesignSessionStore>();
+
+// Core registers the concrete EquipmentCalculatorRegistry only; expose it through its interface.
+builder.Services.AddSingleton<IEquipmentCalculatorRegistry>(sp => sp.GetRequiredService<EquipmentCalculatorRegistry>());
+
+// Centrifugal fan: part script builder, builder registry and design flow.
+builder.Services.AddSingleton<IPartScriptBuilder, CentrifugalFanPartScriptBuilder>();
+builder.Services.AddSingleton<IPartScriptBuilderRegistry, PartScriptBuilderRegistry>();
+builder.Services.AddScoped<IEquipmentDesignFlow, CentrifugalFanDesignFlow>();
 
 // Web search is advisory only. Tavily is used when configured, otherwise DuckDuckGo.
 builder.Services.AddHttpClient<TavilyWebSearchService>();
@@ -93,8 +102,6 @@ builder.Services.AddSingleton<IDxfGeometryParser, DxfGeometryParser>();
 builder.Services.AddSingleton<IBlueprintOcrService, BlueprintOcrService>();
 builder.Services.AddScoped<IDrawingProcessingService, DrawingProcessingService>();
 builder.Services.AddScoped<ICadLibraryService, CadLibraryService>();
-builder.Services.AddSingleton<IDesignRulesProvider>(_ =>
-    new JsonDesignRulesProvider(Path.Combine(AppContext.BaseDirectory, "EngineeringKnowledge")));
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())

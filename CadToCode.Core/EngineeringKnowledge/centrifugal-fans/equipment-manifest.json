@@ -286,6 +286,12 @@
       "displayName": "Cutoff clearance",
       "unit": "m",
       "description": "Radial gap between the impeller and the scroll cutoff."
+    },
+    {
+      "key": "inlet_flow_angle_deg",
+      "displayName": "Inlet flow angle",
+      "unit": "deg",
+      "description": "Relative flow angle at the blade inlet from the circumferential direction (reference check against the blade inlet angle)."
     }
   ],
   "components": [

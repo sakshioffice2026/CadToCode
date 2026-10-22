@@ -9,8 +9,9 @@ public static class VisionPromptTemplates
 
     public const string Instructions =
         "Describe this engineering drawing as one JSON object with the keys equipmentType, summary, views, components, dimensions, uncertainties. "
-        + "equipmentType: exactly one of axial fan, cyclone separator, industrial wet scrubber, pressure vessel, piping layout, unknown. "
+        + "equipmentType: exactly one of axial fan, centrifugal fan, cyclone separator, industrial wet scrubber, pressure vessel, piping layout, unknown. "
         + "Use axial fan for any fan with an impeller, hub and blades inside a short cylindrical casing. "
+        + "Use centrifugal fan for any fan or blower with a scroll (spiral) casing, a side inlet and a drum or disc impeller with blades around its rim. "
         + "Use cyclone separator only for a drawing with a conical hopper and tangential inlet. "
         + "Use unknown when unsure. "
         + "summary: under 8 words. "
@@ -54,7 +55,7 @@ componentlist ::= "[" ws component ("," ws component){0,11} ws "]"
 dimension ::= "{" ws "\"label\"" ws ":" ws name "," ws "\"value\"" ws ":" ws number "," ws "\"unit\"" ws ":" ws unit "," ws "\"component\"" ws ":" ws short "," ws "\"view\"" ws ":" ws short "," ws "\"evidence\"" ws ":" ws name ws "}"
 dimensionlist ::= "[" ws (dimension ("," ws dimension){0,14})? ws "]"
 strlist ::= "[" ws (desc ("," ws desc){0,2})? ws "]"
-equipment ::= "\"axial fan\"" | "\"cyclone separator\"" | "\"industrial wet scrubber\"" | "\"pressure vessel\"" | "\"piping layout\"" | "\"unknown\""
+equipment ::= "\"axial fan\"" | "\"centrifugal fan\"" | "\"cyclone separator\"" | "\"industrial wet scrubber\"" | "\"pressure vessel\"" | "\"piping layout\"" | "\"unknown\""
 unit ::= "\"mm\"" | "\"cm\"" | "\"m\"" | "\"in\"" | "\"deg\"" | "\"count\""
 int ::= [0-9]{1,4}
 number ::= "-"? ([0-9] | [1-9] [0-9]{0,8}) ("." [0-9]{1,4})?

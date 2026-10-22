@@ -22,7 +22,7 @@ public static class CadAssistReplyBuilder
         text.AppendLine();
         text.AppendLine("Upload a DXF or an image/blueprint and I will match it to a template, list its components, and ask you for the dimensions I need. I will not guess dimensions from an image.");
         text.AppendLine();
-        text.AppendLine("New to the equipment? Ask me first, for example `What is an axial fan?`, and I will explain what it is, where it is used, its key components and the parameters that define it.");
+        text.AppendLine("New to the equipment? Ask me first, for example `What is an axial fan?` or `What is a centrifugal fan?`, and I will explain what it is, where it is used, its key components and the parameters that define it.");
 
         return Message(text.ToString(), "needs-upload");
     }

@@ -273,6 +273,7 @@ public class AiComponentClassifier : IAiComponentClassifier
                 break;
 
             case ComponentType.AxialFan:
+            case ComponentType.CentrifugalFan:
                 component.Diameter ??= Math.Min(width, height);
                 break;
         }

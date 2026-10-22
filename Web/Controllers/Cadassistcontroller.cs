@@ -1062,7 +1062,7 @@ public class CadAssistController : Controller
             {
                 success = true,
                 design = BuildDesignSummary(updated),
-                fileName = SafeStepFileName(run.FileName),
+                fileName = SafeStepFileName(run.FileName, updated.EquipmentType),
                 stepContent = run.StepContent,
                 solidCount = run.SolidCount,
                 faceCount = run.FaceCount,
@@ -1321,7 +1321,7 @@ public class CadAssistController : Controller
         return new ParameterInfo(p.Key, p.DisplayName, p.SiUnit, p.Description);
     }
 
-    private static string SafeStepFileName(string? name)
+    private static string SafeStepFileName(string? name, EquipmentType equipment)
     {
         var clean = Path.GetFileName(name ?? string.Empty);
 
@@ -1332,7 +1332,7 @@ public class CadAssistController : Controller
 
         if (string.IsNullOrWhiteSpace(clean))
         {
-            clean = "AxialFan";
+            clean = equipment == EquipmentType.CentrifugalFan ? "CentrifugalFan" : "AxialFan";
         }
 
         if (clean.Length > MaxFileNameChars)

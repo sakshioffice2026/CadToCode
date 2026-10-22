@@ -21,7 +21,8 @@ public enum ComponentType
     Bracket = 17,
     Flange = 18,
     Panel = 19,
-    CustomProfile = 20
+    CustomProfile = 20,
+    CentrifugalFan = 21
 }
 
 public static class ComponentTypeExtensions

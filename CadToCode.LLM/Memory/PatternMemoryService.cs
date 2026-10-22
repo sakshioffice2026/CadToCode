@@ -350,6 +350,14 @@ public class PatternMemoryService : IPatternMemoryService
             },
             new()
             {
+                Name = "Centrifugal fan",
+                Type = ComponentType.CentrifugalFan,
+                Description = "Side view of a centrifugal fan: circular scroll casing, central inlet eye, hub, curved blades around the impeller rim, tangential rectangular outlet.",
+                Build = BuildCentrifugalFan,
+                Diameter = 1000
+            },
+            new()
+            {
                 Name = "Rectangular duct",
                 Type = ComponentType.Duct,
                 Description = "Long rectangular duct run with end flanges, a joint line and a centre line.",
@@ -431,6 +439,27 @@ public class PatternMemoryService : IPatternMemoryService
         }
 
         Text(g, "AXIAL FAN", 0, -700, 80);
+        return g;
+    }
+
+    private static ExtractedGeometry BuildCentrifugalFan()
+    {
+        var g = new ExtractedGeometry();
+
+        Circle(g, 0, 0, 500);
+        Circle(g, 0, 0, 350);
+        Circle(g, 0, 0, 200);
+        Circle(g, 0, 0, 60);
+        Rect(g, 500, 0, 450, 500);
+
+        for (var i = 0; i < 12; i++)
+        {
+            var a = i * Math.PI / 6.0;
+            var b = a + 15.0 * Math.PI / 180.0;
+            Line(g, 200 * Math.Cos(a), 200 * Math.Sin(a), 350 * Math.Cos(b), 350 * Math.Sin(b));
+        }
+
+        Text(g, "CENTRIFUGAL FAN", 0, -650, 80);
         return g;
     }
 

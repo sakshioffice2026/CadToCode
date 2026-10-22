@@ -72,6 +72,7 @@ public sealed class CentrifugalFanCalculator : IEquipmentCalculator
         public const string EulerHeadPa = "euler_head_pa";
         public const string BladeInletWidthM = "blade_inlet_width_m";
         public const string CasingCutoffClearanceM = "casing_cutoff_clearance_m";
+        public const string InletFlowAngleDeg = "inlet_flow_angle_deg";
     }
 
     /// <summary>Rule keys shared by every blade type in centrifugal-fans/design-rules.json.</summary>
@@ -121,12 +122,13 @@ public sealed class CentrifugalFanCalculator : IEquipmentCalculator
         public const string BladeCountAllowed = "blade_count_allowed";
     }
 
-    // Calculation formula identifiers (see formulas.json). Rule-driven values use the design rule ID instead.
+    // Calculation formula identifiers (see formula.json). Rule-driven values use the design rule ID instead.
     private const string FDiameter = "CFAN-F-001";
     private const string FTipSpeed = "CFAN-F-002";
     private const string FWidth = "CFAN-F-003";
     private const string FInlet = "CFAN-F-004";
     private const string FSpecificSpeed = "CFAN-F-005";
+    private const string FInletFlowAngle = "CFAN-F-006";
     private const string FSlip = "CFAN-F-007";
     private const string FTotalPressure = "CFAN-F-008";
     private const string FEuler = "CFAN-F-009";
@@ -436,6 +438,12 @@ public sealed class CentrifugalFanCalculator : IEquipmentCalculator
             "D1 = (D1/D2) * D2");
         builder.AddValue(Keys.BladeInletWidthM, "Blade Inlet Width", b1, "m", FInlet, widthRatioRule.SourceReference,
             "b1 = (b1/b2) * b2");
+
+        double cr1 = q / (Math.PI * d1 * b1);
+        double u1 = omega * d1 / 2.0;
+        double beta1Flow = Math.Atan(cr1 / u1) * 180.0 / Math.PI;
+        builder.AddValue(Keys.InletFlowAngleDeg, "Inlet Flow Angle (reference)", beta1Flow, "deg", FInletFlowAngle, RefKinematics,
+            "beta1_flow = atan(cr1 / U1), cr1 = Q / (pi * D1 * b1), U1 = omega * D1 / 2");
 
         // 4. Specific speed
         double omegaS = omega * Math.Sqrt(q) / Math.Pow(ps / rho, 0.75);

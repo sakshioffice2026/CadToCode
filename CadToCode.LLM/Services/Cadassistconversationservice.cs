@@ -1086,6 +1086,15 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             return EquipmentType.Cyclone;
         }
 
+        if (text.Contains("centrifugal", StringComparison.Ordinal)
+            || text.Contains("blower", StringComparison.Ordinal)
+            || text.Contains("scroll", StringComparison.Ordinal)
+            || text.Contains("squirrel", StringComparison.Ordinal)
+            || text.Contains("radial", StringComparison.Ordinal))
+        {
+            return EquipmentType.CentrifugalFan;
+        }
+
         if (text.Contains("fan", StringComparison.Ordinal))
         {
             return EquipmentType.AxialFan;

@@ -272,6 +272,15 @@ public static class VisionParameterMapper
             return EquipmentType.Cyclone;
         }
 
+        if (key.Contains("centrifugal", StringComparison.OrdinalIgnoreCase)
+            || key.Contains("blower", StringComparison.OrdinalIgnoreCase)
+            || key.Contains("scroll", StringComparison.OrdinalIgnoreCase)
+            || key.Contains("squirrel", StringComparison.OrdinalIgnoreCase)
+            || key.Contains("radial", StringComparison.OrdinalIgnoreCase))
+        {
+            return EquipmentType.CentrifugalFan;
+        }
+
         if (key.Contains("fan", StringComparison.OrdinalIgnoreCase))
         {
             return EquipmentType.AxialFan;

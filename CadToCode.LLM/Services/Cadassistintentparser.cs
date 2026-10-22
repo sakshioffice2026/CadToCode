@@ -162,19 +162,19 @@ public static class CadAssistIntentParser
 
         var flowKey = equipment switch
         {
-            EquipmentType.AxialFan or EquipmentType.Cyclone or EquipmentType.WetScrubber => "airflow_m3s",
+            EquipmentType.AxialFan or EquipmentType.CentrifugalFan or EquipmentType.Cyclone or EquipmentType.WetScrubber => "airflow_m3s",
             EquipmentType.PipingLayout => "flow_rate_m3s",
             _ => null
         };
 
         var pressureKey = equipment switch
         {
-            EquipmentType.AxialFan => "static_pressure_pa",
+            EquipmentType.AxialFan or EquipmentType.CentrifugalFan => "static_pressure_pa",
             EquipmentType.PressureVessel or EquipmentType.PipingLayout => "design_pressure_pa",
             _ => null
         };
 
-        var isFan = equipment == EquipmentType.AxialFan;
+        var isFan = equipment is EquipmentType.AxialFan or EquipmentType.CentrifugalFan;
 
         ApplyEngineering(text, intent, consumed, FlowRegex, flowKey, m => ConvertFlow(m));
         ApplyEngineering(text, intent, consumed, PressureRegex, pressureKey, m => ConvertPressure(m));
