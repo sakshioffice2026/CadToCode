@@ -807,7 +807,7 @@ public class CadAssistController : Controller
             return NotFound(new { success = false, error = "The design session was not found." });
         }
 
-        if (session.EquipmentType != EquipmentType.AxialFan)
+        if (session.EquipmentType != EquipmentType.AxialFan && session.EquipmentType != EquipmentType.CentrifugalFan)
         {
             return UnprocessableEntity(new
             {
@@ -830,6 +830,11 @@ public class CadAssistController : Controller
         if (latest is null || !session.HasCadReadyCalculation || session.IsCalculationStale)
         {
             return Conflict(new { success = false, error = "There is no current, CAD-ready calculation to build from." });
+        }
+
+        if (session.EquipmentType == EquipmentType.CentrifugalFan)
+        {
+            return await ComposeCentrifugalFanScriptAsync(request, latest.Calculation.Values, cancellationToken);
         }
 
         var missingInputs = new List<string>();
@@ -889,6 +894,91 @@ public class CadAssistController : Controller
         composerInputs[AxialFanScriptComposer.BladePitchDeg] = request.BladePitchDeg!.Value;
 
         var composed = AxialFanScriptComposer.Compose(composerInputs);
+
+        if (!composed.Success)
+        {
+            return UnprocessableEntity(new
+            {
+                success = false,
+                error = "The script could not be generated: " + string.Join(" ", composed.Errors),
+                errors = composed.Errors
+            });
+        }
+
+        try
+        {
+            var updated = await _workflow.MarkScriptGeneratedAsync(request.SessionId, cancellationToken);
+
+            return Json(new
+            {
+                success = true,
+                design = BuildDesignSummary(updated),
+                script = composed.Script,
+                fileBaseName = composed.FileBaseName,
+                appliedValues = composed.AppliedValues
+            });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return DesignError(ex);
+        }
+    }
+
+    private async Task<IActionResult> ComposeCentrifugalFanScriptAsync(
+        DesignScriptRequest request,
+        IReadOnlyDictionary<string, double> calculated,
+        CancellationToken cancellationToken)
+    {
+        var composerInputs = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var missingCalculated = new List<string>();
+
+        var mapping = new (string ComposerKey, string CalculatedKey)[]
+        {
+            (CentrifugalFanScriptComposer.ImpellerOuterDiameterM, "impeller_outer_diameter_m"),
+            (CentrifugalFanScriptComposer.ImpellerInletDiameterM, "impeller_inlet_diameter_m"),
+            (CentrifugalFanScriptComposer.BladeWidthM, "impeller_width_m"),
+            (CentrifugalFanScriptComposer.BladeInletWidthM, "blade_inlet_width_m"),
+            (CentrifugalFanScriptComposer.HubDiameterM, "hub_diameter_m"),
+            (CentrifugalFanScriptComposer.BladeCount, "blade_count"),
+            (CentrifugalFanScriptComposer.BladeInletAngleDeg, "blade_inlet_angle_deg"),
+            (CentrifugalFanScriptComposer.BladeOutletAngleDeg, "blade_outlet_angle_deg"),
+            (CentrifugalFanScriptComposer.BladeThicknessM, "blade_thickness_m"),
+            (CentrifugalFanScriptComposer.BladeProfileCode, "blade_profile_code"),
+            (CentrifugalFanScriptComposer.PlateThicknessM, "plate_thickness_m"),
+            (CentrifugalFanScriptComposer.CasingBaseDiameterM, "casing_base_diameter_m"),
+            (CentrifugalFanScriptComposer.CasingWidthM, "casing_width_m"),
+            (CentrifugalFanScriptComposer.CasingWallM, "casing_wall_thickness_m"),
+            (CentrifugalFanScriptComposer.OutletHeightM, "outlet_height_m"),
+            (CentrifugalFanScriptComposer.CasingInletDiameterM, "inlet_eye_diameter_m")
+        };
+
+        foreach (var (composerKey, calculatedKey) in mapping)
+        {
+            if (calculated.TryGetValue(calculatedKey, out var value))
+            {
+                composerInputs[composerKey] = value;
+            }
+            else
+            {
+                missingCalculated.Add(calculatedKey);
+            }
+        }
+
+        if (missingCalculated.Count > 0)
+        {
+            return Conflict(new
+            {
+                success = false,
+                error = "The calculation is missing: " + string.Join(", ", missingCalculated) + "."
+            });
+        }
+
+        if (request.BladeThicknessM is not null)
+        {
+            composerInputs[CentrifugalFanScriptComposer.BladeThicknessM] = request.BladeThicknessM.Value;
+        }
+
+        var composed = CentrifugalFanScriptComposer.Compose(composerInputs);
 
         if (!composed.Success)
         {

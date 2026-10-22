@@ -26,6 +26,7 @@ public sealed class EngineeringKnowledgeService : IEngineeringKnowledgeService
         new Dictionary<string, EquipmentType>(StringComparer.OrdinalIgnoreCase)
         {
             ["fans"] = EquipmentType.AxialFan,
+            ["centrifugal-fans"] = EquipmentType.CentrifugalFan,
             ["cyclones"] = EquipmentType.Cyclone,
             ["scrubbers"] = EquipmentType.WetScrubber,
             ["pressurevessels"] = EquipmentType.PressureVessel,

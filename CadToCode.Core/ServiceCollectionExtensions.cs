@@ -35,9 +35,11 @@ public static class ServiceCollectionExtensions
             new JsonEquipmentManifestRegistry(sp.GetRequiredService<EngineeringKnowledgeOptions>().RootPath));
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, AxialFanCalculator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, CentrifugalFanCalculator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, WetScrubberCalculator>());
         services.TryAddSingleton<EquipmentCalculatorRegistry>();
 
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICalculatorTemplateMapper, CentrifugalFanTemplateMapper>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICalculatorTemplateMapper, WetScrubberTemplateMapper>());
         services.TryAddSingleton<ICalculatorTemplateMapperRegistry, CalculatorTemplateMapperRegistry>();
 
