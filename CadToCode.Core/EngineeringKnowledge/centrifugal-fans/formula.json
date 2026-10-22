@@ -1,0 +1,271 @@
+﻿{
+  "meta": {
+    "schemaVersion": "1.0.0",
+    "equipment": "CentrifugalFan",
+    "unitSystem": "SI",
+    "status": "PENDING_ENGINEERING_REVIEW",
+    "note": "Reference formulas for retrieval only. Numeric design values are computed by the deterministic C# calculators and design-rules.json, never from this file. Blade angles are measured from the circumferential direction: backward below 90 degrees, radial 90 degrees, forward above 90 degrees."
+  },
+  "sizing": [
+    {
+      "id": "CFAN-F-001",
+      "name": "Impeller outer diameter from static pressure coefficient",
+      "expression": "U2 = sqrt(2 * Ps / (rho * psi_s)), D2 = 2 * U2 / omega",
+      "variables": {
+        "U2": "blade outlet peripheral speed, m/s",
+        "Ps": "fan static pressure, Pa",
+        "rho": "air density, kg/m3",
+        "psi_s": "design static pressure coefficient of the blade type, dimensionless",
+        "omega": "shaft angular speed, rad/s",
+        "D2": "impeller outer diameter, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-002",
+      "name": "Tip speed",
+      "expression": "U2 = omega * D2 / 2",
+      "variables": {
+        "U2": "blade outlet peripheral speed, m/s",
+        "omega": "shaft angular speed, rad/s",
+        "D2": "impeller outer diameter, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-003",
+      "name": "Outlet blade width from flow coefficient",
+      "expression": "cr2 = phi2 * U2, b2 = Q / (pi * D2 * cr2)",
+      "variables": {
+        "cr2": "radial velocity at the outlet, m/s",
+        "phi2": "design outlet flow coefficient of the blade type, dimensionless",
+        "U2": "blade outlet peripheral speed, m/s",
+        "b2": "axial blade width at the outlet, m",
+        "Q": "volumetric flow rate, m3/s",
+        "D2": "impeller outer diameter, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-004",
+      "name": "Impeller inlet diameter and inlet blade width",
+      "expression": "D1 = (D1/D2) * D2, b1 = (b1/b2) * b2",
+      "variables": {
+        "D1": "impeller inlet diameter (eye), m",
+        "D1/D2": "inlet to outlet diameter ratio of the blade type, dimensionless",
+        "b1": "axial blade width at the inlet, m",
+        "b1/b2": "inlet to outlet width ratio of the blade type, dimensionless"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-005",
+      "name": "Specific speed",
+      "expression": "omega_s = omega * sqrt(Q) / (Ps / rho)^0.75",
+      "variables": {
+        "omega_s": "dimensionless specific speed",
+        "omega": "shaft angular speed, rad/s",
+        "Q": "volumetric flow rate, m3/s",
+        "Ps": "fan static pressure, Pa",
+        "rho": "air density, kg/m3"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "velocity_triangles": [
+    {
+      "id": "CFAN-F-006",
+      "name": "Inlet flow angle (reference check)",
+      "expression": "cr1 = Q / (pi * D1 * b1), U1 = omega * D1 / 2, beta1_flow = atan(cr1 / U1)",
+      "variables": {
+        "cr1": "radial velocity at the inlet, m/s",
+        "U1": "blade inlet peripheral speed, m/s",
+        "beta1_flow": "relative flow angle at the inlet from the circumferential direction, deg"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "slip_and_euler": [
+    {
+      "id": "CFAN-F-007",
+      "name": "Wiesner slip factor",
+      "expression": "sigma = 1 - sqrt(sin(beta2_nominal)) / Z^0.7",
+      "variables": {
+        "sigma": "slip factor, dimensionless",
+        "beta2_nominal": "nominal blade outlet angle of the blade type, deg",
+        "Z": "blade count"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-008",
+      "name": "Total pressure rise",
+      "expression": "Pt = Ps + 0.5 * rho * Vout^2, Vout = k_out * U2",
+      "variables": {
+        "Pt": "fan total pressure rise, Pa",
+        "Ps": "fan static pressure, Pa",
+        "Vout": "discharge velocity, m/s",
+        "k_out": "outlet velocity to tip speed ratio, dimensionless"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-009",
+      "name": "Euler pressure rise",
+      "expression": "dp_euler = rho * U2 * Cu2, Cu2 = Pt / (rho * eta_h * U2)",
+      "variables": {
+        "dp_euler": "ideal pressure rise from the Euler equation, Pa",
+        "Cu2": "tangential velocity component at the outlet, m/s",
+        "eta_h": "assumed hydraulic efficiency of the blade type, dimensionless"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-010",
+      "name": "Blade outlet angle from the outlet velocity triangle",
+      "expression": "beta2 = atan2(cr2, sigma * U2 - Cu2)",
+      "variables": {
+        "beta2": "blade outlet angle from the circumferential direction, deg",
+        "cr2": "radial velocity at the outlet, m/s",
+        "sigma": "slip factor, dimensionless",
+        "U2": "blade outlet peripheral speed, m/s",
+        "Cu2": "tangential velocity component at the outlet, m/s"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "power": [
+    {
+      "id": "CFAN-F-011",
+      "name": "Shaft power",
+      "expression": "P_shaft = Q * Ps / eta_s",
+      "variables": {
+        "P_shaft": "estimated shaft power, W",
+        "Q": "volumetric flow rate, m3/s",
+        "Ps": "fan static pressure, Pa",
+        "eta_s": "static efficiency, dimensionless"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "impeller_geometry": [
+    {
+      "id": "CFAN-F-012",
+      "name": "Blade thickness",
+      "expression": "t_blade = max(fraction * D2, t_min)",
+      "variables": {
+        "t_blade": "blade thickness (maximum thickness for airfoil blades), m",
+        "fraction": "blade thickness fraction of D2 for the blade type, dimensionless",
+        "t_min": "minimum blade thickness, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-013",
+      "name": "Impeller plate thickness",
+      "expression": "t_plate = max(fraction * D2, t_min)",
+      "variables": {
+        "t_plate": "impeller back plate and shroud thickness, m",
+        "fraction": "plate thickness fraction of D2, dimensionless",
+        "t_min": "minimum plate thickness, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-014",
+      "name": "Hub diameter",
+      "expression": "D_hub = k_hub * D1",
+      "variables": {
+        "D_hub": "hub or shaft boss diameter, m",
+        "k_hub": "hub to inlet diameter ratio, dimensionless"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-015",
+      "name": "Blade centerline",
+      "expression": "beta(r) = beta1 + (beta2 - beta1) * (r - r1) / (r2 - r1), d(theta)/dr = 1 / (r * tan(beta(r)))",
+      "variables": {
+        "beta(r)": "local blade angle from the circumferential direction, deg",
+        "beta1": "blade inlet angle, deg",
+        "beta2": "blade outlet angle, deg",
+        "r": "radius, m",
+        "r1": "inlet radius D1 / 2, m",
+        "r2": "outlet radius D2 / 2, m",
+        "theta": "wrap angle of the blade centerline, rad"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ],
+  "casing_geometry": [
+    {
+      "id": "CFAN-F-016",
+      "name": "Casing base circle",
+      "expression": "c = max(fraction * D2, c_min), D3 = D2 + 2 * c",
+      "variables": {
+        "c": "radial gap between impeller and scroll base circle (cutoff clearance), m",
+        "fraction": "cutoff clearance fraction of D2, dimensionless",
+        "c_min": "minimum cutoff clearance, m",
+        "D3": "scroll base circle diameter, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-017",
+      "name": "Casing inner width",
+      "expression": "W = k_w * (max(b1, b2) + 2 * t_plate)",
+      "variables": {
+        "W": "internal axial width of the scroll, m",
+        "k_w": "casing width to blade width ratio, dimensionless",
+        "b1": "inlet blade width, m",
+        "b2": "outlet blade width, m",
+        "t_plate": "impeller plate thickness, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-018",
+      "name": "Casing wall thickness",
+      "expression": "t_wall = max(fraction * D3, t_min)",
+      "variables": {
+        "t_wall": "casing wall and side plate thickness, m",
+        "fraction": "casing wall thickness fraction of D3, dimensionless",
+        "t_min": "minimum casing wall thickness, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-019",
+      "name": "Outlet opening height",
+      "expression": "h_out = Q / (Vout * W)",
+      "variables": {
+        "h_out": "radial height of the discharge opening, m",
+        "Q": "volumetric flow rate, m3/s",
+        "Vout": "discharge velocity, m/s",
+        "W": "internal axial width of the scroll, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-020",
+      "name": "Casing inlet diameter",
+      "expression": "D_inlet = k_in * D1",
+      "variables": {
+        "D_inlet": "inlet opening diameter in the casing side plate, m",
+        "k_in": "casing inlet to impeller inlet diameter ratio, dimensionless"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    },
+    {
+      "id": "CFAN-F-021",
+      "name": "Scroll spiral",
+      "expression": "r_s(phi) = D3 / 2 + (h_out) * phi / (2 * pi)",
+      "variables": {
+        "r_s(phi)": "scroll inner radius at angle phi from the cutoff, m",
+        "phi": "angle from the cutoff measured in the direction of rotation, rad",
+        "h_out": "radial height of the discharge opening, m"
+      },
+      "status": "PENDING_ENGINEERING_REVIEW"
+    }
+  ]
+}

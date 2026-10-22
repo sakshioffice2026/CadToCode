@@ -16,7 +16,8 @@ public enum EquipmentType
     Cyclone = 2,
     WetScrubber = 3,
     PressureVessel = 4,
-    PipingLayout = 5
+    PipingLayout = 5,
+    CentrifugalFan = 6
 }
 
 /// <summary>
@@ -27,6 +28,101 @@ public enum CalculatorStatus
     NotImplemented = 0,
     Preview = 1,
     Released = 2
+}
+
+/// <summary>
+/// Design variant of a centrifugal fan. The numeric value is the <c>blade_type</c> calculator input,
+/// because calculator inputs are numbers only. Each variant loads its own proportions, angles and limits
+/// from the centrifugal fan rule set, using the rule key prefix returned by <see cref="CentrifugalBladeTypes.RulePrefix"/>.
+/// </summary>
+public enum CentrifugalBladeType
+{
+    ForwardCurved = 1,
+    BackwardCurved = 2,
+    BackwardAirfoil = 3,
+    Radial = 4
+}
+
+/// <summary>
+/// Helpers that convert between the numeric <c>blade_type</c> input, the enum and the rule key prefix.
+/// </summary>
+public static class CentrifugalBladeTypes
+{
+    /// <summary>Calculator input key that selects the blade type.</summary>
+    public const string InputKey = "blade_type";
+
+    public static bool TryFromCode(double code, out CentrifugalBladeType type)
+    {
+        type = default;
+
+        if (!double.IsFinite(code) || Math.Abs(code - Math.Round(code)) > 1e-9)
+            return false;
+
+        var rounded = (int)Math.Round(code);
+
+        if (!Enum.IsDefined(typeof(CentrifugalBladeType), rounded))
+            return false;
+
+        type = (CentrifugalBladeType)rounded;
+        return true;
+    }
+
+    public static double ToCode(CentrifugalBladeType type) => (int)type;
+
+    /// <summary>Prefix of the rule keys that belong to the blade type, for example "backward_airfoil".</summary>
+    public static string RulePrefix(CentrifugalBladeType type) => type switch
+    {
+        CentrifugalBladeType.ForwardCurved => "forward_curved",
+        CentrifugalBladeType.BackwardCurved => "backward_curved",
+        CentrifugalBladeType.BackwardAirfoil => "backward_airfoil",
+        CentrifugalBladeType.Radial => "radial",
+        _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown centrifugal blade type.")
+    };
+
+    public static string DisplayName(CentrifugalBladeType type) => type switch
+    {
+        CentrifugalBladeType.ForwardCurved => "Forward curved",
+        CentrifugalBladeType.BackwardCurved => "Backward curved / inclined",
+        CentrifugalBladeType.BackwardAirfoil => "Backward airfoil",
+        CentrifugalBladeType.Radial => "Radial / paddle blade",
+        _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown centrifugal blade type.")
+    };
+
+    /// <summary>Free-text words that identify each blade type in a user message.</summary>
+    public static IReadOnlyList<string> Aliases(CentrifugalBladeType type) => type switch
+    {
+        CentrifugalBladeType.ForwardCurved => new[] { "forward curved", "forward-curved", "forward curve", "fc fan", "squirrel cage", "sirocco" },
+        CentrifugalBladeType.BackwardCurved => new[] { "backward curved", "backward-curved", "backward inclined", "backward-inclined", "bc fan", "bi fan" },
+        CentrifugalBladeType.BackwardAirfoil => new[] { "backward airfoil", "airfoil", "aerofoil", "ba fan", "airfoil blade" },
+        CentrifugalBladeType.Radial => new[] { "radial blade", "radial bladed", "paddle blade", "paddle wheel", "paddle", "radial tip", "material handling fan" },
+        _ => Array.Empty<string>()
+    };
+
+    /// <summary>
+    /// Resolves a blade type from free text. Returns false when no type, or more than one type, is named.
+    /// </summary>
+    public static bool TryResolve(string? text, out CentrifugalBladeType type)
+    {
+        type = default;
+
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+
+        var lower = text.ToLowerInvariant();
+        var matches = new List<CentrifugalBladeType>();
+
+        foreach (CentrifugalBladeType candidate in Enum.GetValues(typeof(CentrifugalBladeType)))
+        {
+            if (Aliases(candidate).Any(a => lower.Contains(a, StringComparison.Ordinal)))
+                matches.Add(candidate);
+        }
+
+        if (matches.Count != 1)
+            return false;
+
+        type = matches[0];
+        return true;
+    }
 }
 
 /// <summary>
@@ -204,6 +300,50 @@ public static class EquipmentRegistry
                 },
                 new[] { "axial fan", "axial flow fan", "tube axial", "tubeaxial", "vane axial", "vaneaxial", "propeller fan", "axial blower" },
                 new[] { "fans", "common" }),
+
+            new(
+                EquipmentType.CentrifugalFan,
+                "CENTRIFUGAL_FAN",
+                "Centrifugal Fan",
+                "Single-inlet centrifugal fan with scroll casing, sized from airflow, static pressure, rotational speed and blade type (forward curved, backward curved, backward airfoil or radial).",
+                CalculatorStatus.Preview,
+                new[]
+                {
+                    new ParameterDescriptor("airflow_m3s", "Airflow", "m3/s", true, "Required volumetric flow rate."),
+                    new ParameterDescriptor("static_pressure_pa", "Static Pressure", "Pa", true, "Required fan static pressure."),
+                    new ParameterDescriptor("speed_rad_s", "Rotational Speed", "rad/s", true, "Shaft angular speed (derived from RPM)."),
+                    new ParameterDescriptor("blade_type", "Blade Type", "-", true, "Blade design code: 1 forward curved, 2 backward curved, 3 backward airfoil, 4 radial."),
+                    new ParameterDescriptor("air_density_kgm3", "Air Density", "kg/m3", false, "Defaults to standard air (1.204 kg/m3) when not given."),
+                    new ParameterDescriptor("static_efficiency", "Static Efficiency", "-", false, "Target static efficiency (0-1). Defaults to the blade type rule.")
+                },
+                new[]
+                {
+                    new ParameterDescriptor("impeller_outer_diameter_m", "Impeller Outer Diameter", "m", true, "Impeller diameter at the blade outlet (D2)."),
+                    new ParameterDescriptor("impeller_inlet_diameter_m", "Impeller Inlet Diameter", "m", true, "Impeller eye and blade inlet diameter (D1)."),
+                    new ParameterDescriptor("impeller_width_m", "Impeller Blade Width", "m", true, "Axial blade width at the outlet (b2)."),
+                    new ParameterDescriptor("hub_diameter_m", "Hub Diameter", "m", true, "Hub or shaft boss diameter."),
+                    new ParameterDescriptor("blade_count", "Blade Count", "-", true, "Number of blades."),
+                    new ParameterDescriptor("blade_inlet_angle_deg", "Blade Inlet Angle", "deg", true, "Blade angle at the inlet, measured from the circumferential direction."),
+                    new ParameterDescriptor("blade_outlet_angle_deg", "Blade Outlet Angle", "deg", true, "Blade angle at the outlet, measured from the circumferential direction."),
+                    new ParameterDescriptor("blade_thickness_m", "Blade Thickness", "m", true, "Blade thickness (maximum thickness for airfoil blades)."),
+                    new ParameterDescriptor("blade_profile_code", "Blade Profile", "-", true, "0 constant-thickness sheet blade, 1 airfoil blade."),
+                    new ParameterDescriptor("plate_thickness_m", "Impeller Plate Thickness", "m", true, "Thickness of the impeller back plate and shroud."),
+                    new ParameterDescriptor("tip_speed_ms", "Tip Speed", "m/s", true, "Blade outlet peripheral speed."),
+                    new ParameterDescriptor("casing_base_diameter_m", "Casing Base Circle Diameter", "m", true, "Scroll diameter at the cutoff (D3)."),
+                    new ParameterDescriptor("casing_width_m", "Casing Inner Width", "m", true, "Internal axial width of the scroll."),
+                    new ParameterDescriptor("casing_wall_thickness_m", "Casing Wall Thickness", "m", true, "Casing wall and side plate thickness."),
+                    new ParameterDescriptor("outlet_height_m", "Outlet Height", "m", true, "Radial height of the discharge opening."),
+                    new ParameterDescriptor("inlet_eye_diameter_m", "Casing Inlet Diameter", "m", true, "Inlet opening diameter in the casing side plate."),
+                    new ParameterDescriptor("shaft_power_w", "Estimated Shaft Power", "W", true, "Estimated shaft power at the given static efficiency.")
+                },
+                new[]
+                {
+                    "centrifugal fan", "centrifugal blower", "radial fan", "radial blower",
+                    "backward curved fan", "backward inclined fan", "backward airfoil fan",
+                    "forward curved fan", "airfoil fan", "plug fan", "squirrel cage fan",
+                    "squirrel cage blower", "paddle wheel fan", "scroll fan", "sirocco fan"
+                },
+                new[] { "centrifugal-fans", "common" }),
 
             new(
                 EquipmentType.Cyclone,

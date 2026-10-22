@@ -1,0 +1,800 @@
+﻿{
+  // CadToCode.Core/EngineeringKnowledge/centrifugal-fans/design-rules.json
+  // Rules without a prefix apply to every blade type. Rules with a prefix (forward_curved., backward_curved.,
+  // backward_airfoil., radial.) are selected by the blade_type input (1 to 4).
+  // Blade angles are measured from the circumferential (tangential) direction: backward below 90, radial 90, forward above 90.
+  "equipmentType": "CentrifugalFan",
+  "version": "0.1.0",
+  "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+  "rules": [
+    {
+      "id": "CFAN-RULE-001",
+      "key": "standard_air_density_kgm3",
+      "description": "Air density used when the user does not supply one (20 degC, 101.325 kPa, dry air).",
+      "siUnit": "kg/m3",
+      "sourceReference": "ISO 2533 / ideal gas law, dry air at 293.15 K and 101325 Pa",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.204
+    },
+    {
+      "id": "CFAN-RULE-002",
+      "key": "slip_blade_count_exponent",
+      "description": "Exponent of the blade count in the Wiesner slip factor: sigma = 1 - sqrt(sin(beta2)) / Z^exponent.",
+      "siUnit": "-",
+      "sourceReference": "Wiesner, A Review of Slip Factors for Centrifugal Impellers, J. Eng. Power, 1967",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.7
+    },
+    {
+      "id": "CFAN-RULE-003",
+      "key": "static_efficiency_allowed",
+      "description": "Allowed static efficiency range for user-supplied values.",
+      "siUnit": "-",
+      "sourceReference": "Validated envelope of this calculator",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.30,
+      "max": 0.90
+    },
+    {
+      "id": "CFAN-RULE-004",
+      "key": "airflow_allowed_m3s",
+      "description": "Airflow range supported by this calculator.",
+      "siUnit": "m3/s",
+      "sourceReference": "Validated envelope of this calculator",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.05,
+      "max": 100.0
+    },
+    {
+      "id": "CFAN-RULE-005",
+      "key": "static_pressure_allowed_pa",
+      "description": "Static pressure range supported by this calculator (single-stage, single-inlet centrifugal fans).",
+      "siUnit": "Pa",
+      "sourceReference": "Validated envelope of this calculator; higher pressures need a specialist or multistage selection",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 50.0,
+      "max": 15000.0
+    },
+    {
+      "id": "CFAN-RULE-006",
+      "key": "impeller_outer_diameter_allowed_m",
+      "description": "Impeller outer diameter range supported by this calculator.",
+      "siUnit": "m",
+      "sourceReference": "Validated envelope of this calculator",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.10,
+      "max": 3.0
+    },
+    {
+      "id": "CFAN-RULE-007",
+      "key": "static_pressure_coefficient_allowed",
+      "description": "Allowed static pressure coefficient psi_s = Ps / (0.5 * rho * U2^2).",
+      "siUnit": "-",
+      "sourceReference": "Typical centrifugal fan non-dimensional performance range; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.30,
+      "max": 2.0
+    },
+    {
+      "id": "CFAN-RULE-008",
+      "key": "flow_coefficient_allowed",
+      "description": "Allowed outlet flow coefficient phi2 = cr2 / U2.",
+      "siUnit": "-",
+      "sourceReference": "Typical centrifugal fan operating range; Wright, Fluid Machinery",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.05,
+      "max": 0.60
+    },
+    {
+      "id": "CFAN-RULE-009",
+      "key": "inlet_to_outlet_diameter_ratio_allowed",
+      "description": "Allowed ratio of impeller inlet diameter D1 to outer diameter D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical centrifugal impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.40,
+      "max": 0.95
+    },
+    {
+      "id": "CFAN-RULE-010",
+      "key": "specific_speed_allowed",
+      "description": "Allowed dimensionless specific speed omega * sqrt(Q) / (Ps / rho)^0.75.",
+      "siUnit": "-",
+      "sourceReference": "Cordier diagram range for centrifugal fans; Wright, Fluid Machinery",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.20,
+      "max": 3.5
+    },
+    {
+      "id": "CFAN-RULE-011",
+      "key": "blade_thickness_min_m",
+      "description": "Minimum blade thickness for manufacturability.",
+      "siUnit": "m",
+      "sourceReference": "Fabricated sheet-metal impeller practice (to be confirmed per material)",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.0015
+    },
+    {
+      "id": "CFAN-RULE-012",
+      "key": "plate_thickness_fraction_of_d2",
+      "description": "Impeller back plate and shroud thickness as a fraction of the impeller outer diameter.",
+      "siUnit": "-",
+      "sourceReference": "Fabricated impeller practice (to be confirmed per material)",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.004
+    },
+    {
+      "id": "CFAN-RULE-013",
+      "key": "plate_thickness_min_m",
+      "description": "Minimum impeller plate thickness.",
+      "siUnit": "m",
+      "sourceReference": "Fabricated impeller practice (to be confirmed per material)",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.002
+    },
+    {
+      "id": "CFAN-RULE-014",
+      "key": "hub_to_inlet_diameter_ratio",
+      "description": "Hub diameter as a fraction of the impeller inlet diameter.",
+      "siUnit": "-",
+      "sourceReference": "Typical centrifugal impeller hub proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.35
+    },
+    {
+      "id": "CFAN-RULE-015",
+      "key": "cutoff_clearance_fraction_of_d2",
+      "description": "Radial gap between the impeller and the scroll base circle as a fraction of D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical scroll casing practice (5 to 10 percent of D2); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.07
+    },
+    {
+      "id": "CFAN-RULE-016",
+      "key": "cutoff_clearance_min_m",
+      "description": "Minimum radial gap between the impeller and the scroll base circle.",
+      "siUnit": "m",
+      "sourceReference": "Manufacturing practice for fabricated casings",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.005
+    },
+    {
+      "id": "CFAN-RULE-017",
+      "key": "casing_width_to_blade_width_ratio",
+      "description": "Internal casing width as a multiple of the largest impeller blade width.",
+      "siUnit": "-",
+      "sourceReference": "Typical scroll casing proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.3
+    },
+    {
+      "id": "CFAN-RULE-018",
+      "key": "casing_wall_thickness_fraction_of_diameter",
+      "description": "Casing wall thickness as a fraction of the casing base circle diameter.",
+      "siUnit": "-",
+      "sourceReference": "Fabricated sheet-metal casing practice (to be confirmed per material)",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.004
+    },
+    {
+      "id": "CFAN-RULE-019",
+      "key": "casing_wall_thickness_min_m",
+      "description": "Minimum casing wall thickness.",
+      "siUnit": "m",
+      "sourceReference": "Fabricated sheet-metal casing practice (to be confirmed per material)",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.002
+    },
+    {
+      "id": "CFAN-RULE-020",
+      "key": "outlet_velocity_to_tip_speed_ratio",
+      "description": "Discharge velocity as a fraction of the blade tip speed; sizes the outlet opening and the velocity pressure.",
+      "siUnit": "-",
+      "sourceReference": "Typical scroll discharge velocity practice; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.28
+    },
+    {
+      "id": "CFAN-RULE-021",
+      "key": "casing_inlet_to_impeller_inlet_diameter_ratio",
+      "description": "Casing inlet opening diameter as a multiple of the impeller inlet diameter.",
+      "siUnit": "-",
+      "sourceReference": "Typical inlet ring proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.05
+    },
+
+    {
+      "id": "CFAN-FC-001",
+      "key": "forward_curved.design_static_pressure_coefficient",
+      "description": "Design static pressure coefficient psi_s of a forward curved impeller; sizes D2 from the static pressure and speed.",
+      "siUnit": "-",
+      "sourceReference": "Typical forward curved fan performance (high pressure coefficient, low efficiency); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.8
+    },
+    {
+      "id": "CFAN-FC-002",
+      "key": "forward_curved.design_flow_coefficient",
+      "description": "Design outlet flow coefficient phi2 = cr2 / U2; sizes the blade width b2.",
+      "siUnit": "-",
+      "sourceReference": "Typical forward curved fan flow coefficient; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.30
+    },
+    {
+      "id": "CFAN-FC-003",
+      "key": "forward_curved.inlet_to_outlet_diameter_ratio",
+      "description": "Impeller inlet diameter D1 as a fraction of D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical forward curved impeller proportions (large eye, short deep blades); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.85
+    },
+    {
+      "id": "CFAN-FC-004",
+      "key": "forward_curved.blade_inlet_angle_deg",
+      "description": "Blade inlet angle from the circumferential direction.",
+      "siUnit": "deg",
+      "sourceReference": "Typical forward curved blade geometry; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 85.0
+    },
+    {
+      "id": "CFAN-FC-005",
+      "key": "forward_curved.blade_outlet_angle_deg",
+      "description": "Blade outlet angle from the circumferential direction (above 90 for forward curved blades).",
+      "siUnit": "deg",
+      "sourceReference": "Typical forward curved blade geometry (outlet angle 140 to 165 degrees); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 150.0
+    },
+    {
+      "id": "CFAN-FC-006",
+      "key": "forward_curved.blade_count",
+      "description": "Blade count of a forward curved impeller.",
+      "siUnit": "-",
+      "sourceReference": "Typical forward curved impeller practice (24 to 64 blades); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 36
+    },
+    {
+      "id": "CFAN-FC-007",
+      "key": "forward_curved.blade_profile_code",
+      "description": "Blade profile: 0 constant-thickness sheet blade, 1 airfoil blade.",
+      "siUnit": "-",
+      "sourceReference": "Forward curved blades are formed sheet",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0
+    },
+    {
+      "id": "CFAN-FC-008",
+      "key": "forward_curved.blade_thickness_fraction_of_d2",
+      "description": "Blade thickness as a fraction of D2 (the minimum thickness rule applies when larger).",
+      "siUnit": "-",
+      "sourceReference": "Formed sheet blade practice (to be confirmed per material)",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.0015
+    },
+    {
+      "id": "CFAN-FC-009",
+      "key": "forward_curved.blade_inlet_to_outlet_width_ratio",
+      "description": "Blade inlet width b1 as a multiple of the outlet width b2.",
+      "siUnit": "-",
+      "sourceReference": "Typical forward curved impeller proportions (constant width); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.0
+    },
+    {
+      "id": "CFAN-FC-010",
+      "key": "forward_curved.assumed_hydraulic_efficiency",
+      "description": "Hydraulic efficiency used to convert the pressure rise into Euler head.",
+      "siUnit": "-",
+      "sourceReference": "Typical forward curved fan hydraulic efficiency 0.60 to 0.70; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.65
+    },
+    {
+      "id": "CFAN-FC-011",
+      "key": "forward_curved.default_static_efficiency",
+      "description": "Static efficiency assumed for the shaft power estimate when the user does not supply one.",
+      "siUnit": "-",
+      "sourceReference": "Typical forward curved fan static efficiency 0.55 to 0.65; AMCA / manufacturer practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.60
+    },
+    {
+      "id": "CFAN-FC-012",
+      "key": "forward_curved.tip_speed_caution_ms",
+      "description": "Tip speed above which a noise and stress caution is raised.",
+      "siUnit": "m/s",
+      "sourceReference": "Typical forward curved fan practice (light sheet impellers); manufacturer guidance",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 50.0
+    },
+    {
+      "id": "CFAN-FC-013",
+      "key": "forward_curved.tip_speed_critical_ms",
+      "description": "Tip speed above which the design is outside the validated envelope and CAD generation is blocked.",
+      "siUnit": "m/s",
+      "sourceReference": "Validated envelope of this calculator; structural limits of light sheet impellers",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 70.0
+    },
+    {
+      "id": "CFAN-FC-014",
+      "key": "forward_curved.width_to_diameter_ratio_allowed",
+      "description": "Allowed ratio of blade width b2 to D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical forward curved impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.20,
+      "max": 0.70
+    },
+    {
+      "id": "CFAN-FC-015",
+      "key": "forward_curved.blade_outlet_angle_allowed_deg",
+      "description": "Allowed blade outlet angle range.",
+      "siUnit": "deg",
+      "sourceReference": "Typical forward curved blade geometry; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 120.0,
+      "max": 170.0
+    },
+    {
+      "id": "CFAN-FC-016",
+      "key": "forward_curved.blade_count_allowed",
+      "description": "Allowed blade count range.",
+      "siUnit": "-",
+      "sourceReference": "Validated envelope of this calculator",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 24,
+      "max": 64
+    },
+
+    {
+      "id": "CFAN-BC-001",
+      "key": "backward_curved.design_static_pressure_coefficient",
+      "description": "Design static pressure coefficient psi_s of a backward curved or inclined impeller; sizes D2 from the static pressure and speed.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward curved fan performance; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.95
+    },
+    {
+      "id": "CFAN-BC-002",
+      "key": "backward_curved.design_flow_coefficient",
+      "description": "Design outlet flow coefficient phi2 = cr2 / U2; sizes the blade width b2.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward curved fan flow coefficient; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.20
+    },
+    {
+      "id": "CFAN-BC-003",
+      "key": "backward_curved.inlet_to_outlet_diameter_ratio",
+      "description": "Impeller inlet diameter D1 as a fraction of D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward curved impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.70
+    },
+    {
+      "id": "CFAN-BC-004",
+      "key": "backward_curved.blade_inlet_angle_deg",
+      "description": "Blade inlet angle from the circumferential direction.",
+      "siUnit": "deg",
+      "sourceReference": "Typical backward curved blade geometry; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 40.0
+    },
+    {
+      "id": "CFAN-BC-005",
+      "key": "backward_curved.blade_outlet_angle_deg",
+      "description": "Blade outlet angle from the circumferential direction (below 90 for backward blades).",
+      "siUnit": "deg",
+      "sourceReference": "Typical backward curved blade geometry (outlet angle 30 to 55 degrees); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 45.0
+    },
+    {
+      "id": "CFAN-BC-006",
+      "key": "backward_curved.blade_count",
+      "description": "Blade count of a backward curved impeller.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward curved impeller practice (8 to 18 blades); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 12
+    },
+    {
+      "id": "CFAN-BC-007",
+      "key": "backward_curved.blade_profile_code",
+      "description": "Blade profile: 0 constant-thickness sheet blade, 1 airfoil blade.",
+      "siUnit": "-",
+      "sourceReference": "Backward curved and inclined blades are single-thickness sheet",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0
+    },
+    {
+      "id": "CFAN-BC-008",
+      "key": "backward_curved.blade_thickness_fraction_of_d2",
+      "description": "Blade thickness as a fraction of D2 (the minimum thickness rule applies when larger).",
+      "siUnit": "-",
+      "sourceReference": "Formed sheet blade practice (to be confirmed per material)",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.003
+    },
+    {
+      "id": "CFAN-BC-009",
+      "key": "backward_curved.blade_inlet_to_outlet_width_ratio",
+      "description": "Blade inlet width b1 as a multiple of the outlet width b2.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward curved impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.1
+    },
+    {
+      "id": "CFAN-BC-010",
+      "key": "backward_curved.assumed_hydraulic_efficiency",
+      "description": "Hydraulic efficiency used to convert the pressure rise into Euler head.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward curved fan hydraulic efficiency 0.75 to 0.85; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.80
+    },
+    {
+      "id": "CFAN-BC-011",
+      "key": "backward_curved.default_static_efficiency",
+      "description": "Static efficiency assumed for the shaft power estimate when the user does not supply one.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward curved fan static efficiency 0.65 to 0.78; AMCA / manufacturer practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.72
+    },
+    {
+      "id": "CFAN-BC-012",
+      "key": "backward_curved.tip_speed_caution_ms",
+      "description": "Tip speed above which a noise and stress caution is raised.",
+      "siUnit": "m/s",
+      "sourceReference": "Typical industrial backward curved fan practice; manufacturer guidance",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 80.0
+    },
+    {
+      "id": "CFAN-BC-013",
+      "key": "backward_curved.tip_speed_critical_ms",
+      "description": "Tip speed above which the design is outside the validated envelope and CAD generation is blocked.",
+      "siUnit": "m/s",
+      "sourceReference": "Validated envelope of this calculator; structural limits require a specialist design beyond this range",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 110.0
+    },
+    {
+      "id": "CFAN-BC-014",
+      "key": "backward_curved.width_to_diameter_ratio_allowed",
+      "description": "Allowed ratio of blade width b2 to D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward curved impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.10,
+      "max": 0.50
+    },
+    {
+      "id": "CFAN-BC-015",
+      "key": "backward_curved.blade_outlet_angle_allowed_deg",
+      "description": "Allowed blade outlet angle range.",
+      "siUnit": "deg",
+      "sourceReference": "Typical backward curved blade geometry; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 25.0,
+      "max": 65.0
+    },
+    {
+      "id": "CFAN-BC-016",
+      "key": "backward_curved.blade_count_allowed",
+      "description": "Allowed blade count range.",
+      "siUnit": "-",
+      "sourceReference": "Validated envelope of this calculator",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 8,
+      "max": 18
+    },
+
+    {
+      "id": "CFAN-BA-001",
+      "key": "backward_airfoil.design_static_pressure_coefficient",
+      "description": "Design static pressure coefficient psi_s of a backward airfoil impeller; sizes D2 from the static pressure and speed.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward airfoil fan performance; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.98
+    },
+    {
+      "id": "CFAN-BA-002",
+      "key": "backward_airfoil.design_flow_coefficient",
+      "description": "Design outlet flow coefficient phi2 = cr2 / U2; sizes the blade width b2.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward airfoil fan flow coefficient; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.20
+    },
+    {
+      "id": "CFAN-BA-003",
+      "key": "backward_airfoil.inlet_to_outlet_diameter_ratio",
+      "description": "Impeller inlet diameter D1 as a fraction of D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward airfoil impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.68
+    },
+    {
+      "id": "CFAN-BA-004",
+      "key": "backward_airfoil.blade_inlet_angle_deg",
+      "description": "Blade inlet angle from the circumferential direction.",
+      "siUnit": "deg",
+      "sourceReference": "Typical backward airfoil blade geometry; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 40.0
+    },
+    {
+      "id": "CFAN-BA-005",
+      "key": "backward_airfoil.blade_outlet_angle_deg",
+      "description": "Blade outlet angle from the circumferential direction (below 90 for backward blades).",
+      "siUnit": "deg",
+      "sourceReference": "Typical backward airfoil blade geometry (outlet angle 30 to 50 degrees); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 40.0
+    },
+    {
+      "id": "CFAN-BA-006",
+      "key": "backward_airfoil.blade_count",
+      "description": "Blade count of a backward airfoil impeller.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward airfoil impeller practice (8 to 16 blades); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 10
+    },
+    {
+      "id": "CFAN-BA-007",
+      "key": "backward_airfoil.blade_profile_code",
+      "description": "Blade profile: 0 constant-thickness sheet blade, 1 airfoil blade.",
+      "siUnit": "-",
+      "sourceReference": "Backward airfoil blades are hollow airfoil sections",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1
+    },
+    {
+      "id": "CFAN-BA-008",
+      "key": "backward_airfoil.blade_thickness_fraction_of_d2",
+      "description": "Maximum airfoil blade thickness as a fraction of D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical airfoil blade thickness (about 10 to 15 percent of chord); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.015
+    },
+    {
+      "id": "CFAN-BA-009",
+      "key": "backward_airfoil.blade_inlet_to_outlet_width_ratio",
+      "description": "Blade inlet width b1 as a multiple of the outlet width b2.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward airfoil impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.15
+    },
+    {
+      "id": "CFAN-BA-010",
+      "key": "backward_airfoil.assumed_hydraulic_efficiency",
+      "description": "Hydraulic efficiency used to convert the pressure rise into Euler head.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward airfoil fan hydraulic efficiency 0.85 to 0.92; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.88
+    },
+    {
+      "id": "CFAN-BA-011",
+      "key": "backward_airfoil.default_static_efficiency",
+      "description": "Static efficiency assumed for the shaft power estimate when the user does not supply one.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward airfoil fan static efficiency 0.75 to 0.86; AMCA / manufacturer practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.82
+    },
+    {
+      "id": "CFAN-BA-012",
+      "key": "backward_airfoil.tip_speed_caution_ms",
+      "description": "Tip speed above which a noise and stress caution is raised.",
+      "siUnit": "m/s",
+      "sourceReference": "Typical industrial backward airfoil fan practice; manufacturer guidance",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 90.0
+    },
+    {
+      "id": "CFAN-BA-013",
+      "key": "backward_airfoil.tip_speed_critical_ms",
+      "description": "Tip speed above which the design is outside the validated envelope and CAD generation is blocked.",
+      "siUnit": "m/s",
+      "sourceReference": "Validated envelope of this calculator; structural limits require a specialist design beyond this range",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 120.0
+    },
+    {
+      "id": "CFAN-BA-014",
+      "key": "backward_airfoil.width_to_diameter_ratio_allowed",
+      "description": "Allowed ratio of blade width b2 to D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical backward airfoil impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.10,
+      "max": 0.50
+    },
+    {
+      "id": "CFAN-BA-015",
+      "key": "backward_airfoil.blade_outlet_angle_allowed_deg",
+      "description": "Allowed blade outlet angle range.",
+      "siUnit": "deg",
+      "sourceReference": "Typical backward airfoil blade geometry; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 25.0,
+      "max": 60.0
+    },
+    {
+      "id": "CFAN-BA-016",
+      "key": "backward_airfoil.blade_count_allowed",
+      "description": "Allowed blade count range.",
+      "siUnit": "-",
+      "sourceReference": "Validated envelope of this calculator",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 8,
+      "max": 16
+    },
+
+    {
+      "id": "CFAN-RAD-001",
+      "key": "radial.design_static_pressure_coefficient",
+      "description": "Design static pressure coefficient psi_s of a radial (paddle) impeller; sizes D2 from the static pressure and speed.",
+      "siUnit": "-",
+      "sourceReference": "Typical radial blade fan performance; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.0
+    },
+    {
+      "id": "CFAN-RAD-002",
+      "key": "radial.design_flow_coefficient",
+      "description": "Design outlet flow coefficient phi2 = cr2 / U2; sizes the blade width b2.",
+      "siUnit": "-",
+      "sourceReference": "Typical radial blade fan flow coefficient; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.15
+    },
+    {
+      "id": "CFAN-RAD-003",
+      "key": "radial.inlet_to_outlet_diameter_ratio",
+      "description": "Impeller inlet diameter D1 as a fraction of D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical radial impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.65
+    },
+    {
+      "id": "CFAN-RAD-004",
+      "key": "radial.blade_inlet_angle_deg",
+      "description": "Blade inlet angle from the circumferential direction.",
+      "siUnit": "deg",
+      "sourceReference": "Radial blades enter the flow at 90 degrees; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 90.0
+    },
+    {
+      "id": "CFAN-RAD-005",
+      "key": "radial.blade_outlet_angle_deg",
+      "description": "Blade outlet angle from the circumferential direction (90 for radial blades).",
+      "siUnit": "deg",
+      "sourceReference": "Radial blade geometry; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 90.0
+    },
+    {
+      "id": "CFAN-RAD-006",
+      "key": "radial.blade_count",
+      "description": "Blade count of a radial impeller.",
+      "siUnit": "-",
+      "sourceReference": "Typical radial / paddle impeller practice (4 to 16 blades); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 8
+    },
+    {
+      "id": "CFAN-RAD-007",
+      "key": "radial.blade_profile_code",
+      "description": "Blade profile: 0 constant-thickness sheet blade, 1 airfoil blade.",
+      "siUnit": "-",
+      "sourceReference": "Radial blades are flat plate",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0
+    },
+    {
+      "id": "CFAN-RAD-008",
+      "key": "radial.blade_thickness_fraction_of_d2",
+      "description": "Blade thickness as a fraction of D2 (the minimum thickness rule applies when larger).",
+      "siUnit": "-",
+      "sourceReference": "Heavy plate blade practice for dust-laden service (to be confirmed per material)",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.006
+    },
+    {
+      "id": "CFAN-RAD-009",
+      "key": "radial.blade_inlet_to_outlet_width_ratio",
+      "description": "Blade inlet width b1 as a multiple of the outlet width b2.",
+      "siUnit": "-",
+      "sourceReference": "Typical radial impeller proportions (constant width); Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.0
+    },
+    {
+      "id": "CFAN-RAD-010",
+      "key": "radial.assumed_hydraulic_efficiency",
+      "description": "Hydraulic efficiency used to convert the pressure rise into Euler head.",
+      "siUnit": "-",
+      "sourceReference": "Typical radial blade fan hydraulic efficiency 0.65 to 0.75; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.70
+    },
+    {
+      "id": "CFAN-RAD-011",
+      "key": "radial.default_static_efficiency",
+      "description": "Static efficiency assumed for the shaft power estimate when the user does not supply one.",
+      "siUnit": "-",
+      "sourceReference": "Typical radial blade fan static efficiency 0.55 to 0.70; AMCA / manufacturer practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.62
+    },
+    {
+      "id": "CFAN-RAD-012",
+      "key": "radial.tip_speed_caution_ms",
+      "description": "Tip speed above which a noise and stress caution is raised.",
+      "siUnit": "m/s",
+      "sourceReference": "Typical industrial radial blade fan practice; manufacturer guidance",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 100.0
+    },
+    {
+      "id": "CFAN-RAD-013",
+      "key": "radial.tip_speed_critical_ms",
+      "description": "Tip speed above which the design is outside the validated envelope and CAD generation is blocked.",
+      "siUnit": "m/s",
+      "sourceReference": "Validated envelope of this calculator; structural limits require a specialist design beyond this range",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 130.0
+    },
+    {
+      "id": "CFAN-RAD-014",
+      "key": "radial.width_to_diameter_ratio_allowed",
+      "description": "Allowed ratio of blade width b2 to D2.",
+      "siUnit": "-",
+      "sourceReference": "Typical radial impeller proportions; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.05,
+      "max": 0.40
+    },
+    {
+      "id": "CFAN-RAD-015",
+      "key": "radial.blade_outlet_angle_allowed_deg",
+      "description": "Allowed blade outlet angle range.",
+      "siUnit": "deg",
+      "sourceReference": "Radial blade geometry; Eck, Fans",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 80.0,
+      "max": 100.0
+    },
+    {
+      "id": "CFAN-RAD-016",
+      "key": "radial.blade_count_allowed",
+      "description": "Allowed blade count range.",
+      "siUnit": "-",
+      "sourceReference": "Validated envelope of this calculator",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 4,
+      "max": 16
+    }
+  ]
+}

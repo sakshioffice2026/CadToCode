@@ -1,0 +1,381 @@
+﻿{
+  // CadToCode.Core/EngineeringKnowledge/centrifugal-fans/equipment-manifest.json
+  "id": "centrifugal-fan",
+  "domain": "air-moving",
+  "displayName": "Centrifugal fan",
+  "description": "Single-inlet centrifugal fan with scroll casing, sized from airflow, static pressure, rotational speed and blade type (1 forward curved, 2 backward curved, 3 backward airfoil, 4 radial) using dimensional analysis and the Euler turbomachinery equation with a slip factor. Outputs are SI values.",
+  "version": "1.0.0",
+  "maxTier": "Engineered",
+  "aliases": [
+    "centrifugal fan",
+    "centrifugal blower",
+    "radial fan",
+    "radial blower",
+    "backward curved fan",
+    "backward inclined fan",
+    "backward airfoil fan",
+    "forward curved fan",
+    "airfoil fan",
+    "plug fan",
+    "squirrel cage fan",
+    "squirrel cage blower",
+    "paddle wheel fan",
+    "scroll fan",
+    "sirocco fan",
+    "centrifugal"
+  ],
+  "calculatorId": "CentrifugalFan",
+  "rulePackIds": [
+    "centrifugal-fans-design-rules"
+  ],
+  // The fan script is composed directly from SI values (CentrifugalFanScriptComposer), not from a catalog template,
+  // so no templateKeys are declared. "centrifugal-fan-script-mapper" renames calculator outputs to composer keys
+  // and supplies the values the calculator does not produce (for example blade_thickness_m when the user overrides it).
+  "mapperId": "centrifugal-fan-script-mapper",
+  "forbiddenSubstitutions": [
+    "builtin-straight-pipe",
+    "builtin-pipe-elbow",
+    "builtin-pipe-tee",
+    "builtin-flange-plate",
+    "builtin-cyclone-separator",
+    "builtin-wet-scrubber",
+    "builtin-wet-scrubber-tank-pump",
+    "axial-fan"
+  ],
+  "references": [
+    "Eck, B., Fans: Design and Operation of Centrifugal, Axial-Flow and Cross-Flow Fans (impeller proportions, blade types and scroll design)",
+    "Wright, T., Fluid Machinery: Performance, Analysis, and Design (Euler turbomachinery equation, velocity triangles, slip)",
+    "Wiesner, F. J., A Review of Slip Factors for Centrifugal Impellers, Journal of Engineering for Power, 1967 (slip factor)",
+    "AMCA 210 / ISO 5801, Industrial fans: performance testing using standardized airways (air power and static efficiency)",
+    "AMCA 99 / ISO 13351, Fans: dimensions and blade type terminology"
+  ],
+  "inputs": [
+    {
+      "key": "airflow_m3s",
+      "displayName": "Airflow",
+      "unit": "m3/s",
+      "min": 0.05,
+      "max": 100,
+      "isRequired": true,
+      "description": "Required volumetric flow rate.",
+      "clarifyingQuestion": "What airflow must the fan deliver (m3/s)? If you have m3/h or CFM, give that and I will convert it.",
+      "aliases": [ "airflow", "air flow", "flow rate", "flow", "capacity", "volume flow" ]
+    },
+    {
+      "key": "static_pressure_pa",
+      "displayName": "Static pressure",
+      "unit": "Pa",
+      "min": 50,
+      "max": 15000,
+      "isRequired": true,
+      "description": "Required fan static pressure.",
+      "clarifyingQuestion": "What static pressure must the fan develop (Pa)? This is the system resistance it works against.",
+      "aliases": [ "static pressure", "pressure", "system resistance", "static head" ]
+    },
+    {
+      "key": "speed_rad_s",
+      "displayName": "Rotational speed",
+      "unit": "rad/s",
+      "min": 0.001,
+      "isRequired": true,
+      "description": "Shaft angular speed. Derived from RPM: rad/s = RPM x 2 x pi / 60.",
+      "clarifyingQuestion": "What is the fan shaft speed (RPM)? I will convert it to rad/s.",
+      "aliases": [ "speed", "rpm", "rotational speed", "shaft speed", "angular speed" ]
+    },
+    {
+      "key": "blade_type",
+      "displayName": "Blade type",
+      "unit": "-",
+      "min": 1,
+      "max": 4,
+      "isRequired": true,
+      "description": "Blade design code: 1 forward curved, 2 backward curved / inclined, 3 backward airfoil, 4 radial / paddle.",
+      "clarifyingQuestion": "Which blade type should the impeller use: forward curved, backward curved, backward airfoil or radial?",
+      "aliases": [ "blade type", "blade", "impeller type", "wheel type", "blade design" ]
+    },
+    {
+      "key": "air_density_kgm3",
+      "displayName": "Air density",
+      "unit": "kg/m3",
+      "min": 0.001,
+      "description": "Air density at operating conditions. When omitted the rulepack standard air density is used.",
+      "aliases": [ "air density", "gas density", "density" ]
+    },
+    {
+      "key": "static_efficiency",
+      "displayName": "Static efficiency",
+      "unit": "-",
+      "min": 0.3,
+      "max": 0.9,
+      "description": "Target static efficiency as a fraction (0 to 1). When omitted the rulepack default for the blade type is used.",
+      "aliases": [ "static efficiency", "efficiency", "fan efficiency" ]
+    }
+  ],
+  "outputs": [
+    {
+      "key": "impeller_outer_diameter_m",
+      "displayName": "Impeller outer diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Impeller diameter at the blade outlet (D2)."
+    },
+    {
+      "key": "impeller_inlet_diameter_m",
+      "displayName": "Impeller inlet diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Impeller eye and blade inlet diameter (D1)."
+    },
+    {
+      "key": "impeller_width_m",
+      "displayName": "Impeller blade width",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Axial blade width at the outlet (b2)."
+    },
+    {
+      "key": "hub_diameter_m",
+      "displayName": "Hub diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Hub or shaft boss diameter."
+    },
+    {
+      "key": "blade_count",
+      "displayName": "Blade count",
+      "unit": "-",
+      "isRequired": true,
+      "isInteger": true,
+      "description": "Number of blades."
+    },
+    {
+      "key": "blade_inlet_angle_deg",
+      "displayName": "Blade inlet angle",
+      "unit": "deg",
+      "isRequired": true,
+      "description": "Blade angle at the inlet, measured from the circumferential direction."
+    },
+    {
+      "key": "blade_outlet_angle_deg",
+      "displayName": "Blade outlet angle",
+      "unit": "deg",
+      "isRequired": true,
+      "description": "Blade angle at the outlet, measured from the circumferential direction."
+    },
+    {
+      "key": "blade_thickness_m",
+      "displayName": "Blade thickness",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Blade thickness (maximum thickness for airfoil blades)."
+    },
+    {
+      "key": "blade_profile_code",
+      "displayName": "Blade profile",
+      "unit": "-",
+      "isRequired": true,
+      "isInteger": true,
+      "description": "0 constant-thickness sheet blade, 1 airfoil blade."
+    },
+    {
+      "key": "plate_thickness_m",
+      "displayName": "Impeller plate thickness",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Thickness of the impeller back plate and shroud."
+    },
+    {
+      "key": "tip_speed_ms",
+      "displayName": "Tip speed",
+      "unit": "m/s",
+      "isRequired": true,
+      "description": "Blade outlet peripheral speed."
+    },
+    {
+      "key": "casing_base_diameter_m",
+      "displayName": "Casing base circle diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Scroll diameter at the cutoff (D3)."
+    },
+    {
+      "key": "casing_width_m",
+      "displayName": "Casing inner width",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Internal axial width of the scroll."
+    },
+    {
+      "key": "casing_wall_thickness_m",
+      "displayName": "Casing wall thickness",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Casing wall and side plate thickness."
+    },
+    {
+      "key": "outlet_height_m",
+      "displayName": "Outlet height",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Radial height of the discharge opening."
+    },
+    {
+      "key": "inlet_eye_diameter_m",
+      "displayName": "Casing inlet diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Inlet opening diameter in the casing side plate."
+    },
+    {
+      "key": "shaft_power_w",
+      "displayName": "Shaft power",
+      "unit": "W",
+      "isRequired": true,
+      "description": "Estimated shaft power at the given static efficiency."
+    },
+    {
+      "key": "air_density_used_kgm3",
+      "displayName": "Air density used",
+      "unit": "kg/m3",
+      "description": "Air density applied in the design."
+    },
+    {
+      "key": "flow_coefficient",
+      "displayName": "Flow coefficient",
+      "unit": "-",
+      "description": "Dimensionless flow coefficient of the sized design."
+    },
+    {
+      "key": "static_pressure_coefficient",
+      "displayName": "Static pressure coefficient",
+      "unit": "-",
+      "description": "Dimensionless static pressure coefficient of the sized design."
+    },
+    {
+      "key": "specific_speed",
+      "displayName": "Specific speed",
+      "unit": "-",
+      "description": "Dimensionless specific speed of the sized design."
+    },
+    {
+      "key": "total_pressure_pa",
+      "displayName": "Total pressure",
+      "unit": "Pa",
+      "description": "Static pressure plus outlet velocity pressure."
+    },
+    {
+      "key": "slip_factor",
+      "displayName": "Slip factor",
+      "unit": "-",
+      "description": "Wiesner slip factor applied in the Euler head."
+    },
+    {
+      "key": "euler_head_pa",
+      "displayName": "Euler pressure rise",
+      "unit": "Pa",
+      "description": "Ideal pressure rise from the Euler equation with slip."
+    },
+    {
+      "key": "blade_inlet_width_m",
+      "displayName": "Blade inlet width",
+      "unit": "m",
+      "description": "Axial blade width at the inlet (b1)."
+    },
+    {
+      "key": "casing_cutoff_clearance_m",
+      "displayName": "Cutoff clearance",
+      "unit": "m",
+      "description": "Radial gap between the impeller and the scroll cutoff."
+    }
+  ],
+  "components": [
+    {
+      "key": "casing",
+      "title": "Scroll casing",
+      "aliases": [ "casing", "housing", "scroll", "volute", "spiral casing" ],
+      "parameterKeys": [ "airflow_m3s", "static_pressure_pa", "speed_rad_s", "blade_type" ]
+    },
+    {
+      "key": "inlet",
+      "title": "Inlet plate",
+      "aliases": [ "inlet", "inlet plate", "inlet cone", "side plate", "inlet ring" ],
+      "parameterKeys": [ "airflow_m3s", "static_pressure_pa", "speed_rad_s", "blade_type" ]
+    },
+    {
+      "key": "backplate",
+      "title": "Back plate",
+      "aliases": [ "back plate", "backplate", "rear plate", "motor plate" ],
+      "parameterKeys": [ "airflow_m3s", "static_pressure_pa", "speed_rad_s", "blade_type" ]
+    },
+    {
+      "key": "hub",
+      "title": "Hub",
+      "aliases": [ "hub", "shaft boss", "boss" ],
+      "parameterKeys": [ "airflow_m3s", "static_pressure_pa", "speed_rad_s", "blade_type" ]
+    },
+    {
+      "key": "impeller-plates",
+      "title": "Impeller plates",
+      "aliases": [ "impeller plate", "wheel plate", "impeller back plate", "shroud", "cover plate", "wheel cone" ],
+      "parameterKeys": [ "airflow_m3s", "static_pressure_pa", "speed_rad_s", "blade_type" ]
+    },
+    {
+      "key": "blades",
+      "title": "Blades",
+      "aliases": [ "blades", "blade", "impeller", "wheel", "vane", "vanes" ],
+      "parameterKeys": [ "airflow_m3s", "static_pressure_pa", "speed_rad_s", "blade_type", "air_density_kgm3", "static_efficiency" ]
+    }
+  ],
+  // Part keys match the body names the script composer emits so each part exports as its own solid.
+  "parts": [
+    {
+      "key": "ScrollCasing",
+      "title": "Scroll casing",
+      "componentKeys": [ "casing" ],
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "InletPlate",
+      "title": "Inlet plate",
+      "componentKeys": [ "inlet" ],
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "BackPlate",
+      "title": "Back plate",
+      "componentKeys": [ "backplate" ],
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "Hub",
+      "title": "Hub",
+      "componentKeys": [ "hub" ],
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "ImpellerBackPlate",
+      "title": "Impeller back plate",
+      "componentKeys": [ "impeller-plates" ],
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "Shroud",
+      "title": "Shroud",
+      "componentKeys": [ "impeller-plates" ],
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "Blades",
+      "title": "Blades",
+      "componentKeys": [ "blades" ],
+      "quantity": 1,
+      "isRequired": true
+    }
+  ]
+}
