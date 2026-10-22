@@ -112,6 +112,7 @@ public class CadAssistController : Controller
     private readonly ICadAssistConversationService _conversation;
     private readonly ICadAssistSessionStore _sessionStore;
     private readonly IDesignWorkflowEngine _workflow;
+    private readonly IEquipmentDesignDispatcher _designDispatcher;
     private readonly IDesignSessionStore _designStore;
     private readonly IEngineeringKnowledgeService _knowledge;
     private readonly IWebSearchService _webSearch;
@@ -128,6 +129,7 @@ public class CadAssistController : Controller
         ICadAssistConversationService conversation,
         ICadAssistSessionStore sessionStore,
         IDesignWorkflowEngine workflow,
+        IEquipmentDesignDispatcher designDispatcher,
         IDesignSessionStore designStore,
         IEngineeringKnowledgeService knowledge,
         IWebSearchService webSearch,
@@ -135,6 +137,7 @@ public class CadAssistController : Controller
         ILogger<CadAssistController> logger)
     {
         _workflow = workflow;
+        _designDispatcher = designDispatcher;
         _designStore = designStore;
         _knowledge = knowledge;
         _webSearch = webSearch;
@@ -1411,10 +1414,12 @@ public class CadAssistController : Controller
         }
 
         var state = _sessionStore.Get(projectId, sessionId);
+        var designActive = _designDispatcher.IsActive(projectId, sessionId);
 
-        if (!state.HasTemplate && state.Stage != CadAssistStage.Uploaded)
+        if (!state.HasTemplate && state.Stage != CadAssistStage.Uploaded && !designActive)
         {
-            return false;
+            return !CadAssistPromptTemplates.IsQuestionOnly(prompt)
+                   && EquipmentRegistry.Resolve(prompt) == EquipmentType.CentrifugalFan;
         }
 
         if (CadAssistIntentParser.Parse(prompt, null).ShowParameters)

@@ -37,6 +37,8 @@ public static class CadAssistPromptTemplates
         + "Give only well-established typical ranges and label them typical, never exact. If you are not sure of a value, say so and tell the developer to confirm it with the customer datasheet or the applicable standard instead of guessing. "
         + "When drawing data is given below, its measurements are computed by code, are final and are in millimeters, so use them exactly; when it is not relevant, use general engineering knowledge. "
         + "Never invent a dimension or a part for a specific drawing. "
+        + "For a centrifugal fan, do not list generic template parameters such as HubDiameter or CasingDiameter. Explain that it is sized from airflow (m3/s), static pressure (Pa), rotational speed (rpm) and blade type, where 1 is forward curved, 2 is backward curved or inclined, 3 is backward airfoil and 4 is radial or paddle blade. "
+        + "Say that the design calculation then gives the impeller outer and inlet diameter, impeller width, blade count, blade inlet and outlet angles, blade thickness and the scroll casing. The blade type must come from the user and is never defaulted. "
         + "Do not write any code. End with one short question that moves the design forward, such as which parameters to fix or whether to accept the defaults.";
 
     public const string DefaultSystemPrompt =

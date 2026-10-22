@@ -49,6 +49,11 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
         var corpus = BuildCorpus(project, tree, prompt, drawingType, attachments);
         var requested = EquipmentRegistry.Resolve(corpus);
 
+        if (requested == EquipmentType.Unknown && MentionsCentrifugalFan(prompt + " " + drawingType))
+        {
+            requested = EquipmentType.CentrifugalFan;
+        }
+
         if (_manifests is not null)
         {
             var resolution = _manifests.ResolveDetailed(corpus);
@@ -394,6 +399,42 @@ public sealed class CadTemplateMatcher : ICadTemplateMatcher
         {
             sb.Append(value.Trim()).Append(' ');
         }
+    }
+
+    private static readonly string[] CentrifugalTerms =
+    {
+        "centrifugal",
+        "blower",
+        "scroll casing",
+        "squirrel cage",
+        "sirocco",
+        "paddle blade",
+        "paddle wheel",
+        "forward curved",
+        "backward curved",
+        "backward inclined",
+        "backward airfoil",
+        "radial blade"
+    };
+
+    private static bool MentionsCentrifugalFan(string? text)
+    {
+        var normalized = Normalize(text);
+
+        if (normalized.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var term in CentrifugalTerms)
+        {
+            if (normalized.Contains(term, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static string Normalize(string? value)

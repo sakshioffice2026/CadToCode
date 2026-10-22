@@ -320,7 +320,7 @@
       "parameterKeys": [ "airflow_m3s", "static_pressure_pa", "speed_rad_s", "blade_type" ]
     },
     {
-      "key": "impeller-plates",
+      "key": "impeller_plates",
       "title": "Impeller plates",
       "aliases": [ "impeller plate", "wheel plate", "impeller back plate", "shroud", "cover plate", "wheel cone" ],
       "parameterKeys": [ "airflow_m3s", "static_pressure_pa", "speed_rad_s", "blade_type" ]
@@ -365,14 +365,14 @@
     {
       "key": "ImpellerBackPlate",
       "title": "Impeller back plate",
-      "componentKeys": [ "impeller-plates" ],
+      "componentKeys": [ "impeller_plates" ],
       "quantity": 1,
       "isRequired": true
     },
     {
       "key": "Shroud",
       "title": "Shroud",
-      "componentKeys": [ "impeller-plates" ],
+      "componentKeys": [ "impeller_plates" ],
       "quantity": 1,
       "isRequired": true
     },

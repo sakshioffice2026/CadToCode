@@ -53,6 +53,7 @@ builder.Services.AddSingleton<IEquipmentCalculatorRegistry>(sp => sp.GetRequired
 builder.Services.AddSingleton<IPartScriptBuilder, CentrifugalFanPartScriptBuilder>();
 builder.Services.AddSingleton<IPartScriptBuilderRegistry, PartScriptBuilderRegistry>();
 builder.Services.AddScoped<IEquipmentDesignFlow, CentrifugalFanDesignFlow>();
+builder.Services.AddScoped<IEquipmentDesignDispatcher, EquipmentDesignDispatcher>();
 
 // Web search is advisory only. Tavily is used when configured, otherwise DuckDuckGo.
 builder.Services.AddHttpClient<TavilyWebSearchService>();
@@ -103,6 +104,26 @@ builder.Services.AddSingleton<IBlueprintOcrService, BlueprintOcrService>();
 builder.Services.AddScoped<IDrawingProcessingService, DrawingProcessingService>();
 builder.Services.AddScoped<ICadLibraryService, CadLibraryService>();
 var app = builder.Build();
+
+{
+    var manifestRegistry = app.Services.GetService<CadToCode.Core.Manifests.IEquipmentManifestRegistry>();
+
+    if (manifestRegistry is not null)
+    {
+        app.Logger.LogInformation(
+            "Equipment manifests loaded: {Ids}",
+            string.Join(", ", manifestRegistry.All.Select(m => m.Id)));
+
+        foreach (var issue in manifestRegistry.LoadIssues)
+        {
+            app.Logger.LogWarning(
+                "Manifest issue {Code} at {Path}: {Message}",
+                issue.Code,
+                issue.Path,
+                issue.Message);
+        }
+    }
+}
 
 if (!app.Environment.IsDevelopment())
 {
