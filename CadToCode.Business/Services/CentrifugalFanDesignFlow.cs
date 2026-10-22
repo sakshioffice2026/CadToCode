@@ -260,7 +260,7 @@ public sealed class CentrifugalFanDesignFlow : IEquipmentDesignFlow
         if (!request.GenerateRequested)
         {
             text.AppendLine();
-            text.Append("Everything needed is set. Say `generate` and I will build one script per part (scroll casing, inlet plate, back plate, hub, impeller back plate, shroud and blades).");
+            text.Append("Everything needed is set. Say `generate` and I will build one script per part (scroll casing, inlet plate, back plate, hub, impeller back plate, shroud and blades), or say `generate assembly` for one combined STEP file.");
 
             return Turn(values, text, EquipmentDesignTurn.StatusCalculated, warnings: warnings);
         }
@@ -317,14 +317,27 @@ public sealed class CentrifugalFanDesignFlow : IEquipmentDesignFlow
                 .ToList()
         };
 
-        text.AppendLine();
-        text.AppendLine("Built " + parts.Parts.Count.ToString(CultureInfo.InvariantCulture) + " part script(s), one body each:");
+        var isAssembly = parts.Parts.Count == 1
+                         && string.Equals(parts.Parts[0].PartKey, CentrifugalFanPartScriptBuilder.AssemblyKey, StringComparison.OrdinalIgnoreCase);
+
         text.AppendLine();
 
-        foreach (var part in parts.Parts)
+        if (isAssembly)
         {
-            text.AppendLine("- " + part.Title + " x" + part.Quantity.ToString(CultureInfo.InvariantCulture)
-                            + " (" + part.FileBaseName + ".step)");
+            text.AppendLine("Built the full centrifugal fan as one assembly STEP file (" + parts.Parts[0].FileBaseName
+                            + ".step) holding every part as its own solid: scroll casing, inlet plate, back plate, hub, "
+                            + "impeller back plate, shroud and blades.");
+        }
+        else
+        {
+            text.AppendLine("Built " + parts.Parts.Count.ToString(CultureInfo.InvariantCulture) + " part script(s), one body each:");
+            text.AppendLine();
+
+            foreach (var part in parts.Parts)
+            {
+                text.AppendLine("- " + part.Title + " x" + part.Quantity.ToString(CultureInfo.InvariantCulture)
+                                + " (" + part.FileBaseName + ".step)");
+            }
         }
 
         if (parts.MissingRequiredPartKeys.Count > 0)

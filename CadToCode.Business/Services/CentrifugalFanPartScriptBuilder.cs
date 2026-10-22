@@ -28,6 +28,9 @@ public sealed class CentrifugalFanPartScriptBuilder : IPartScriptBuilder
     private const string BladesKey = "Blades";
     private const string BladeBodyName = "Blade";
 
+    /// <summary>Part key that requests one STEP script holding every part of the fan as separate solids.</summary>
+    public const string AssemblyKey = "Assembly";
+
     public string BuilderId => Id;
 
     public bool CanBuild(EquipmentManifest manifest)
@@ -79,6 +82,37 @@ public sealed class CentrifugalFanPartScriptBuilder : IPartScriptBuilder
         if (!assembly.Success)
         {
             return PartScriptResult.Fail(assembly.Errors.ToArray());
+        }
+
+        if (request.PartKeys.Any(IsAssemblyKey))
+        {
+            var assemblySafetyError = TemplateScriptComposer.CheckSafety(assembly.Script);
+
+            if (assemblySafetyError is not null)
+            {
+                return PartScriptResult.Fail("Assembly: " + assemblySafetyError);
+            }
+
+            return new PartScriptResult
+            {
+                Success = true,
+                ManifestId = manifest.Id,
+                Parts = new[]
+                {
+                    new PartScript
+                    {
+                        PartKey = AssemblyKey,
+                        Title = "Full assembly",
+                        BodyName = AssemblyKey,
+                        Quantity = 1,
+                        IsRequired = true,
+                        Script = assembly.Script,
+                        FileBaseName = assembly.FileBaseName,
+                        AppliedValues = assembly.AppliedValues
+                    }
+                },
+                MissingRequiredPartKeys = Array.Empty<string>()
+            };
         }
 
         var errors = new List<string>();
@@ -259,6 +293,19 @@ public sealed class CentrifugalFanPartScriptBuilder : IPartScriptBuilder
         }
 
         return null;
+    }
+
+    private static bool IsAssemblyKey(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return false;
+        }
+
+        var compact = key.Replace(" ", string.Empty).Replace("-", string.Empty).Replace("_", string.Empty);
+
+        return string.Equals(compact, AssemblyKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(compact, "FullAssembly", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool Is(ManifestPart part, string key)

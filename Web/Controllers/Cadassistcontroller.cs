@@ -112,7 +112,6 @@ public class CadAssistController : Controller
     private readonly ICadAssistConversationService _conversation;
     private readonly ICadAssistSessionStore _sessionStore;
     private readonly IDesignWorkflowEngine _workflow;
-    private readonly IEquipmentDesignDispatcher _designDispatcher;
     private readonly IDesignSessionStore _designStore;
     private readonly IEngineeringKnowledgeService _knowledge;
     private readonly IWebSearchService _webSearch;
@@ -129,7 +128,6 @@ public class CadAssistController : Controller
         ICadAssistConversationService conversation,
         ICadAssistSessionStore sessionStore,
         IDesignWorkflowEngine workflow,
-        IEquipmentDesignDispatcher designDispatcher,
         IDesignSessionStore designStore,
         IEngineeringKnowledgeService knowledge,
         IWebSearchService webSearch,
@@ -137,7 +135,6 @@ public class CadAssistController : Controller
         ILogger<CadAssistController> logger)
     {
         _workflow = workflow;
-        _designDispatcher = designDispatcher;
         _designStore = designStore;
         _knowledge = knowledge;
         _webSearch = webSearch;
@@ -215,6 +212,8 @@ public class CadAssistController : Controller
                 request.Prompt,
                 cancellationToken);
 
+            var equipmentReply = IsEquipmentDesignReply(reply.Status);
+
             reply.Status = null;
             reply.Model = "template";
 
@@ -224,7 +223,15 @@ public class CadAssistController : Controller
             }
 
             reply.ElapsedMs = started.ElapsedMilliseconds;
-            Decorate(reply, request.ProjectId, sessionId);
+
+            if (equipmentReply)
+            {
+                reply.Stage = _sessionStore.Get(request.ProjectId, sessionId).Stage.ToString();
+            }
+            else
+            {
+                Decorate(reply, request.ProjectId, sessionId);
+            }
 
             return Json(new CadAssistChatResponse
             {
@@ -1414,12 +1421,12 @@ public class CadAssistController : Controller
         }
 
         var state = _sessionStore.Get(projectId, sessionId);
-        var designActive = _designDispatcher.IsActive(projectId, sessionId);
+        var designActive = _conversation.IsDesignActive(projectId, sessionId);
 
         if (!state.HasTemplate && state.Stage != CadAssistStage.Uploaded && !designActive)
         {
             return !CadAssistPromptTemplates.IsQuestionOnly(prompt)
-                   && EquipmentRegistry.Resolve(prompt) == EquipmentType.CentrifugalFan;
+                   && _conversation.CanRouteToDesign(projectId, sessionId, prompt);
         }
 
         if (CadAssistIntentParser.Parse(prompt, null).ShowParameters)
@@ -1428,6 +1435,19 @@ public class CadAssistController : Controller
         }
 
         return !CadAssistPromptTemplates.IsQuestionOnly(prompt);
+    }
+
+    private static bool IsEquipmentDesignReply(string? status)
+    {
+        if (string.IsNullOrWhiteSpace(status))
+        {
+            return false;
+        }
+
+        return status.StartsWith("design-", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(status, "equipment-parts", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(status, "equipment-identified", StringComparison.OrdinalIgnoreCase)
+               || string.Equals(status, "equipment-ambiguous", StringComparison.OrdinalIgnoreCase);
     }
 
     private void Decorate(CadAssistMessageDto message, int projectId, string sessionId)
@@ -1503,30 +1523,77 @@ public class CadAssistController : Controller
 
     private async Task<string?> VerifyAsync(CadAssistMessageDto message, CancellationToken cancellationToken)
     {
-        var block = message.CodeBlocks.FirstOrDefault(b => b.Language == "csharp");
+        var blocks = message.CodeBlocks.Where(b => b.Language == "csharp").ToList();
 
-        if (block is null)
+        if (blocks.Count == 0)
         {
             return null;
         }
 
+        if (blocks.Count == 1)
+        {
+            return (await VerifyBlockAsync(blocks[0], cancellationToken)).Text;
+        }
+
+        var failures = new List<string>();
+        var passed = 0;
+        long solids = 0;
+        long faces = 0;
+        long elapsed = 0;
+
+        foreach (var block in blocks)
+        {
+            var result = await VerifyBlockAsync(block, cancellationToken);
+
+            if (result.Verified)
+            {
+                passed++;
+                solids += result.Solids;
+                faces += result.Faces;
+                elapsed += result.ElapsedMs;
+            }
+            else
+            {
+                failures.Add(block.Title + ": " + result.Text.Replace("Needs review: ", string.Empty));
+            }
+        }
+
+        if (failures.Count == 0)
+        {
+            return "Verified in sandbox: " + passed + " of " + blocks.Count + " scripts, "
+                   + solids + " solids, " + faces + " faces, " + elapsed + " ms";
+        }
+
+        return "Needs review: " + passed + " of " + blocks.Count + " scripts verified. "
+               + string.Join(" | ", failures);
+    }
+
+    private readonly record struct BlockVerification(bool Verified, string Text, long Solids, long Faces, long ElapsedMs);
+
+    private async Task<BlockVerification> VerifyBlockAsync(CadAssistCodeBlockDto block, CancellationToken cancellationToken)
+    {
         try
         {
             var run = await _stepScriptRunner.RunAsync(block.Code, cancellationToken);
 
             if (run.Success)
             {
-                return "Verified in sandbox: " + run.SolidCount + " solids, " + run.FaceCount + " faces, " + run.ElapsedMs + " ms";
+                return new BlockVerification(
+                    true,
+                    "Verified in sandbox: " + run.SolidCount + " solids, " + run.FaceCount + " faces, " + run.ElapsedMs + " ms",
+                    run.SolidCount,
+                    run.FaceCount,
+                    run.ElapsedMs);
             }
 
             var diagnostic = run.Diagnostics.FirstOrDefault();
 
             if (diagnostic is not null)
             {
-                return "Needs review: line " + diagnostic.Line + ", " + diagnostic.Message;
+                return new BlockVerification(false, "Needs review: line " + diagnostic.Line + ", " + diagnostic.Message, 0, 0, 0);
             }
 
-            return "Needs review: " + (run.Message ?? "the script did not run.");
+            return new BlockVerification(false, "Needs review: " + (run.Message ?? "the script did not run."), 0, 0, 0);
         }
         catch (OperationCanceledException)
         {
@@ -1535,7 +1602,7 @@ public class CadAssistController : Controller
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Sandbox verification failed for an assistant script.");
-            return "Could not verify the script.";
+            return new BlockVerification(false, "Could not verify the script.", 0, 0, 0);
         }
     }
 

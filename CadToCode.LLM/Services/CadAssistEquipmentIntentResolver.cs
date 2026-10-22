@@ -19,6 +19,11 @@ public static class CadAssistEquipmentIntentResolver
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(250));
 
+    private static readonly Regex AllPartsRegex = new(
+        @"\b(give|get|need|want|provide|send)\b.{0,40}\b(all|every|each|complete|full)\b.{0,20}\b(parts?|components?)\b|^\s*(all|every)\s+(parts?|components?)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
     private static readonly Regex IdentifyRegex = new(
         @"\b(what is this|identify|inspect|recognize|recognise|what equipment|which equipment)\b",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
@@ -31,7 +36,7 @@ public static class CadAssistEquipmentIntentResolver
             return CadAssistEquipmentIntent.Unknown;
         }
 
-        if (IsMatch(GenerateRegex, text))
+        if (IsMatch(GenerateRegex, text) || IsMatch(AllPartsRegex, text))
         {
             return CadAssistEquipmentIntent.GenerateCad;
         }
