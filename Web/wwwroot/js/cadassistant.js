@@ -474,6 +474,77 @@
         return true;
     }
 
+    var scriptBusy = false;
+
+    function ensureStepName(name) {
+        var fileName = (name || "model.step").trim();
+        if (!/\.(step|stp)$/i.test(fileName)) {
+            fileName += ".step";
+        }
+        return fileName;
+    }
+
+    function saveStep(content, name) {
+        var blob = new Blob([content], { type: "model/step" });
+        var url = URL.createObjectURL(blob);
+        var link = document.createElement("a");
+        link.href = url;
+        link.download = ensureStepName(name);
+        link.style.display = "none";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.setTimeout(function () { URL.revokeObjectURL(url); }, 2000);
+    }
+
+    function runDirect(code) {
+        if (scriptBusy) {
+            return;
+        }
+
+        scriptBusy = true;
+        notify("Running script\u2026");
+
+        fetch("/Project/RunCode", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "RequestVerificationToken": antiForgeryToken()
+            },
+            body: JSON.stringify({ code: code })
+        })
+            .then(function (response) {
+                if (!response.ok) {
+                    throw new Error("The server returned " + response.status + ".");
+                }
+                return response.json();
+            })
+            .then(function (result) {
+                if (!result.success) {
+                    var first = (result.diagnostics && result.diagnostics.length > 0)
+                        ? result.diagnostics[0].message
+                        : (result.message || "Run failed.");
+                    notify("Run failed: " + first);
+                    return;
+                }
+
+                if (result.stepContent) {
+                    saveStep(result.stepContent, result.fileName);
+                    notify("Downloaded " + ensureStepName(result.fileName));
+                } else {
+                    notify("Script ran successfully.");
+                }
+            })
+            .catch(function (error) {
+                notify(error && error.message ? error.message : "Could not reach the server.");
+            })
+            .then(function () {
+                scriptBusy = false;
+            });
+    }
+
     function editorButton(selector) {
         return document.querySelector("[data-cc-sandbox][data-cc-source=\"#cc-code-input\"] " + selector);
     }
@@ -494,6 +565,10 @@
                 break;
 
             case "run":
+                if (!editorInput) {
+                    runDirect(block.code);
+                    break;
+                }
                 if (applyCode(block.code)) {
                     var run = editorButton("[data-cc-run]");
                     if (run) {
@@ -505,6 +580,10 @@
                 break;
 
             case "download-step":
+                if (!editorInput) {
+                    runDirect(block.code);
+                    break;
+                }
                 if (applyCode(block.code)) {
                     var download = editorButton("[data-cc-download]");
                     if (download) {

@@ -1,0 +1,212 @@
+﻿{
+  "equipmentType": "WetScrubber",
+  "version": "0.1.0",
+  "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+  "rules": [
+    {
+      "id": "WSC-RULE-001",
+      "key": "design_superficial_velocity_ms",
+      "description": "Superficial gas velocity through the empty tower cross-section, used when the user does not supply one.",
+      "siUnit": "m/s",
+      "sourceReference": "Typical spray tower design practice, superficial gas velocity of roughly 1 to 2 m/s; Perry's Chemical Engineers' Handbook; US EPA wet scrubber fact sheets",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.2
+    },
+    {
+      "id": "WSC-RULE-002",
+      "key": "superficial_velocity_allowed_ms",
+      "description": "Superficial gas velocity range inside the validated envelope of this calculator. Outside it the design is blocked.",
+      "siUnit": "m/s",
+      "sourceReference": "Validated envelope of this calculator; typical spray tower design practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.5,
+      "max": 3.0
+    },
+    {
+      "id": "WSC-RULE-003",
+      "key": "design_residence_time_s",
+      "description": "Gas residence time in the spray zone, used when the user does not supply one. Spray zone height is superficial velocity times residence time.",
+      "siUnit": "s",
+      "sourceReference": "Typical spray tower design practice, gas contact time of roughly 1 to 4 s; Perry's Chemical Engineers' Handbook",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 2.0
+    },
+    {
+      "id": "WSC-RULE-004",
+      "key": "residence_time_allowed_s",
+      "description": "Gas residence time range inside the validated envelope of this calculator.",
+      "siUnit": "s",
+      "sourceReference": "Validated envelope of this calculator; typical spray tower design practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 1.0,
+      "max": 8.0
+    },
+    {
+      "id": "WSC-RULE-005",
+      "key": "design_inlet_velocity_ms",
+      "description": "Gas velocity in the side inlet nozzle, used when the user does not supply one.",
+      "siUnit": "m/s",
+      "sourceReference": "Typical gas duct design practice, about 10 to 20 m/s",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 15.0
+    },
+    {
+      "id": "WSC-RULE-006",
+      "key": "inlet_velocity_allowed_ms",
+      "description": "Inlet nozzle velocity range inside the validated envelope of this calculator. Outside it the design is blocked.",
+      "siUnit": "m/s",
+      "sourceReference": "Validated envelope of this calculator; typical gas duct design practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 8.0,
+      "max": 25.0
+    },
+    {
+      "id": "WSC-RULE-007",
+      "key": "design_stack_velocity_ms",
+      "description": "Gas velocity in the outlet stack, used when the user does not supply one.",
+      "siUnit": "m/s",
+      "sourceReference": "Typical scrubber outlet stack practice, about 8 to 15 m/s",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 10.0
+    },
+    {
+      "id": "WSC-RULE-008",
+      "key": "stack_velocity_allowed_ms",
+      "description": "Outlet stack velocity range inside the validated envelope of this calculator. Outside it the design is blocked.",
+      "siUnit": "m/s",
+      "sourceReference": "Validated envelope of this calculator; typical scrubber outlet stack practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 5.0,
+      "max": 20.0
+    },
+    {
+      "id": "WSC-RULE-009",
+      "key": "design_liquid_to_gas_ratio_lm3",
+      "description": "Scrubbing liquid flow per unit gas volume, used when the user does not supply one.",
+      "siUnit": "L/m3",
+      "sourceReference": "Typical spray tower practice, liquid-to-gas ratio of roughly 0.1 to 3 L/m3; US EPA wet scrubber fact sheets",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.0
+    },
+    {
+      "id": "WSC-RULE-010",
+      "key": "liquid_to_gas_ratio_allowed_lm3",
+      "description": "Liquid-to-gas ratio range inside the validated envelope of this calculator. Outside it the design is blocked.",
+      "siUnit": "L/m3",
+      "sourceReference": "Validated envelope of this calculator; typical spray tower practice",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.2,
+      "max": 3.0
+    },
+    {
+      "id": "WSC-RULE-011",
+      "key": "vessel_diameter_allowed_m",
+      "description": "Vessel inside diameter range inside the validated envelope of this calculator.",
+      "siUnit": "m",
+      "sourceReference": "Validated envelope of this calculator; limited by the CAD template parameter limits",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.2,
+      "max": 12.0
+    },
+    {
+      "id": "WSC-RULE-012",
+      "key": "airflow_allowed_m3s",
+      "description": "Gas flow range inside the validated envelope of this calculator.",
+      "siUnit": "m3/s",
+      "sourceReference": "Validated envelope of this calculator",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "min": 0.05,
+      "max": 100.0
+    },
+    {
+      "id": "WSC-RULE-013",
+      "key": "inlet_clearance_to_inlet_diameter_ratio",
+      "description": "Height of the inlet centreline above the top of the cone divided by inlet diameter. Keeps the inlet nozzle clear of the cone.",
+      "siUnit": "-",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.0
+    },
+    {
+      "id": "WSC-RULE-014",
+      "key": "disengagement_height_to_diameter_ratio",
+      "description": "Free height above the spray zone for droplet disengagement divided by vessel inside diameter.",
+      "siUnit": "-",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard. Mist elimination performance is not verified.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.5
+    },
+    {
+      "id": "WSC-RULE-015",
+      "key": "cone_height_to_diameter_ratio",
+      "description": "Conical bottom height divided by vessel inside diameter.",
+      "siUnit": "-",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.5
+    },
+    {
+      "id": "WSC-RULE-016",
+      "key": "drain_diameter_to_vessel_diameter_ratio",
+      "description": "Bottom drain pipe diameter divided by vessel inside diameter.",
+      "siUnit": "-",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard. Liquid drain capacity is not verified.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.125
+    },
+    {
+      "id": "WSC-RULE-017",
+      "key": "drain_diameter_min_m",
+      "description": "Minimum drain pipe diameter applied by this calculator.",
+      "siUnit": "m",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.05
+    },
+    {
+      "id": "WSC-RULE-018",
+      "key": "drain_length_to_diameter_ratio",
+      "description": "Drain pipe length divided by drain pipe diameter.",
+      "siUnit": "-",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 2.0
+    },
+    {
+      "id": "WSC-RULE-019",
+      "key": "stack_height_to_diameter_ratio",
+      "description": "Outlet stack height above the top cover divided by stack diameter.",
+      "siUnit": "-",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.5
+    },
+    {
+      "id": "WSC-RULE-020",
+      "key": "inlet_length_to_diameter_ratio",
+      "description": "Side inlet nozzle length beyond the shell divided by inlet diameter.",
+      "siUnit": "-",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.5
+    },
+    {
+      "id": "WSC-RULE-021",
+      "key": "wall_thickness_fraction_of_diameter",
+      "description": "Wall thickness as a fraction of vessel inside diameter when the user does not supply one.",
+      "siUnit": "-",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard. Pressure containment is not verified.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.005
+    },
+    {
+      "id": "WSC-RULE-022",
+      "key": "wall_thickness_min_m",
+      "description": "Minimum wall thickness applied by this calculator.",
+      "siUnit": "m",
+      "sourceReference": "Fabrication assumption of this calculator; not from a published standard. Pressure containment is not verified.",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 0.004
+    }
+  ]
+}

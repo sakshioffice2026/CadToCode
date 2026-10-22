@@ -1,6 +1,7 @@
 using CadToCode.Core.Calculators;
 using CadToCode.Core.Knowledge;
 using CadToCode.Core.Manifests;
+using CadToCode.Core.Mapping;
 using CadToCode.Core.Rules;
 using CadToCode.Core.Workflow;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,7 +35,11 @@ public static class ServiceCollectionExtensions
             new JsonEquipmentManifestRegistry(sp.GetRequiredService<EngineeringKnowledgeOptions>().RootPath));
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, AxialFanCalculator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, WetScrubberCalculator>());
         services.TryAddSingleton<EquipmentCalculatorRegistry>();
+
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICalculatorTemplateMapper, WetScrubberTemplateMapper>());
+        services.TryAddSingleton<ICalculatorTemplateMapperRegistry, CalculatorTemplateMapperRegistry>();
 
         services.TryAddSingleton<IEngineeringKnowledgeService, EngineeringKnowledgeService>();
 

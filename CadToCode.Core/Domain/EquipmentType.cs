@@ -138,7 +138,6 @@ public static class EquipmentRegistry
         EquipmentType best = EquipmentType.Unknown;
         int bestLength = 0;
         var matchedTypes = new HashSet<EquipmentType>();
-        var padded = " " + normalized + " ";
 
         foreach (var item in Items.Values)
         {
@@ -150,7 +149,7 @@ public static class EquipmentRegistry
                 if (normalized == a)
                     return item.Type;
 
-                if (padded.Contains(" " + a + " ", StringComparison.Ordinal))
+                if (normalized.Contains(a, StringComparison.Ordinal))
                 {
                     matchedTypes.Add(item.Type);
                     if (a.Length > bestLength)
@@ -167,20 +166,10 @@ public static class EquipmentRegistry
     }
 
     private static string Normalize(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return string.Empty;
-
-        var chars = value.Trim().ToLowerInvariant()
-            .Select(c => char.IsLetterOrDigit(c) ? c : ' ')
-            .ToArray();
-
-        var normalized = new string(chars);
-        while (normalized.Contains("  ", StringComparison.Ordinal))
-            normalized = normalized.Replace("  ", " ");
-
-        return normalized.Trim();
-    }
+        => new string(value.Trim().ToLowerInvariant()
+            .Where(c => char.IsLetterOrDigit(c) || c == ' ')
+            .ToArray())
+            .Replace("  ", " ");
 
     private static IReadOnlyDictionary<EquipmentType, EquipmentMetadata> Build()
     {
@@ -213,7 +202,7 @@ public static class EquipmentRegistry
                     new ParameterDescriptor("casing_outer_diameter_m", "Casing Outer Diameter", "m", true, "Casing outer diameter."),
                     new ParameterDescriptor("casing_length_m", "Casing Length", "m", true, "Axial casing length.")
                 },
-                new[] { "axial fan", "axial flow fan", "tube axial", "tubeaxial", "vane axial", "vaneaxial", "propeller fan", "axial blower", "axial", "ventilador", "ventilator", "fan", "blower" },
+                new[] { "axial fan", "axial flow fan", "tube axial", "tubeaxial", "vane axial", "vaneaxial", "propeller fan", "axial blower" },
                 new[] { "fans", "common" }),
 
             new(
@@ -241,19 +230,26 @@ public static class EquipmentRegistry
                 EquipmentType.WetScrubber,
                 "WET_SCRUBBER",
                 "Industrial Wet Scrubber",
-                "Wet scrubber (spray tower, packed bed, venturi) for gas cleaning.",
-                CalculatorStatus.NotImplemented,
+                "Wet scrubber (spray tower) for gas cleaning, sized from gas flow, gas velocity and residence time.",
+                CalculatorStatus.Preview,
                 new[]
                 {
                     new ParameterDescriptor("airflow_m3s", "Gas Flow", "m3/s", true, "Inlet gas volumetric flow."),
-                    new ParameterDescriptor("liquid_to_gas_ratio", "Liquid-to-Gas Ratio", "L/m3", false, "Scrubbing liquid per unit gas volume."),
-                    new ParameterDescriptor("removal_efficiency", "Removal Efficiency", "-", false, "Target removal efficiency (0-1).")
+                    new ParameterDescriptor("gas_velocity_ms", "Superficial Gas Velocity", "m/s", false, "Gas velocity through the empty tower cross-section."),
+                    new ParameterDescriptor("gas_residence_time_s", "Gas Residence Time", "s", false, "Gas contact time in the spray zone."),
+                    new ParameterDescriptor("inlet_velocity_ms", "Inlet Nozzle Velocity", "m/s", false, "Gas velocity in the side inlet nozzle."),
+                    new ParameterDescriptor("stack_velocity_ms", "Outlet Stack Velocity", "m/s", false, "Gas velocity in the outlet stack."),
+                    new ParameterDescriptor("liquid_to_gas_ratio_lm3", "Liquid-to-Gas Ratio", "L/m3", false, "Scrubbing liquid per unit gas volume."),
+                    new ParameterDescriptor("wall_thickness_m", "Wall Thickness", "m", false, "Shell wall thickness.")
                 },
                 new[]
                 {
-                    new ParameterDescriptor("shell_diameter_m", "Shell Diameter", "m", true, "Scrubber vessel diameter."),
-                    new ParameterDescriptor("packing_height_m", "Packing Height", "m", false, "Packed section height."),
-                    new ParameterDescriptor("pressure_drop_pa", "Pressure Drop", "Pa", true, "Estimated gas-side pressure drop.")
+                    new ParameterDescriptor("vessel_inside_diameter_m", "Vessel Inside Diameter", "m", true, "Cylindrical shell inside diameter."),
+                    new ParameterDescriptor("shell_height_m", "Shell Height", "m", true, "Cylindrical shell straight height."),
+                    new ParameterDescriptor("cone_height_m", "Cone Height", "m", true, "Conical bottom height."),
+                    new ParameterDescriptor("inlet_diameter_m", "Inlet Diameter", "m", true, "Side gas inlet nozzle diameter."),
+                    new ParameterDescriptor("stack_diameter_m", "Stack Diameter", "m", true, "Gas outlet stack diameter."),
+                    new ParameterDescriptor("liquid_flow_ls", "Scrubbing Liquid Flow", "L/s", false, "Scrubbing liquid flow from the liquid-to-gas ratio.")
                 },
                 new[] { "wet scrubber", "scrubber", "packed tower", "spray tower", "venturi scrubber", "gas scrubber", "packed bed scrubber" },
                 new[] { "scrubbers", "common" }),

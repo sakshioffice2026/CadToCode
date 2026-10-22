@@ -1,0 +1,346 @@
+﻿{
+  // CadToCode.Core/EngineeringKnowledge/wet-scrubber/equipment-manifest.json
+  "id": "wet-scrubber",
+  "domain": "process-equipment",
+  "displayName": "Wet scrubber (spray tower)",
+  "description": "Vertical spray-tower wet scrubber vessel with conical bottom, side gas inlet, top gas outlet stack and bottom drain, sized from gas flow using superficial gas velocity and gas residence time. Outputs are SI values; a mapper converts them to CAD template parameters.",
+  "version": "1.0.0",
+  "maxTier": "Engineered",
+  "aliases": [
+    "wet scrubber",
+    "scrubber",
+    "gas scrubber",
+    "wet gas scrubber",
+    "spray tower",
+    "spray scrubber",
+    "scrubbing tower"
+  ],
+  "calculatorId": "WetScrubber",
+  "rulePackIds": [
+    "wet-scrubber-design-rules"
+  ],
+  "templateKeys": [
+    "builtin-wet-scrubber"
+  ],
+  "mapperId": "wet-scrubber-template-mapper",
+  // Radius (template uses OUTER radius: vessel_inside_diameter_m / 2 + wall) cannot be a plain scale,
+  // so the code mapper "wet-scrubber-template-mapper" produces it. All other keys are declared here.
+  "parameterMappings": [
+    {
+      "sourceKey": "wall_thickness_m",
+      "targetKey": "Wall",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "shell_height_m",
+      "targetKey": "ShellHeight",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "cone_height_m",
+      "targetKey": "ConeHeight",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "drain_diameter_m",
+      "targetKey": "DrainDiameter",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "drain_length_m",
+      "targetKey": "DrainLength",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "stack_diameter_m",
+      "targetKey": "StackDiameter",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "stack_height_m",
+      "targetKey": "StackHeight",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "inlet_diameter_m",
+      "targetKey": "InletDiameter",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "inlet_length_m",
+      "targetKey": "InletLength",
+      "scale": 1000
+    },
+    {
+      "sourceKey": "inlet_elevation_m",
+      "targetKey": "InletZ",
+      "scale": 1000
+    }
+  ],
+  "confusableWith": [
+    "cyclone-separator"
+  ],
+  "forbiddenSubstitutions": [
+    "builtin-straight-pipe",
+    "builtin-pipe-elbow",
+    "builtin-pipe-tee",
+    "builtin-flange-plate",
+    "builtin-cyclone-separator"
+  ],
+  "references": [
+    "Perry's Chemical Engineers' Handbook, gas absorption and wet scrubber (spray tower) design",
+    "Calvert, S., Goldshmid, J., Leith, D., Mehta, D., Wet Scrubber System Study, EPA-R2-72-118, 1972",
+    "US EPA Air Pollution Control Cost Manual, wet scrubbers for particulate matter chapter"
+  ],
+  "inputs": [
+    {
+      "key": "airflow_m3s",
+      "displayName": "Gas flow",
+      "unit": "m3/s",
+      "min": 0.05,
+      "max": 100,
+      "isRequired": true,
+      "description": "Inlet gas volumetric flow rate at operating conditions.",
+      "clarifyingQuestion": "What is the gas flow rate through the scrubber at operating conditions (m3/s)? If you have m3/h or CFM, give that and I will convert it.",
+      "aliases": [ "gas flow", "airflow", "flow rate", "flow", "gas rate" ]
+    },
+    {
+      "key": "gas_velocity_ms",
+      "displayName": "Superficial gas velocity",
+      "unit": "m/s",
+      "min": 0.3,
+      "max": 5,
+      "description": "Gas velocity through the empty tower cross-section. When omitted the rulepack design velocity is used.",
+      "aliases": [ "superficial velocity", "gas velocity", "tower velocity", "column velocity" ]
+    },
+    {
+      "key": "gas_residence_time_s",
+      "displayName": "Gas residence time",
+      "unit": "s",
+      "min": 0.5,
+      "max": 10,
+      "description": "Gas contact time in the spray zone. When omitted the rulepack design residence time is used.",
+      "aliases": [ "residence time", "contact time", "gas contact time" ]
+    },
+    {
+      "key": "inlet_velocity_ms",
+      "displayName": "Inlet nozzle velocity",
+      "unit": "m/s",
+      "min": 5,
+      "max": 30,
+      "description": "Gas velocity in the side inlet nozzle. When omitted the rulepack design velocity is used.",
+      "aliases": [ "inlet velocity", "inlet nozzle velocity", "inlet speed" ]
+    },
+    {
+      "key": "stack_velocity_ms",
+      "displayName": "Outlet stack velocity",
+      "unit": "m/s",
+      "min": 3,
+      "max": 25,
+      "description": "Gas velocity in the outlet stack. When omitted the rulepack design velocity is used.",
+      "aliases": [ "stack velocity", "outlet velocity", "outlet stack velocity" ]
+    },
+    {
+      "key": "liquid_to_gas_ratio_lm3",
+      "displayName": "Liquid-to-gas ratio",
+      "unit": "L/m3",
+      "min": 0.2,
+      "max": 20,
+      "description": "Scrubbing liquid flow per unit gas volume. When omitted the rulepack design ratio is used.",
+      "aliases": [ "liquid to gas ratio", "l/g ratio", "l/g", "liquid gas ratio" ]
+    },
+    {
+      "key": "wall_thickness_m",
+      "displayName": "Wall thickness",
+      "unit": "m",
+      "min": 0.002,
+      "max": 0.05,
+      "description": "Shell wall thickness. When omitted the rulepack minimum is used.",
+      "aliases": [ "wall thickness", "wall", "thickness", "shell wall" ]
+    }
+  ],
+  "outputs": [
+    {
+      "key": "vessel_inside_diameter_m",
+      "displayName": "Vessel inside diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Cylindrical shell inside diameter."
+    },
+    {
+      "key": "shell_height_m",
+      "displayName": "Shell height",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Cylindrical shell straight height."
+    },
+    {
+      "key": "cone_height_m",
+      "displayName": "Cone height",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Conical bottom height."
+    },
+    {
+      "key": "drain_diameter_m",
+      "displayName": "Drain diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Bottom drain pipe diameter."
+    },
+    {
+      "key": "drain_length_m",
+      "displayName": "Drain length",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Bottom drain pipe length."
+    },
+    {
+      "key": "stack_diameter_m",
+      "displayName": "Stack diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Gas outlet stack diameter."
+    },
+    {
+      "key": "stack_height_m",
+      "displayName": "Stack height",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Gas outlet stack height above the top cover."
+    },
+    {
+      "key": "inlet_diameter_m",
+      "displayName": "Inlet diameter",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Side gas inlet nozzle diameter."
+    },
+    {
+      "key": "inlet_length_m",
+      "displayName": "Inlet length",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Side gas inlet nozzle length beyond the shell."
+    },
+    {
+      "key": "inlet_elevation_m",
+      "displayName": "Inlet elevation",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Side gas inlet centreline height above the bottom of the cone."
+    },
+    {
+      "key": "wall_thickness_m",
+      "displayName": "Wall thickness used",
+      "unit": "m",
+      "isRequired": true,
+      "description": "Wall thickness applied in the design."
+    },
+    {
+      "key": "gas_velocity_used_ms",
+      "displayName": "Superficial gas velocity used",
+      "unit": "m/s",
+      "description": "Superficial gas velocity applied in the design."
+    },
+    {
+      "key": "inlet_velocity_used_ms",
+      "displayName": "Inlet nozzle velocity used",
+      "unit": "m/s",
+      "description": "Inlet nozzle velocity applied in the design."
+    },
+    {
+      "key": "stack_velocity_used_ms",
+      "displayName": "Stack velocity used",
+      "unit": "m/s",
+      "description": "Outlet stack velocity applied in the design."
+    },
+    {
+      "key": "residence_time_s",
+      "displayName": "Gas residence time",
+      "unit": "s",
+      "description": "Gas residence time in the spray zone of the sized design."
+    },
+    {
+      "key": "liquid_flow_ls",
+      "displayName": "Scrubbing liquid flow",
+      "unit": "L/s",
+      "description": "Scrubbing liquid flow from the liquid-to-gas ratio and gas flow."
+    }
+  ],
+  "components": [
+    {
+      "key": "shell",
+      "title": "Vessel shell with conical bottom",
+      "aliases": [ "shell", "vessel", "vessel shell", "body", "cone", "tank" ],
+      "parameterKeys": [ "airflow_m3s", "gas_velocity_ms", "gas_residence_time_s", "wall_thickness_m" ]
+    },
+    {
+      "key": "cover",
+      "title": "Top cover",
+      "aliases": [ "cover", "top cover", "lid", "top plate" ],
+      "parameterKeys": [ "airflow_m3s", "gas_velocity_ms", "wall_thickness_m" ]
+    },
+    {
+      "key": "stack",
+      "title": "Gas outlet stack",
+      "aliases": [ "stack", "outlet", "gas outlet", "chimney" ],
+      "parameterKeys": [ "airflow_m3s", "stack_velocity_ms", "wall_thickness_m" ]
+    },
+    {
+      "key": "drain",
+      "title": "Drain pipe",
+      "aliases": [ "drain", "drain pipe", "bottom outlet" ],
+      "parameterKeys": [ "airflow_m3s", "liquid_to_gas_ratio_lm3", "wall_thickness_m" ]
+    },
+    {
+      "key": "inlet",
+      "title": "Side gas inlet",
+      "aliases": [ "inlet", "side inlet", "gas inlet", "nozzle" ],
+      "parameterKeys": [ "airflow_m3s", "inlet_velocity_ms", "wall_thickness_m" ]
+    }
+  ],
+  // Part keys match the body names in the template script so each part exports as its own solid.
+  "parts": [
+    {
+      "key": "Shell",
+      "title": "Vessel shell with conical bottom",
+      "componentKeys": [ "shell" ],
+      "templateKey": "builtin-wet-scrubber",
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "TopCover",
+      "title": "Top cover",
+      "componentKeys": [ "cover" ],
+      "templateKey": "builtin-wet-scrubber",
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "Stack",
+      "title": "Gas outlet stack",
+      "componentKeys": [ "stack" ],
+      "templateKey": "builtin-wet-scrubber",
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "Drain",
+      "title": "Drain pipe",
+      "componentKeys": [ "drain" ],
+      "templateKey": "builtin-wet-scrubber",
+      "quantity": 1,
+      "isRequired": true
+    },
+    {
+      "key": "Inlet",
+      "title": "Side gas inlet",
+      "componentKeys": [ "inlet" ],
+      "templateKey": "builtin-wet-scrubber",
+      "quantity": 1,
+      "isRequired": true
+    }
+  ]
+}
