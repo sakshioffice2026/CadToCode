@@ -51,7 +51,7 @@ public class ProjectController : Controller
     [ValidateAntiForgeryToken]
     [RequestSizeLimit(MaxBatchBytes)]
     [RequestFormLimits(MultipartBodyLengthLimit = MaxBatchBytes)]
-    public async Task<IActionResult> Upload(List<IFormFile>? files, CancellationToken cancellationToken)
+    public async Task<IActionResult> Upload(List<IFormFile>? files, string? projectName, CancellationToken cancellationToken)
     {
         var selected = (files ?? new List<IFormFile>())
             .Where(f => f is not null && f.Length > 0)
@@ -86,6 +86,11 @@ public class ProjectController : Controller
                 if (result.ProjectId.HasValue)
                 {
                     succeededIds.Add(result.ProjectId.Value);
+
+                    if (selected.Count == 1 && !string.IsNullOrWhiteSpace(projectName))
+                    {
+                        await _processingService.RenameProjectAsync(result.ProjectId.Value, projectName, cancellationToken);
+                    }
                 }
 
                 if (!result.Success)
@@ -193,6 +198,27 @@ public class ProjectController : Controller
             Assembly = assembly,
             KeyDimensions = keyDimensions ?? new KeyDimensionsDto()
         });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Rename(int id, string? title, CancellationToken cancellationToken)
+    {
+        var clean = (title ?? string.Empty).Trim();
+
+        if (clean.Length == 0)
+        {
+            return BadRequest(new { success = false, error = "The name cannot be empty." });
+        }
+
+        var renamed = await _processingService.RenameProjectAsync(id, clean, cancellationToken);
+
+        if (!renamed)
+        {
+            return NotFound(new { success = false, error = "That drawing no longer exists." });
+        }
+
+        return Json(new { success = true, id, title = clean.Length <= 200 ? clean : clean[..200] });
     }
 
     [HttpPost]

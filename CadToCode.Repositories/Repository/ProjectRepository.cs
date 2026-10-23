@@ -126,6 +126,18 @@ public class ProjectRepository : IProjectRepository
         }).ToList();
     }
 
+    public async Task<bool> RenameAsync(int id, string title, CancellationToken cancellationToken = default)
+    {
+        var entity = await _context.Projects.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+        if (entity is null)
+        {
+            return false;
+        }
+
+        entity.Title = title;
+        return true;
+    }
+
     public async Task TouchLastOpenedAsync(int id, CancellationToken cancellationToken = default)
     {
         var entity = await _context.Projects.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);

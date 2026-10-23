@@ -780,6 +780,7 @@
         controller = new AbortController();
 
         var request;
+        var replied = false;
 
         if (useUpload) {
             var form = new FormData();
@@ -821,6 +822,7 @@
                 stopLive();
 
                 if (data && data.success && data.message) {
+                    replied = true;
                     addAssistant(data.message);
 
                     if (data.warnings && data.warnings.length > 0) {
@@ -844,6 +846,10 @@
                 controller = null;
                 setBusy(false);
                 input.focus();
+
+                if (replied) {
+                    saveProject(true);
+                }
             });
     }
 
@@ -879,38 +885,69 @@
                     }
                 });
 
-                if (data && data.editorCode && editorInput && !editorInput.value) {
+                if (data && data.editorCode && editorInput && editorInput.value !== data.editorCode) {
                     applyCode(data.editorCode);
                 }
             })
             .catch(function () { /* history is optional */ });
     }
 
-    function saveProject() {
+    var originalProjectId = projectId;
+    var autoCreated = false;
+
+    function saveProject(auto) {
+        auto = auto === true;
+
         if (saving) {
-            addNote("Already saving\u2026");
+            if (!auto) { addNote("Already saving\u2026"); }
             return;
         }
 
         if (busy) {
-            addNote("Wait for the current reply to finish, then save.");
+            if (!auto) { addNote("Wait for the current reply to finish, then save."); }
             return;
         }
 
         if (!urls.save) {
-            addError("Save is not configured. Replace _CadAssistantChat.cshtml with the updated file and rebuild.");
+            if (!auto) { addError("Save is not configured. Replace _CadAssistantChat.cshtml with the updated file and rebuild."); }
             return;
         }
 
         if (!sessionId) {
-            addError("There is no chat to save yet.");
+            if (!auto) { addError("There is no chat to save yet."); }
             return;
         }
 
-        addNote("Saving\u2026");
+        if (auto && projectId <= 0 && !(lastDrawingFile && lastDrawingFile.file)) {
+            return;
+        }
+
+        var projectTitle = "";
+
+        if (!auto && projectId <= 0) {
+            var suggested = lastDrawingFile && lastDrawingFile.fileName
+                ? lastDrawingFile.fileName.replace(/\.[^.]+$/, "")
+                : "";
+            var answer = window.prompt("Name this project:", suggested);
+
+            if (answer === null) {
+                return;
+            }
+
+            projectTitle = answer.trim();
+        }
+
+        if (!auto) {
+            addNote("Saving\u2026");
+        }
 
         var form = new FormData();
         form.append("projectId", String(projectId));
+
+        if (projectTitle) {
+            form.append("title", projectTitle);
+        }
+
         form.append("sessionId", sessionId);
         form.append("editorCode", editorInput ? editorInput.value : "");
 
@@ -932,16 +969,20 @@
             })
             .then(function (data) {
                 if (!data || !data.success) {
-                    addError((data && data.error) || "The chat could not be saved as a project.");
+                    if (!auto) { addError((data && data.error) || "The chat could not be saved as a project."); }
                     return;
                 }
 
                 if (data.created && data.projectId) {
                     writeStore("cadassistant:session:" + data.projectId, data.sessionId || sessionId);
-                    notify("Saved as a project. Find it in History.");
+
+                    projectId = data.projectId;
+                    autoCreated = true;
+
+                    notify("Saved to History.");
 
                     var box = el("div", "ca-note");
-                    box.appendChild(document.createTextNode("Saved as a project. "));
+                    box.appendChild(document.createTextNode("Saved to History. "));
 
                     var link = el("a", "", "Open project");
                     link.href = (urls.projectPage || "/Project/Details") + "?id=" + encodeURIComponent(data.projectId);
@@ -949,12 +990,12 @@
 
                     thread.appendChild(box);
                     scrollToEnd();
-                } else {
+                } else if (!auto) {
                     notify("Chat saved to this project.");
                 }
             })
             .catch(function () {
-                addError("The chat could not be saved as a project.");
+                if (!auto) { addError("The chat could not be saved as a project."); }
             })
             .then(function () {
                 saving = false;
@@ -986,10 +1027,18 @@
             return;
         }
 
-        postJson(urls.reset, { projectId: projectId, sessionId: previous })
+        var resetId = projectId;
+        var detach = autoCreated;
+
+        if (detach) {
+            projectId = originalProjectId;
+            autoCreated = false;
+        }
+
+        postJson(urls.reset, { projectId: resetId, sessionId: previous })
             .then(function (response) { return response.json(); })
             .then(function (data) {
-                sessionId = data && data.sessionId ? data.sessionId : "";
+                sessionId = detach ? "" : (data && data.sessionId ? data.sessionId : "");
                 writeStore(SESSION_KEY, sessionId);
             })
             .catch(function () {

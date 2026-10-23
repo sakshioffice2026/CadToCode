@@ -90,7 +90,7 @@ else
                     {
                         <tr data-cc-history-row data-cc-history-name="@((item.Title + " " + item.OriginalFileName).ToLowerInvariant())">
                             <td>
-                                <a class="cc-history-name" asp-controller="Project" asp-action="Details" asp-route-id="@item.Id">@item.Title</a>
+                                <a class="cc-history-name" data-cc-history-title data-cc-history-id="@item.Id" title="Double-click to rename" asp-controller="Project" asp-action="Details" asp-route-id="@item.Id">@item.Title</a>
                                 <span class="cc-history-file">@item.OriginalFileName</span>
                                 @if (item.Status == ProjectStatus.Failed && !string.IsNullOrWhiteSpace(item.ErrorMessage))
                                 {
@@ -148,6 +148,136 @@ else
                     if (!window.confirm(form.getAttribute('data-cc-confirm'))) {
                         event.preventDefault();
                     }
+                });
+            });
+
+            var renameUrl = '@Url.Action("Rename", "Project")';
+            var tokenField = document.querySelector('input[name="__RequestVerificationToken"]');
+
+            function showError(message) {
+                window.alert(message);
+            }
+
+            function applyTitle(link, title) {
+                link.textContent = title;
+
+                var row = link.closest('[data-cc-history-row]');
+                if (!row) { return; }
+
+                var file = row.querySelector('.cc-history-file');
+                row.setAttribute('data-cc-history-name',
+                    (title + ' ' + (file ? file.textContent : '')).toLowerCase());
+
+                var form = row.querySelector('form[data-cc-confirm]');
+                if (form) {
+                    form.setAttribute('data-cc-confirm',
+                        'Remove "' + title + '" from history? The stored file will be deleted.');
+                }
+            }
+
+            function beginRename(link) {
+                if (link.dataset.editing === '1') { return; }
+                link.dataset.editing = '1';
+
+                var original = link.textContent;
+                var input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'cc-history-rename';
+                input.maxLength = 200;
+                input.value = original;
+                input.setAttribute('aria-label', 'Drawing name');
+
+                link.hidden = true;
+                link.parentNode.insertBefore(input, link);
+                input.focus();
+                input.select();
+
+                var finished = false;
+
+                function finish(save) {
+                    if (finished) { return; }
+                    finished = true;
+
+                    var value = input.value.trim();
+
+                    function close() {
+                        input.remove();
+                        link.hidden = false;
+                        link.dataset.editing = '';
+                    }
+
+                    if (!save || !value || value === original) {
+                        close();
+                        return;
+                    }
+
+                    input.disabled = true;
+
+                    var body = new URLSearchParams();
+                    body.set('id', link.getAttribute('data-cc-history-id'));
+                    body.set('title', value);
+
+                    fetch(renameUrl, {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: {
+                            'Accept': 'application/json',
+                            'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                            'RequestVerificationToken': tokenField ? tokenField.value : ''
+                        },
+                        body: body.toString()
+                    })
+                        .then(function (response) {
+                            return response.json().then(
+                                function (data) { return { ok: response.ok, data: data }; },
+                                function () { return { ok: false, data: null }; });
+                        })
+                        .then(function (result) {
+                            if (result.ok && result.data && result.data.success) {
+                                applyTitle(link, result.data.title || value);
+                            } else {
+                                showError((result.data && result.data.error) || 'The name could not be saved.');
+                            }
+                        })
+                        .catch(function () {
+                            showError('The name could not be saved.');
+                        })
+                        .then(close);
+                }
+
+                input.addEventListener('keydown', function (event) {
+                    if (event.key === 'Enter') {
+                        event.preventDefault();
+                        finish(true);
+                    } else if (event.key === 'Escape') {
+                        event.preventDefault();
+                        finish(false);
+                    }
+                });
+
+                input.addEventListener('blur', function () { finish(true); });
+            }
+
+            document.querySelectorAll('[data-cc-history-title]').forEach(function (link) {
+                var timer = null;
+
+                link.addEventListener('click', function (event) {
+                    if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) { return; }
+
+                    event.preventDefault();
+                    window.clearTimeout(timer);
+
+                    if (event.detail > 1) { return; }
+
+                    timer = window.setTimeout(function () {
+                        window.location.href = link.href;
+                    }, 280);
+                });
+
+                link.addEventListener('dblclick', function (event) {
+                    event.preventDefault();
+                    window.clearTimeout(timer);
+                    beginRename(link);
                 });
             });
 

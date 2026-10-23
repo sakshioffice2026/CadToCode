@@ -173,12 +173,32 @@ public class ProjectProcessingService : IProjectProcessingService
         return rows;
     }
 
+    public async Task<bool> RenameProjectAsync(int projectId, string title, CancellationToken cancellationToken = default)
+    {
+        var clean = (title ?? string.Empty).Trim();
+        if (clean.Length == 0)
+        {
+            return false;
+        }
+
+        clean = Truncate(clean, MaxTitleLength);
+
+        var renamed = await _unitOfWork.Projects.RenameAsync(projectId, clean, cancellationToken);
+        if (!renamed)
+        {
+            return false;
+        }
+
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+        await SyncHistoryIndexAsync(projectId, cancellationToken);
+
+        return true;
+    }
+
     public async Task MarkOpenedAsync(int projectId, CancellationToken cancellationToken = default)
     {
         await _unitOfWork.Projects.TouchLastOpenedAsync(projectId, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
-
-        await SyncHistoryIndexAsync(projectId, cancellationToken);
     }
 
     public async Task<bool> DeleteProjectAsync(int projectId, CancellationToken cancellationToken = default)
@@ -199,6 +219,7 @@ public class ProjectProcessingService : IProjectProcessingService
             await _storage.DeleteAsync(storedPath, cancellationToken);
             await _storage.DeleteAsync(storedPath + ChatSnapshotSuffix, cancellationToken);
             await _storage.DeleteAsync(storedPath + ".pipeline.json", cancellationToken);
+            await _storage.DeleteAsync(storedPath + ".script.json", cancellationToken);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -345,6 +366,7 @@ public class ProjectProcessingService : IProjectProcessingService
         try
         {
             await _codeGeneration.GenerateAssemblyAsync(projectId, true, cancellationToken);
+            await _codeGeneration.GenerateAsync(projectId, cancellationToken);
         }
         catch (OperationCanceledException)
         {

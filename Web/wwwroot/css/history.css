@@ -38,10 +38,10 @@
     text-decoration: none;
 }
 
-.cc-recent-all:hover {
-    color: #ffffff;
-    text-decoration: underline;
-}
+    .cc-recent-all:hover {
+        color: #ffffff;
+        text-decoration: underline;
+    }
 
 .cc-dot {
     flex: 0 0 auto;
@@ -85,11 +85,11 @@
     font-size: 0.88rem;
 }
 
-.cc-history-search:focus {
-    outline: none;
-    border-color: var(--cc-accent);
-    box-shadow: 0 0 0 2px var(--cc-accent-soft);
-}
+    .cc-history-search:focus {
+        outline: none;
+        border-color: var(--cc-accent);
+        box-shadow: 0 0 0 2px var(--cc-accent-soft);
+    }
 
 .cc-history-table td {
     vertical-align: middle;
@@ -102,10 +102,28 @@
     text-decoration: none;
 }
 
-.cc-history-name:hover {
-    color: var(--cc-accent-deep);
-    text-decoration: underline;
+    .cc-history-name:hover {
+        color: var(--cc-accent-deep);
+        text-decoration: underline;
+    }
+
+.cc-history-rename {
+    display: block;
+    width: 100%;
+    max-width: 22rem;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--cc-accent);
+    border-radius: 6px;
+    background: var(--cc-surface, #fff);
+    color: var(--cc-ink);
+    font: inherit;
+    font-weight: 600;
+    box-shadow: 0 0 0 2px var(--cc-accent-soft);
 }
+
+    .cc-history-rename:focus {
+        outline: none;
+    }
 
 .cc-history-file {
     display: block;
@@ -147,10 +165,10 @@
     color: var(--cc-bad);
 }
 
-.cc-btn-danger:hover {
-    border-color: var(--cc-bad);
-    color: var(--cc-bad);
-}
+    .cc-btn-danger:hover {
+        border-color: var(--cc-bad);
+        color: var(--cc-bad);
+    }
 
 /* ---------- Status pill ---------- */
 
@@ -187,16 +205,16 @@
     text-align: center;
 }
 
-.cc-history-empty h2 {
-    margin: 0 0 0.4rem;
-    color: var(--cc-ink);
-    font-size: 1.15rem;
-}
+    .cc-history-empty h2 {
+        margin: 0 0 0.4rem;
+        color: var(--cc-ink);
+        font-size: 1.15rem;
+    }
 
-.cc-history-empty p {
-    margin: 0 0 1.25rem;
-    color: var(--cc-ink-soft);
-}
+    .cc-history-empty p {
+        margin: 0 0 1.25rem;
+        color: var(--cc-ink-soft);
+    }
 
 @media (max-width: 900px) {
     .cc-history-search {

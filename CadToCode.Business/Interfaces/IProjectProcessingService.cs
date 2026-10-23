@@ -10,6 +10,8 @@ public interface IProjectProcessingService
 
     Task<List<ProjectHistoryItemDto>> GetHistoryAsync(int? take = null, CancellationToken cancellationToken = default);
 
+    Task<bool> RenameProjectAsync(int projectId, string title, CancellationToken cancellationToken = default);
+
     Task MarkOpenedAsync(int projectId, CancellationToken cancellationToken = default);
 
     Task<bool> DeleteProjectAsync(int projectId, CancellationToken cancellationToken = default);

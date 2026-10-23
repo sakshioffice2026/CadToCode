@@ -320,7 +320,7 @@ public class CadAssistController : Controller
         {
             await using var stream = file.OpenReadStream();
 
-            var upload = await _processingService.ProcessUploadAsync(stream, fileName, cancellationToken);
+            var upload = await _processingService.ProcessUploadAsync(stream, fileName, CancellationToken.None);
 
             if (!upload.Success || !upload.ProjectId.HasValue)
             {
@@ -333,7 +333,14 @@ public class CadAssistController : Controller
 
             var newId = upload.ProjectId.Value;
 
-            await _processingService.SaveChatSnapshotAsync(newId, snapshot, cancellationToken);
+            var chosenTitle = Limit(title, MaxFieldChars);
+
+            if (!string.IsNullOrWhiteSpace(chosenTitle))
+            {
+                await _processingService.RenameProjectAsync(newId, chosenTitle, CancellationToken.None);
+            }
+
+            await _processingService.SaveChatSnapshotAsync(newId, snapshot, CancellationToken.None);
 
             _memory.Rebind(projectId, newId, sessionId);
 

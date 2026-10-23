@@ -24,7 +24,7 @@ public class CodeGenerationService : ICodeGenerationService
         Converters = { new JsonStringEnumConverter() }
     };
 
-    private const int MaxCachedAssemblies = 20;
+    private const int MaxCachedAssemblies = 200;
     private const int MaxComponentNotes = 50;
 
     private static readonly ConcurrentDictionary<int, (AssemblyGenerationResult Result, DateTime StoredUtc)> AssemblyCache = new();
@@ -144,6 +144,71 @@ public class CodeGenerationService : ICodeGenerationService
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "The image analysis could not be saved for reuse.");
+        }
+    }
+
+    private const string ScriptSidecarSuffix = ".script.json";
+
+    private static readonly ConcurrentDictionary<int, (string Key, string Script)> ScriptCache = new();
+
+    private sealed class ScriptSidecar
+    {
+        public string? Key { get; set; }
+
+        public string? Script { get; set; }
+    }
+
+    private async Task<string?> ReadScriptSidecarAsync(string storedPath, string key, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = await _storage.ReadTextAsync(storedPath + ScriptSidecarSuffix, cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return null;
+            }
+
+            var saved = JsonSerializer.Deserialize<ScriptSidecar>(json);
+
+            return saved is not null
+                && string.Equals(saved.Key, key, StringComparison.Ordinal)
+                && !string.IsNullOrWhiteSpace(saved.Script)
+                ? saved.Script
+                : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The saved script could not be read.");
+            return null;
+        }
+    }
+
+    private async Task RememberScriptAsync(int projectId, string? storedPath, string key, string script, CancellationToken cancellationToken)
+    {
+        ScriptCache[projectId] = (key, script);
+
+        if (string.IsNullOrWhiteSpace(storedPath))
+        {
+            return;
+        }
+
+        try
+        {
+            var json = JsonSerializer.Serialize(new ScriptSidecar { Key = key, Script = script });
+            await _storage.WriteTextAsync(storedPath + ScriptSidecarSuffix, json, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The generated script could not be saved for reuse.");
         }
     }
 
@@ -307,6 +372,30 @@ public class CodeGenerationService : ICodeGenerationService
             }
         }
 
+        var components = await _unitOfWork.Components.GetByProjectIdAsync(projectId, cancellationToken);
+        var notes = DescribeComponents(components);
+        var scriptName = AssemblyPromptTemplates.ToIdentifier(project.Title, "Drawing");
+        var scriptKey = scriptName + "|" + string.Join("\n", notes);
+
+        if (ScriptCache.TryGetValue(projectId, out var cachedScript)
+            && string.Equals(cachedScript.Key, scriptKey, StringComparison.Ordinal))
+        {
+            return cachedScript.Script;
+        }
+
+        var storedPath = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+
+        if (!string.IsNullOrWhiteSpace(storedPath))
+        {
+            var diskScript = await ReadScriptSidecarAsync(storedPath, scriptKey, cancellationToken);
+
+            if (diskScript is not null)
+            {
+                ScriptCache[projectId] = (scriptKey, diskScript);
+                return diskScript;
+            }
+        }
+
         ExtractedGeometry geometry;
 
         try
@@ -328,17 +417,13 @@ public class CodeGenerationService : ICodeGenerationService
             return "// No drawing entities were found for this project.";
         }
 
-        var components = await _unitOfWork.Components.GetByProjectIdAsync(projectId, cancellationToken);
-        var notes = DescribeComponents(components);
-        var scriptName = AssemblyPromptTemplates.ToIdentifier(project.Title, "Drawing");
-
         try
         {
             var recognition = Analyze(geometry).Recognition;
 
             if (recognition.HasFeatures)
             {
-                return ScriptEmitter.Emit(
+                var emitted = ScriptEmitter.Emit(
                     recognition,
                     scriptName,
                     new ScriptEmitterOptions
@@ -348,6 +433,9 @@ public class CodeGenerationService : ICodeGenerationService
                         OriginY = geometry.Bounds?.MinY ?? 0.0,
                         Notes = notes
                     });
+
+                await RememberScriptAsync(projectId, storedPath, scriptKey, emitted, cancellationToken);
+                return emitted;
             }
         }
         catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
@@ -355,7 +443,11 @@ public class CodeGenerationService : ICodeGenerationService
             _logger.LogWarning(ex, "Feature recognition failed for project {ProjectId}. Using the contour script.", projectId);
         }
 
-        return AssemblyCodeBuilder.BuildGeometryScript(geometry, scriptName, notes);
+        var contour = AssemblyCodeBuilder.BuildGeometryScript(geometry, scriptName, notes);
+
+        await RememberScriptAsync(projectId, storedPath, scriptKey, contour, cancellationToken);
+
+        return contour;
     }
 
     public static GeometryFeatureContext DescribeFeatures(ExtractedGeometry geometry)

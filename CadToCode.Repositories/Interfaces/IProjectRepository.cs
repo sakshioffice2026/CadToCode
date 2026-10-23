@@ -15,6 +15,8 @@ public interface IProjectRepository
 
     Task<List<ProjectHistoryItemDto>> ListHistoryAsync(int? take = null, CancellationToken cancellationToken = default);
 
+    Task<bool> RenameAsync(int id, string title, CancellationToken cancellationToken = default);
+
     Task TouchLastOpenedAsync(int id, CancellationToken cancellationToken = default);
 
     Task UpdateStatusAsync(int id, ProjectStatus status, string? errorMessage = null, CancellationToken cancellationToken = default);
