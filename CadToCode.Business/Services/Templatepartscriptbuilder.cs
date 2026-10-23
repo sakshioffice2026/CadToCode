@@ -14,6 +14,8 @@ public sealed class TemplatePartScriptBuilder : IPartScriptBuilder
 {
     public const string Id = "template-part-script-builder";
 
+    public const string AssemblyKey = "Assembly";
+
     public string BuilderId => Id;
 
     public bool CanBuild(EquipmentManifest manifest)
@@ -101,6 +103,41 @@ public sealed class TemplatePartScriptBuilder : IPartScriptBuilder
             values[parameter.Key] = new ParameterValue(parameter.Value, ToSource(parameter.Origin));
         }
 
+        if (request.PartKeys.Any(IsAssemblyKey))
+        {
+            var assembly = TemplateScriptComposer.Compose(new ComposeRequest
+            {
+                TemplateKey = mapping.TemplateKey,
+                Values = values
+            });
+
+            if (!assembly.Success)
+            {
+                return PartScriptResult.Fail(assembly.Errors.ToArray());
+            }
+
+            return new PartScriptResult
+            {
+                Success = true,
+                ManifestId = manifest.Id,
+                Parts = new[]
+                {
+                    new PartScript
+                    {
+                        PartKey = AssemblyKey,
+                        Title = "Full assembly",
+                        BodyName = AssemblyKey,
+                        Quantity = 1,
+                        IsRequired = true,
+                        Script = assembly.Script,
+                        FileBaseName = assembly.FileBaseName,
+                        AppliedValues = assembly.AppliedValues
+                    }
+                },
+                MissingRequiredPartKeys = Array.Empty<string>()
+            };
+        }
+
         var composed = TemplateScriptComposer.ComposeParts(new ComposePartsRequest
         {
             Manifest = manifest,
@@ -133,6 +170,14 @@ public sealed class TemplatePartScriptBuilder : IPartScriptBuilder
                 .ToList(),
             MissingRequiredPartKeys = composed.MissingRequiredPartKeys
         };
+    }
+
+    private static bool IsAssemblyKey(string? key)
+    {
+        var compact = new string((key ?? string.Empty).Where(char.IsLetterOrDigit).ToArray());
+
+        return string.Equals(compact, AssemblyKey, StringComparison.OrdinalIgnoreCase)
+               || string.Equals(compact, "FullAssembly", StringComparison.OrdinalIgnoreCase);
     }
 
     private static List<ManifestPart> SelectParts(EquipmentManifest manifest, IReadOnlyList<string> partKeys)

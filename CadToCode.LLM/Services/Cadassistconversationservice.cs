@@ -1311,6 +1311,21 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         var manifest = route.Manifest;
         var flow = route.Flow;
 
+        // A message that names different equipment with no design flow (for example a wet scrubber)
+        // must not be answered by the active design session of another equipment (for example a centrifugal fan).
+        if (manifest is null && active is not null && _manifests is not null)
+        {
+            var named = _manifests.ResolveDetailed(text);
+
+            if (named.IsResolved
+                && named.Manifest is not null
+                && !string.Equals(named.Manifest.Id, active.ManifestId, StringComparison.OrdinalIgnoreCase))
+            {
+                DesignSessions.TryRemove(new KeyValuePair<DesignSessionKey, DesignSessionState>(key, active));
+                return false;
+            }
+        }
+
         // A follow-up such as "5000 m3/h" continues the equipment already being designed.
         if (manifest is null
             && active is not null

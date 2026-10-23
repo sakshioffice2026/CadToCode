@@ -15,6 +15,8 @@ public class ApplicationDbContext : DbContext
     public DbSet<DrawingComponent> DrawingComponents => Set<DrawingComponent>();
     public DbSet<CadLibraryItem> CadLibraryItems => Set<CadLibraryItem>();
     public DbSet<DesignSession> DesignSessions => Set<DesignSession>();
+    public DbSet<ZooGeneration> ZooGenerations => Set<ZooGeneration>();
+    public DbSet<ZooGenerationFile> ZooGenerationFiles => Set<ZooGenerationFile>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -52,6 +54,22 @@ public class ApplicationDbContext : DbContext
             entity.HasIndex(s => s.State);
             entity.HasIndex(s => s.UpdatedAt);
             entity.HasIndex(s => new { s.UserId, s.UpdatedAt });
+        });
+
+        modelBuilder.Entity<ZooGeneration>(entity =>
+        {
+            entity.HasIndex(g => g.Status);
+            entity.HasIndex(g => g.CreatedAt);
+        });
+
+        modelBuilder.Entity<ZooGenerationFile>(entity =>
+        {
+            entity.HasIndex(f => new { f.GenerationId, f.FileName }).IsUnique();
+
+            entity.HasOne(f => f.Generation)
+                .WithMany(g => g.Files)
+                .HasForeignKey(f => f.GenerationId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

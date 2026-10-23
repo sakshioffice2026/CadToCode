@@ -25,6 +25,10 @@ var connectionString = builder.Configuration.GetConnectionString("DefaultConnect
 builder.Services.AddDbContext<ApplicationDbContext>(options =>
     options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
 
+builder.Services.Configure<ZooOptions>(builder.Configuration.GetSection(ZooOptions.SectionName));
+builder.Services.AddScoped<IZooGenerationRepository, ZooGenerationRepository>();
+builder.Services.AddHttpClient<IZooTextToCadService, ZooTextToCadService>();
+
 builder.Services.Configure<UploadOptions>(builder.Configuration.GetSection(UploadOptions.SectionName));
 builder.Services.PostConfigure<UploadOptions>(options =>
 {

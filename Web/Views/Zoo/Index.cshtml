@@ -1,0 +1,155 @@
+@model CadToCode.Models.Dtos.ZooIndexViewModel
+@using CadToCode.Models.Dtos
+
+@{
+    ViewData["Title"] = "Text to CAD";
+
+    string FormatLabel(string format) => format.ToLowerInvariant() switch
+    {
+        "gltf" => "glTF",
+        "glb" => "GLB",
+        _ => format.ToUpperInvariant()
+    };
+
+    string StatusLabel(string status) => status switch
+    {
+        ZooJobStatus.Completed => "Done",
+        ZooJobStatus.Failed => "Failed",
+        ZooJobStatus.InProgress => "Generating",
+        _ => "Queued"
+    };
+
+    string Prompt(string text) => text.Length <= 140 ? text : text.Substring(0, 140) + "...";
+}
+
+<link rel="stylesheet" href="~/css/zoo.css" asp-append-version="true" />
+
+<div class="cc-topbar">
+    <div>
+        <h1 class="cc-page-title">Text to CAD</h1>
+        <p class="cc-page-meta">Describe a part in plain language and Zoo generates the 3D model. Download it as STEP, glTF, GLB, STL or OBJ.</p>
+    </div>
+
+    <div class="d-flex gap-2">
+        <a class="cc-btn cc-btn-ghost" asp-controller="Project" asp-action="Upload">Upload drawing</a>
+    </div>
+</div>
+
+@if (!Model.IsConfigured)
+{
+    <div class="cc-alert cc-alert-note" role="alert">Zoo is not configured. Set <code>ZooOptions:ApiKey</code> and restart the app.</div>
+}
+
+<div class="cc-zoo-grid">
+    <section class="cc-panel" aria-labelledby="cc-zoo-form-title">
+        <div class="cc-panel-header">
+            <h2 class="cc-panel-title" id="cc-zoo-form-title">New model</h2>
+        </div>
+
+        <div class="cc-panel-body">
+            <form id="cc-zoo-form"
+                  class="cc-zoo-form"
+                  asp-controller="Zoo"
+                  asp-action="Generate"
+                  method="post"
+                  data-generate-url="@Url.Action("Generate", "Zoo")"
+                  data-status-url="@Url.Action("Status", "Zoo")"
+                  data-download-url="@Url.Action("Download", "Zoo")"
+                  novalidate>
+                <div class="cc-zoo-field">
+                    <label for="cc-zoo-prompt">Describe the part</label>
+                    <textarea id="cc-zoo-prompt"
+                              class="form-control"
+                              rows="4"
+                              maxlength="@Model.MaxPromptChars"
+                              placeholder="Example: A flat mounting bracket, 80 mm by 40 mm, 5 mm thick, with four 6 mm holes near the corners."></textarea>
+                    <div class="cc-zoo-hint"><span id="cc-zoo-count">0</span> / @Model.MaxPromptChars</div>
+                </div>
+
+                <div class="cc-zoo-row">
+                    <div class="cc-zoo-field">
+                        <label for="cc-zoo-format">Output format</label>
+                        <select id="cc-zoo-format" class="form-select">
+                            @foreach (var format in Model.Formats)
+                            {
+                                <option value="@format" selected="@string.Equals(format, Model.DefaultFormat, StringComparison.OrdinalIgnoreCase)">@FormatLabel(format)</option>
+                            }
+                        </select>
+                    </div>
+
+                    <button id="cc-zoo-submit" type="submit" class="cc-btn cc-btn-primary" disabled="@(!Model.IsConfigured)">Generate model</button>
+                </div>
+
+                <p id="cc-zoo-error" class="cc-zoo-error" role="alert" hidden></p>
+            </form>
+        </div>
+    </section>
+
+    <section id="cc-zoo-result" class="cc-panel" aria-labelledby="cc-zoo-result-title" hidden>
+        <div class="cc-panel-header">
+            <h2 class="cc-panel-title" id="cc-zoo-result-title">Result</h2>
+            <span id="cc-zoo-status" class="cc-zoo-badge" role="status"></span>
+        </div>
+
+        <div class="cc-panel-body">
+            <p id="cc-zoo-result-prompt" class="cc-zoo-result-prompt"></p>
+            <p id="cc-zoo-result-error" class="cc-zoo-error" hidden></p>
+            <ul id="cc-zoo-files" class="cc-zoo-files"></ul>
+
+            <div id="cc-zoo-code-wrap" hidden>
+                <div class="cc-zoo-code-head">
+                    <span>KCL source</span>
+                    <button id="cc-zoo-copy" type="button" class="cc-btn cc-btn-ghost cc-btn-small">Copy</button>
+                </div>
+                <pre id="cc-zoo-code" class="cc-zoo-code"></pre>
+            </div>
+        </div>
+    </section>
+
+    <section class="cc-panel" aria-labelledby="cc-zoo-history-title">
+        <div class="cc-panel-header">
+            <h2 class="cc-panel-title" id="cc-zoo-history-title">Recent generations</h2>
+        </div>
+
+        <div class="cc-panel-body">
+            @if (Model.History.Count == 0)
+            {
+                <p class="cc-zoo-hint">Nothing generated yet.</p>
+            }
+            else
+            {
+                <ul class="cc-zoo-history">
+                    @foreach (var job in Model.History)
+                    {
+                        <li class="cc-zoo-history-item">
+                            <div class="cc-zoo-history-main">
+                                <p class="cc-zoo-history-prompt">@Prompt(job.Prompt)</p>
+                                <p class="cc-zoo-hint">@job.CreatedAt.ToLocalTime().ToString("dd MMM yyyy HH:mm") - @FormatLabel(job.OutputFormat)</p>
+                                @if (!string.IsNullOrWhiteSpace(job.Error))
+                                {
+                                    <p class="cc-zoo-error">@job.Error</p>
+                                }
+                            </div>
+
+                            <div class="cc-zoo-history-side">
+                                <span class="cc-zoo-badge cc-zoo-badge-@job.Status">@StatusLabel(job.Status)</span>
+                                @foreach (var file in job.Files)
+                                {
+                                    <a class="cc-btn cc-btn-ghost cc-btn-small"
+                                       asp-controller="Zoo"
+                                       asp-action="Download"
+                                       asp-route-id="@job.Id"
+                                       asp-route-name="@file.Name">@file.Name</a>
+                                }
+                            </div>
+                        </li>
+                    }
+                </ul>
+            }
+        </div>
+    </section>
+</div>
+
+@section Scripts {
+    <script src="~/js/zoo.js" asp-append-version="true"></script>
+}

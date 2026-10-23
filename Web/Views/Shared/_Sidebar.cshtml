@@ -7,6 +7,7 @@
     var isHistory = isProject && string.Equals(action, "History", StringComparison.OrdinalIgnoreCase);
     var isDetails = isProject && string.Equals(action, "Details", StringComparison.OrdinalIgnoreCase);
     var isLibrary = string.Equals(controller, "Library", StringComparison.OrdinalIgnoreCase);
+    var isZoo = string.Equals(controller, "Zoo", StringComparison.OrdinalIgnoreCase);
 
     var projectId = isDetails ? ViewContext.RouteData.Values["id"]?.ToString() : null;
 }
@@ -41,6 +42,14 @@
                    asp-action="Index"
                    aria-current="@(isLibrary ? "page" : null)">
                     CAD Library
+                </a>
+            </li>
+            <li>
+                <a class="cc-nav-link @(isZoo ? "active" : string.Empty)"
+                   asp-controller="Zoo"
+                   asp-action="Index"
+                   aria-current="@(isZoo ? "page" : null)">
+                    Text to CAD
                 </a>
             </li>
         </ul>
