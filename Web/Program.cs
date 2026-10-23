@@ -94,6 +94,7 @@ builder.Services.AddSingleton<IStepScriptRunner, StepScriptRunner>();
 
 builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>();
 builder.Services.AddSingleton<IVectorStoreService, QdrantVectorStoreService>();
+builder.Services.AddSingleton<IProjectHistoryIndex, QdrantProjectHistoryIndex>();
 builder.Services.AddScoped<ICadRagRetriever, CadRagRetriever>();
 builder.Services.AddScoped<ICadTemplateIndexer, CadTemplateIndexer>();
 builder.Services.AddScoped<ICadTemplateMatcher, CadTemplateMatcher>();

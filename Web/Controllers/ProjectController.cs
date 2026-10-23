@@ -2,6 +2,7 @@
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using Web.Models;
 
 namespace Web.Controllers;
@@ -24,17 +25,20 @@ public class ProjectController : Controller
     private readonly ICodeGenerationService _codeGenerationService;
     private readonly IDefinitionLearningService _learningService;
     private readonly IStepScriptRunner _stepScriptRunner;
+    private readonly ILogger<ProjectController> _logger;
 
     public ProjectController(
         IProjectProcessingService processingService,
         ICodeGenerationService codeGenerationService,
         IDefinitionLearningService learningService,
-        IStepScriptRunner stepScriptRunner)
+        IStepScriptRunner stepScriptRunner,
+        ILogger<ProjectController> logger)
     {
         _processingService = processingService;
         _codeGenerationService = codeGenerationService;
         _learningService = learningService;
         _stepScriptRunner = stepScriptRunner;
+        _logger = logger;
     }
 
     [HttpGet]
@@ -146,8 +150,17 @@ public class ProjectController : Controller
     [HttpGet]
     public async Task<IActionResult> History(CancellationToken cancellationToken)
     {
-        var history = await _processingService.GetHistoryAsync(null, cancellationToken);
-        return View(HistoryViewPath, history);
+        try
+        {
+            var history = await _processingService.GetHistoryAsync(null, cancellationToken);
+            return View(HistoryViewPath, history);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogError(ex, "Project history could not be loaded.");
+            TempData["Error"] = "History could not be loaded right now. Please try again.";
+            return View(HistoryViewPath, new List<ProjectHistoryItemDto>());
+        }
     }
 
     [HttpGet]

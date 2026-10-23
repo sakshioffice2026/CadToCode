@@ -1,4 +1,5 @@
 ﻿using CadToCode.Business.Interfaces;
+using CadToCode.LLM.Services;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using CadToCode.Repositories.Interfaces;
@@ -16,6 +17,7 @@ public class ProjectProcessingService : IProjectProcessingService
     private readonly IEnumerable<IGeometryExtractor> _extractors;
     private readonly IAiComponentClassifier _classifier;
     private readonly ICodeGenerationService _codeGeneration;
+    private readonly IProjectHistoryIndex _historyIndex;
     private readonly ILogger<ProjectProcessingService> _logger;
 
     public ProjectProcessingService(
@@ -24,6 +26,7 @@ public class ProjectProcessingService : IProjectProcessingService
         IEnumerable<IGeometryExtractor> extractors,
         IAiComponentClassifier classifier,
         ICodeGenerationService codeGeneration,
+        IProjectHistoryIndex historyIndex,
         ILogger<ProjectProcessingService> logger)
     {
         _unitOfWork = unitOfWork;
@@ -31,6 +34,7 @@ public class ProjectProcessingService : IProjectProcessingService
         _extractors = extractors;
         _classifier = classifier;
         _codeGeneration = codeGeneration;
+        _historyIndex = historyIndex;
         _logger = logger;
     }
 
@@ -128,6 +132,11 @@ public class ProjectProcessingService : IProjectProcessingService
             await RunAssemblyAnalysisAsync(result.ProjectId.Value, cancellationToken);
         }
 
+        if (result.ProjectId.HasValue)
+        {
+            await SyncHistoryIndexAsync(result.ProjectId.Value, cancellationToken);
+        }
+
         return result;
     }
 
@@ -136,15 +145,40 @@ public class ProjectProcessingService : IProjectProcessingService
         return _unitOfWork.Projects.GetByIdAsync(projectId, cancellationToken);
     }
 
-    public Task<List<ProjectHistoryItemDto>> GetHistoryAsync(int? take = null, CancellationToken cancellationToken = default)
+    public async Task<List<ProjectHistoryItemDto>> GetHistoryAsync(int? take = null, CancellationToken cancellationToken = default)
     {
-        return _unitOfWork.Projects.ListHistoryAsync(take, cancellationToken);
+        if (_historyIndex.IsConfigured)
+        {
+            try
+            {
+                var indexed = await _historyIndex.ListAsync(take, cancellationToken);
+                if (indexed.Count > 0)
+                {
+                    return indexed;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Project history could not be read from Qdrant. Falling back to MySQL.");
+            }
+        }
+
+        var rows = await _unitOfWork.Projects.ListHistoryAsync(take, cancellationToken);
+
+        if (_historyIndex.IsConfigured && rows.Count > 0)
+        {
+            await BackfillHistoryIndexAsync(take, cancellationToken);
+        }
+
+        return rows;
     }
 
     public async Task MarkOpenedAsync(int projectId, CancellationToken cancellationToken = default)
     {
         await _unitOfWork.Projects.TouchLastOpenedAsync(projectId, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        await SyncHistoryIndexAsync(projectId, cancellationToken);
     }
 
     public async Task<bool> DeleteProjectAsync(int projectId, CancellationToken cancellationToken = default)
@@ -157,6 +191,8 @@ public class ProjectProcessingService : IProjectProcessingService
 
         await _unitOfWork.Projects.DeleteAsync(projectId, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        await RemoveFromHistoryIndexAsync(projectId, cancellationToken);
 
         try
         {
@@ -236,6 +272,74 @@ public class ProjectProcessingService : IProjectProcessingService
         }
     }
 
+    private async Task SyncHistoryIndexAsync(int projectId, CancellationToken cancellationToken)
+    {
+        if (!_historyIndex.IsConfigured)
+        {
+            return;
+        }
+
+        try
+        {
+            var project = await _unitOfWork.Projects.GetByIdAsync(projectId, cancellationToken);
+            if (project is null)
+            {
+                await _historyIndex.DeleteAsync(projectId, cancellationToken);
+                return;
+            }
+
+            await _historyIndex.UpsertAsync(
+                new ProjectHistoryItemDto
+                {
+                    Id = project.Id,
+                    Title = project.Title,
+                    OriginalFileName = project.OriginalFileName,
+                    SourceFileType = project.SourceFileType,
+                    FileSizeBytes = project.FileSizeBytes,
+                    Status = project.Status,
+                    ErrorMessage = project.ErrorMessage,
+                    ComponentCount = project.Components.Count,
+                    CreatedAt = project.CreatedAt,
+                    LastOpenedAt = project.LastOpenedAt
+                },
+                cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Project {ProjectId} could not be synced to the Qdrant history index.", projectId);
+        }
+    }
+
+    private async Task BackfillHistoryIndexAsync(int? take, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var all = await _unitOfWork.Projects.ListHistoryAsync(null, cancellationToken);
+            await _historyIndex.UpsertManyAsync(all, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Project history could not be backfilled into Qdrant.");
+        }
+    }
+
+    private async Task RemoveFromHistoryIndexAsync(int projectId, CancellationToken cancellationToken)
+    {
+        if (!_historyIndex.IsConfigured)
+        {
+            return;
+        }
+
+        try
+        {
+            await _historyIndex.DeleteAsync(projectId, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Project {ProjectId} could not be removed from the Qdrant history index.", projectId);
+        }
+    }
+
     private async Task RunAssemblyAnalysisAsync(int projectId, CancellationToken cancellationToken)
     {
         try
@@ -294,4 +398,4 @@ public class ProjectProcessingService : IProjectProcessingService
     {
         return value.Length <= maxLength ? value : value[..maxLength];
     }
-} 
+}
