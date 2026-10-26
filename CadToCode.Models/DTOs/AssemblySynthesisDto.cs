@@ -7,6 +7,9 @@ public class AssemblyAnalysisRequest
     public string? DrawingTitle { get; set; }
     public List<string> Texts { get; set; } = new();
     public List<ClassificationPatternHint> SimilarPatterns { get; set; } = new();
+
+    /// <summary>Optional Markdown few-shot reference blocks from similar validated historical designs.</summary>
+    public string? ReferenceContext { get; set; }
 }
 
 public class NodeSemanticName
@@ -42,6 +45,9 @@ public class CodeSynthesisRequest
     public AssemblyAnalysisResult? Analysis { get; set; }
     public string ClassName { get; set; } = "Assembly";
     public List<ClassificationPatternHint> SimilarPatterns { get; set; } = new();
+
+    /// <summary>Optional Markdown few-shot reference blocks from similar validated historical designs.</summary>
+    public string? ReferenceContext { get; set; }
 }
 
 public class CodeSynthesisResult

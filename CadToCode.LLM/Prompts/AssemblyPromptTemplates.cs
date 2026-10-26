@@ -24,8 +24,47 @@ public static class AssemblyPromptTemplates
 
     private static readonly int[] DetailLevels = { 60, 30, 15, 8 };
 
+    private const int MaxReferenceChars = 2200;
+
+    private const string ReferenceHeader =
+        "\n\nReference designs from project history follow. Use them only as context for naming, structure and typical proportions. "
+        + "Never copy their numbers; measurements from the current drawing are final. Your reply format is unchanged.\n";
+
+    private static string BuildReferenceBlock(string? referenceContext)
+    {
+        if (string.IsNullOrWhiteSpace(referenceContext))
+        {
+            return string.Empty;
+        }
+
+        var text = referenceContext.Replace("\r", string.Empty).Trim();
+
+        if (text.Length > MaxReferenceChars)
+        {
+            text = text[..MaxReferenceChars].TrimEnd();
+        }
+
+        return ReferenceHeader + text;
+    }
+
     public static string BuildAnalysisPrompt(AssemblyAnalysisRequest request, int maxChars)
     {
+        var reference = BuildReferenceBlock(request.ReferenceContext);
+
+        if (reference.Length > 0)
+        {
+            var systemWithReference = AnalysisSystemPrompt + reference;
+
+            foreach (var limit in DetailLevels)
+            {
+                var body = BuildAnalysisBody(request, limit);
+                if (Wrap(systemWithReference, body).Length + 1 <= maxChars)
+                {
+                    return Wrap(systemWithReference, body) + "{";
+                }
+            }
+        }
+
         var user = string.Empty;
 
         foreach (var limit in DetailLevels)
@@ -42,6 +81,22 @@ public static class AssemblyPromptTemplates
 
     public static string BuildCodePrompt(CodeSynthesisRequest request, int maxChars)
     {
+        var reference = BuildReferenceBlock(request.ReferenceContext);
+
+        if (reference.Length > 0)
+        {
+            var systemWithReference = CodeSystemPrompt + reference;
+
+            foreach (var limit in DetailLevels)
+            {
+                var body = BuildCodeBody(request, limit);
+                if (Wrap(systemWithReference, body).Length <= maxChars)
+                {
+                    return Wrap(systemWithReference, body);
+                }
+            }
+        }
+
         var user = string.Empty;
 
         foreach (var limit in DetailLevels)

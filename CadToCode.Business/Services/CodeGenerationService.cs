@@ -40,6 +40,7 @@ public class CodeGenerationService : ICodeGenerationService
     private readonly IStepScriptRunner _stepRunner;
     private readonly LlmOptions _options;
     private readonly ILogger<CodeGenerationService> _logger;
+    private readonly ICadRagRetriever? _rag;
 
     public CodeGenerationService(
         IUnitOfWork unitOfWork,
@@ -52,8 +53,10 @@ public class CodeGenerationService : ICodeGenerationService
         IDrawingProcessingService drawingProcessing,
         IStepScriptRunner stepRunner,
         IOptions<LlmOptions> options,
-        ILogger<CodeGenerationService> logger)
+        ILogger<CodeGenerationService> logger,
+        ICadRagRetriever? rag = null)
     {
+        _rag = rag;
         _unitOfWork = unitOfWork;
         _storage = storage;
         _extractors = extractors;
@@ -814,12 +817,27 @@ public class CodeGenerationService : ICodeGenerationService
 
             var minConfidence = (decimal)_options.MinConfidence;
 
+            string? referenceContext = null;
+
+            if (_rag is { IsHistoryAvailable: true })
+            {
+                var historyQuery = "Drawing: " + project.Title + ". "
+                    + string.Join(" ", geometry.Texts.Select(t => t.Text).Where(t => !string.IsNullOrWhiteSpace(t)).Take(20));
+
+                referenceContext = await _rag.BuildHistoryContextAsync(
+                    historyQuery.Length > 800 ? historyQuery[..800] : historyQuery,
+                    projectId,
+                    null,
+                    cancellationToken);
+            }
+
             var analysis = await _llm.AnalyzeAssemblyAsync(
                 new AssemblyAnalysisRequest
                 {
                     Tree = tree,
                     TreeJson = JsonSerializer.Serialize(tree, TreeJsonOptions),
                     DrawingTitle = project.Title,
+                    ReferenceContext = string.IsNullOrWhiteSpace(referenceContext) ? null : referenceContext,
                     Texts = geometry.Texts
                         .Select(t => t.Text)
                         .Concat(geometry.Dimensions.Select(d => d.Text ?? string.Empty))

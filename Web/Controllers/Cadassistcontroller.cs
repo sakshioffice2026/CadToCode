@@ -98,6 +98,7 @@ public class CadAssistController : Controller
     private const int MaxTemplateChars = 3000;
     private const int MaxCatalogChars = 1200;
     private const int MaxVisionChars = 1200;
+    private const int MaxHistoryContextChars = 2400;
 
     private static readonly byte[] PngSignature = { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A };
     private const int MinGeometryChars = 1200;
@@ -121,6 +122,7 @@ public class CadAssistController : Controller
     private readonly IWebSearchService _webSearch;
     private readonly LocalAiOptions _options;
     private readonly ILogger<CadAssistController> _logger;
+    private readonly ICadRagRetriever? _rag;
 
     public CadAssistController(
         ILocalAiService ai,
@@ -138,8 +140,10 @@ public class CadAssistController : Controller
         IEngineeringKnowledgeService knowledge,
         IWebSearchService webSearch,
         IOptions<LocalAiOptions> options,
-        ILogger<CadAssistController> logger)
+        ILogger<CadAssistController> logger,
+        ICadRagRetriever? rag = null)
     {
+        _rag = rag;
         _workflow = workflow;
         _designStore = designStore;
         _designState = designState;
@@ -584,6 +588,27 @@ public class CadAssistController : Controller
         if (visionSection.Length > 0)
         {
             geometryContext = geometryContext + Environment.NewLine + Environment.NewLine + visionSection;
+        }
+
+        if (!questionOnly && fewShotChars > 0 && _rag is { IsHistoryAvailable: true })
+        {
+            var historyQuery = (request.Prompt + " " + request.DrawingType).Trim();
+
+            var historyContext = await _rag.BuildHistoryContextAsync(
+                historyQuery,
+                projectId > 0 ? projectId : null,
+                null,
+                cancellationToken);
+
+            if (historyContext.Length > 0)
+            {
+                if (historyContext.Length > MaxHistoryContextChars)
+                {
+                    historyContext = historyContext[..MaxHistoryContextChars].TrimEnd();
+                }
+
+                geometryContext = geometryContext + Environment.NewLine + Environment.NewLine + historyContext;
+            }
         }
 
         var generation = new LocalAiGenerationRequest

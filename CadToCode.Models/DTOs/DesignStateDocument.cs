@@ -1,4 +1,6 @@
-﻿using System.Text.Json;
+﻿using System.Globalization;
+using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 
 namespace CadToCode.Models.Dtos;
@@ -75,6 +77,148 @@ public sealed class DesignStateDocument
     public List<DesignStateEdit> Edits { get; set; } = new();
 
     public string ToJson() => JsonSerializer.Serialize(this, JsonOptions);
+
+    /// <summary>
+    /// Serializes the design into a semantic summary string used as the text that is embedded
+    /// and stored as a searchable vector. Read-only: does not modify the design state.
+    /// Example: "Equipment: Centrifugal Fan. Subtype: Backward Curved Airfoil. Duty: Airflow 5 m3/s, ...
+    /// Geometry: Impeller OD 0.6033m, ... Performance: Tip Speed 45.8m/s, Shaft Power 8.33kW."
+    /// </summary>
+    public string ToEmbeddingText()
+    {
+        var sb = new StringBuilder();
+
+        var equipment = Classification?.EquipmentType;
+        if (!string.IsNullOrWhiteSpace(equipment) && !string.Equals(equipment, "Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            sb.Append("Equipment: ").Append(Humanize(equipment)).Append(". ");
+        }
+
+        var subtype = Classification?.TemplateTitle;
+        if (!string.IsNullOrWhiteSpace(subtype))
+        {
+            sb.Append("Subtype: ").Append(subtype.Trim()).Append(". ");
+        }
+
+        var values = Calculation?.Values ?? new List<DesignStateValue>();
+        var valueByKey = new Dictionary<string, DesignStateValue>(StringComparer.OrdinalIgnoreCase);
+        foreach (var v in values)
+        {
+            if (!string.IsNullOrWhiteSpace(v.Key))
+            {
+                valueByKey[v.Key] = v;
+            }
+        }
+
+        var duty = new List<string>();
+        foreach (var input in Inputs ?? new Dictionary<string, double>())
+        {
+            valueByKey.TryGetValue(input.Key, out var match);
+            var label = match is not null && !string.IsNullOrWhiteSpace(match.DisplayName)
+                ? match.DisplayName.Trim()
+                : Humanize(input.Key);
+            duty.Add(FormatQuantity(label, input.Value, match?.SiUnit, spaceBeforeUnit: true));
+        }
+
+        if (duty.Count > 0)
+        {
+            sb.Append("Duty: ").Append(string.Join(", ", duty)).Append(". ");
+        }
+
+        var geometry = new List<string>();
+        var performance = new List<string>();
+
+        foreach (var v in values)
+        {
+            if (Inputs is not null && Inputs.ContainsKey(v.Key))
+            {
+                continue;
+            }
+
+            var label = string.IsNullOrWhiteSpace(v.DisplayName) ? Humanize(v.Key) : v.DisplayName.Trim();
+            var unit = (v.SiUnit ?? string.Empty).Trim();
+
+            if (IsLengthUnit(unit))
+            {
+                geometry.Add(FormatQuantity(label, v.Value, unit, spaceBeforeUnit: false));
+            }
+            else
+            {
+                performance.Add(FormatQuantity(label, v.Value, unit, spaceBeforeUnit: false));
+            }
+        }
+
+        if (PartCounts is not null)
+        {
+            foreach (var part in PartCounts)
+            {
+                geometry.Add($"{Humanize(part.Key)} {part.Value.ToString(CultureInfo.InvariantCulture)}");
+            }
+        }
+
+        if (geometry.Count > 0)
+        {
+            sb.Append("Geometry: ").Append(string.Join(", ", geometry)).Append(". ");
+        }
+
+        if (performance.Count > 0)
+        {
+            sb.Append("Performance: ").Append(string.Join(", ", performance)).Append(". ");
+        }
+
+        return sb.ToString().Trim();
+    }
+
+    private static bool IsLengthUnit(string unit) =>
+        string.Equals(unit, "m", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(unit, "mm", StringComparison.OrdinalIgnoreCase);
+
+    private static string FormatQuantity(string label, double value, string? unit, bool spaceBeforeUnit)
+    {
+        var u = (unit ?? string.Empty).Trim();
+
+        if (string.Equals(u, "W", StringComparison.Ordinal) && Math.Abs(value) >= 1000d)
+        {
+            value /= 1000d;
+            u = "kW";
+        }
+
+        var number = Math.Round(value, 4).ToString("0.####", CultureInfo.InvariantCulture);
+        if (u.Length == 0)
+        {
+            return $"{label} {number}";
+        }
+
+        return spaceBeforeUnit ? $"{label} {number} {u}" : $"{label} {number}{u}";
+    }
+
+    private static string Humanize(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+        {
+            return string.Empty;
+        }
+
+        var sb = new StringBuilder(key.Length + 4);
+        for (var i = 0; i < key.Length; i++)
+        {
+            var c = key[i];
+            if (c == '_' || c == '-')
+            {
+                sb.Append(' ');
+                continue;
+            }
+
+            if (i > 0 && char.IsUpper(c) && (char.IsLower(key[i - 1]) || char.IsDigit(key[i - 1])))
+            {
+                sb.Append(' ');
+            }
+
+            sb.Append(i == 0 ? char.ToUpperInvariant(c) : c);
+        }
+
+        return sb.ToString().Trim();
+    }
 
     public static DesignStateDocument? FromJson(string? json)
     {
