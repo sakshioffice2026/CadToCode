@@ -154,7 +154,16 @@ public class ProjectProcessingService : IProjectProcessingService
                 var indexed = await _historyIndex.ListAsync(take, cancellationToken);
                 if (indexed.Count > 0)
                 {
-                    return indexed;
+                    var existing = (await _unitOfWork.Projects.ListHistoryAsync(null, cancellationToken))
+                        .Select(r => r.Id)
+                        .ToHashSet();
+
+                    indexed = indexed.Where(i => existing.Contains(i.Id)).ToList();
+
+                    if (indexed.Count > 0)
+                    {
+                        return indexed;
+                    }
                 }
             }
             catch (Exception ex) when (ex is not OperationCanceledException)

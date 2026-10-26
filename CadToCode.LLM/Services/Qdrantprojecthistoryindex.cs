@@ -269,7 +269,7 @@ public sealed class QdrantProjectHistoryIndex : IProjectHistoryIndex, IDisposabl
         return DateTime.Parse(
             value,
             CultureInfo.InvariantCulture,
-            DateTimeStyles.RoundtripKind | DateTimeStyles.AdjustToUniversal);
+            DateTimeStyles.RoundtripKind).ToUniversalTime();
     }
 
     private static string ReadString(IDictionary<string, Value> payload, string key)

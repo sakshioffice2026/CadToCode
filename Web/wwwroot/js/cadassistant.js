@@ -894,12 +894,22 @@
 
     var originalProjectId = projectId;
     var autoCreated = false;
+    var pendingAutoSave = false;
+    var autoSaveFailedNoted = false;
+    var editSaveTimer = null;
+    var savingSince = 0;
+    var lastSavedCode = null;
 
     function saveProject(auto) {
         auto = auto === true;
 
+        if (saving && Date.now() - savingSince > 60000) {
+            saving = false;
+        }
+
         if (saving) {
-            if (!auto) { addNote("Already saving\u2026"); }
+            if (auto) { pendingAutoSave = true; }
+            else { addNote("Already saving\u2026"); }
             return;
         }
 
@@ -956,8 +966,11 @@
         }
 
         saving = true;
+        savingSince = Date.now();
 
-        if (saveButton) {
+        var codeBeingSaved = editorInput ? editorInput.value : "";
+
+        if (saveButton && !auto) {
             saveButton.disabled = true;
         }
 
@@ -970,8 +983,15 @@
             .then(function (data) {
                 if (!data || !data.success) {
                     if (!auto) { addError((data && data.error) || "The chat could not be saved as a project."); }
+                    else if (!autoSaveFailedNoted) {
+                        autoSaveFailedNoted = true;
+                        addNote("Auto-save failed. Press Save to keep this chat.");
+                    }
                     return;
                 }
+
+                autoSaveFailedNoted = false;
+                lastSavedCode = codeBeingSaved;
 
                 if (data.created && data.projectId) {
                     writeStore("cadassistant:session:" + data.projectId, data.sessionId || sessionId);
@@ -996,6 +1016,10 @@
             })
             .catch(function () {
                 if (!auto) { addError("The chat could not be saved as a project."); }
+                else if (!autoSaveFailedNoted) {
+                    autoSaveFailedNoted = true;
+                    addNote("Auto-save failed. Press Save to keep this chat.");
+                }
             })
             .then(function () {
                 saving = false;
@@ -1003,7 +1027,27 @@
                 if (saveButton) {
                     saveButton.disabled = false;
                 }
+
+                if (pendingAutoSave) {
+                    pendingAutoSave = false;
+                    saveProject(true);
+                }
             });
+    }
+
+    if (editorInput) {
+        editorInput.addEventListener("input", function () {
+            if (projectId <= 0 && !(lastDrawingFile && lastDrawingFile.file)) {
+                return;
+            }
+
+            if (editorInput.value === lastSavedCode) {
+                return;
+            }
+
+            clearTimeout(editSaveTimer);
+            editSaveTimer = setTimeout(function () { saveProject(true); }, 1500);
+        });
     }
 
     function resetChat() {

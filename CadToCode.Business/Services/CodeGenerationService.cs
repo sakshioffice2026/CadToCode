@@ -91,6 +91,8 @@ public class CodeGenerationService : ICodeGenerationService
     {
         public string? Script { get; set; }
 
+        public string? Error { get; set; }
+
         public List<string> Warnings { get; set; } = new();
     }
 
@@ -107,12 +109,15 @@ public class CodeGenerationService : ICodeGenerationService
 
             var saved = JsonSerializer.Deserialize<PipelineSidecar>(json);
 
-            if (saved is null || string.IsNullOrWhiteSpace(saved.Script))
+            if (saved is null || (string.IsNullOrWhiteSpace(saved.Script) && string.IsNullOrWhiteSpace(saved.Error)))
             {
                 return null;
             }
 
-            return new ImagePipelineOutcome(saved.Script, saved.Warnings ?? new List<string>(), null);
+            return new ImagePipelineOutcome(
+                string.IsNullOrWhiteSpace(saved.Script) ? null : saved.Script,
+                saved.Warnings ?? new List<string>(),
+                string.IsNullOrWhiteSpace(saved.Script) ? saved.Error : null);
         }
         catch (OperationCanceledException)
         {
@@ -132,6 +137,7 @@ public class CodeGenerationService : ICodeGenerationService
             var json = JsonSerializer.Serialize(new PipelineSidecar
             {
                 Script = outcome.Script,
+                Error = outcome.Error,
                 Warnings = outcome.Warnings.ToList()
             });
 
@@ -267,7 +273,14 @@ public class CodeGenerationService : ICodeGenerationService
 
         if (!processed.Success)
         {
-            return RememberFailure(projectId, useCache, new ImagePipelineOutcome(null, processed.Warnings, processed.Error));
+            var failed = RememberFailure(projectId, useCache, new ImagePipelineOutcome(null, processed.Warnings, processed.Error ?? "The image could not be processed."));
+
+            if (useCache)
+            {
+                await WritePipelineSidecarAsync(path, failed, cancellationToken);
+            }
+
+            return failed;
         }
 
         var script = processed.Mode == DrawingProcessingMode.TemplateInjection
@@ -276,13 +289,20 @@ public class CodeGenerationService : ICodeGenerationService
 
         if (string.IsNullOrWhiteSpace(script))
         {
-            return RememberFailure(
+            var noMatch = RememberFailure(
                 projectId,
                 useCache,
                 new ImagePipelineOutcome(
                     null,
                     processed.Warnings,
                     "No verified template matched this image, so no geometry was generated. Pixel guessing is disabled for images. Upload a DXF file, or add a clearer drawing with dimension labels."));
+
+            if (useCache)
+            {
+                await WritePipelineSidecarAsync(path, noMatch, cancellationToken);
+            }
+
+            return noMatch;
         }
 
         var warnings = processed.Warnings.ToList();
@@ -617,14 +637,83 @@ public class CodeGenerationService : ICodeGenerationService
             return cached.Result;
         }
 
+        string? storedPath = null;
+
+        if (!hasKeyDimensions)
+        {
+            storedPath = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+
+            if (!useAi && !string.IsNullOrWhiteSpace(storedPath))
+            {
+                var saved = await ReadAssemblySidecarAsync(storedPath, cancellationToken);
+
+                if (saved is not null)
+                {
+                    saved.ProjectId = projectId;
+                    StoreInCache(projectId, saved);
+                    return saved;
+                }
+            }
+        }
+
         var built = await BuildAssemblyAsync(projectId, useAi, keyDimensions, cancellationToken);
 
         if (built.Success)
         {
             StoreInCache(projectId, built);
+
+            if (!hasKeyDimensions && !string.IsNullOrWhiteSpace(storedPath))
+            {
+                await WriteAssemblySidecarAsync(storedPath, built, cancellationToken);
+            }
         }
 
         return built;
+    }
+
+    private const string AssemblySidecarSuffix = ".assembly.json";
+
+    private async Task<AssemblyGenerationResult?> ReadAssemblySidecarAsync(string storedPath, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = await _storage.ReadTextAsync(storedPath + AssemblySidecarSuffix, cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return null;
+            }
+
+            var saved = JsonSerializer.Deserialize<AssemblyGenerationResult>(json, TreeJsonOptions);
+
+            return saved is { Success: true } ? saved : null;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The saved assembly could not be read.");
+            return null;
+        }
+    }
+
+    private async Task WriteAssemblySidecarAsync(string storedPath, AssemblyGenerationResult result, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var json = JsonSerializer.Serialize(result, TreeJsonOptions);
+            await _storage.WriteTextAsync(storedPath + AssemblySidecarSuffix, json, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "The assembly could not be saved for reuse.");
+        }
     }
 
     private static void StoreInCache(int projectId, AssemblyGenerationResult result)
@@ -788,6 +877,12 @@ public class CodeGenerationService : ICodeGenerationService
         SourceFileType fileType,
         CancellationToken cancellationToken)
     {
+        if (GeometryCache.TryGetValue(projectId, out var cachedGeometry)
+            && DateTime.UtcNow - cachedGeometry.StoredUtc < GeometryCacheLifetime)
+        {
+            return cachedGeometry.Geometry;
+        }
+
         var path = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
         if (string.IsNullOrWhiteSpace(path))
         {
@@ -800,8 +895,26 @@ public class CodeGenerationService : ICodeGenerationService
         await using var stream = await _storage.OpenReadAsync(path, cancellationToken)
             ?? throw new FileNotFoundException("The stored file could not be opened.");
 
-        return await extractor.ExtractAsync(stream, cancellationToken);
+        var extracted = await extractor.ExtractAsync(stream, cancellationToken);
+
+        GeometryCache[projectId] = (extracted, DateTime.UtcNow);
+
+        while (GeometryCache.Count > MaxCachedGeometries)
+        {
+            var oldest = GeometryCache.OrderBy(p => p.Value.StoredUtc).Select(p => p.Key).FirstOrDefault();
+            if (!GeometryCache.TryRemove(oldest, out _))
+            {
+                break;
+            }
+        }
+
+        return extracted;
     }
+
+    private const int MaxCachedGeometries = 20;
+    private static readonly TimeSpan GeometryCacheLifetime = TimeSpan.FromMinutes(10);
+
+    private static readonly ConcurrentDictionary<int, (ExtractedGeometry Geometry, DateTime StoredUtc)> GeometryCache = new();
 
     private static bool IsSupported(ComponentType type)
     {

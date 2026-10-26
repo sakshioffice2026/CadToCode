@@ -639,7 +639,7 @@
                         notify("3D view failed: " + (viewerError && viewerError.message ? viewerError.message : "unknown error"));
                     }
 
-                    if (result.stepContent) {
+                    if (forceDownload && result.stepContent) {
                         downloadStep(result.stepContent, result.fileName);
                         notify("Downloaded " + ensureStepName(result.fileName));
                     }
@@ -673,12 +673,22 @@
         }
 
         if (runButton) {
-            runButton.addEventListener("click", function () { run(true); });
+            runButton.addEventListener("click", function () { run(false); });
         }
 
         if (downloadButton) {
             downloadButton.addEventListener("click", download);
         }
+
+        document.querySelectorAll('[data-cc-open="cc-modal-3d"]').forEach(function (opener) {
+            opener.addEventListener("click", function () {
+                if (busy || (lastResult && lastResult.success && lastCode === source.value)) {
+                    return;
+                }
+
+                run(false);
+            });
+        });
 
         if (resetButton) {
             resetButton.addEventListener("click", function () {

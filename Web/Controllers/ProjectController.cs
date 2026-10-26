@@ -2,6 +2,7 @@
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Web.Models;
 
@@ -21,24 +22,31 @@ public class ProjectController : Controller
     private const int MaxFilesPerBatch = 20;
     private const long MaxBatchBytes = 524_288_000;
 
+    private const int MaxCachedRuns = 50;
+
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, SandboxRunResult> RunCache = new();
+
     private readonly IProjectProcessingService _processingService;
     private readonly ICodeGenerationService _codeGenerationService;
     private readonly IDefinitionLearningService _learningService;
     private readonly IStepScriptRunner _stepScriptRunner;
     private readonly ILogger<ProjectController> _logger;
+    private readonly IServiceScopeFactory _scopeFactory;
 
     public ProjectController(
         IProjectProcessingService processingService,
         ICodeGenerationService codeGenerationService,
         IDefinitionLearningService learningService,
         IStepScriptRunner stepScriptRunner,
-        ILogger<ProjectController> logger)
+        ILogger<ProjectController> logger,
+        IServiceScopeFactory scopeFactory)
     {
         _processingService = processingService;
         _codeGenerationService = codeGenerationService;
         _learningService = learningService;
         _stepScriptRunner = stepScriptRunner;
         _logger = logger;
+        _scopeFactory = scopeFactory;
     }
 
     [HttpGet]
@@ -183,7 +191,19 @@ public class ProjectController : Controller
             return RedirectToAction(nameof(Details), new { id });
         }
 
-        await _processingService.MarkOpenedAsync(id, cancellationToken);
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                var service = scope.ServiceProvider.GetRequiredService<IProjectProcessingService>();
+                await service.MarkOpenedAsync(id, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Project {ProjectId} could not be marked as opened.", id);
+            }
+        });
 
         var code = await _codeGenerationService.GenerateAsync(id, cancellationToken, keyDimensions);
 
@@ -244,7 +264,31 @@ public class ProjectController : Controller
     [RequestSizeLimit(262_144)]
     public async Task<IActionResult> RunCode([FromBody] RunCodeRequest? request, CancellationToken cancellationToken)
     {
-        var result = await _stepScriptRunner.RunAsync(request?.Code, cancellationToken);
+        var code = request?.Code;
+        string? cacheKey = null;
+
+        if (!string.IsNullOrWhiteSpace(code))
+        {
+            cacheKey = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(code)));
+
+            if (RunCache.TryGetValue(cacheKey, out var cachedRun))
+            {
+                return Json(cachedRun);
+            }
+        }
+
+        var result = await _stepScriptRunner.RunAsync(code, cancellationToken);
+
+        if (cacheKey is not null && result is not null && result.Success)
+        {
+            if (RunCache.Count >= MaxCachedRuns)
+            {
+                RunCache.Clear();
+            }
+
+            RunCache[cacheKey] = result;
+        }
+
         return Json(result);
     }
 

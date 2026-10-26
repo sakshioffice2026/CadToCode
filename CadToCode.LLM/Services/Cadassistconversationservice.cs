@@ -359,7 +359,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
 
         var quick = CadAssistIntentParser.Parse(text, schema, AwaitingScope(current.Stage));
 
-        if (quick.HasAnyAction || quick.UnrecognizedAssignments.Count > 0)
+        if (quick.HasAnyAction || quick.UnrecognizedAssignments.Count > 0 || IsExplicitGenerateRequest(text))
         {
             return null;
         }
@@ -412,7 +412,8 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             MergeLlm(intent, llm, rejected);
         }
 
-        var explicitGenerate = IsExplicitGenerateRequest(prompt);
+        var explicitGenerate = IsExplicitGenerateRequest(prompt)
+                               || (intent.HasGenerateCue && (intent.FullAssembly || intent.ComponentKeys.Count > 0));
 
         if (explicitGenerate && !intent.HasParameters)
         {
@@ -833,7 +834,9 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
 
         var ordered = scored.OrderByDescending(x => x.Score).ToList();
 
-        if (ordered.Count > 1 && ordered[0].Score == ordered[1].Score)
+        if (ordered.Count > 1
+            && ordered[0].Score == ordered[1].Score
+            && !string.Equals(ordered[0].Template.Category, ordered[1].Template.Category, StringComparison.OrdinalIgnoreCase))
         {
             return null;
         }
