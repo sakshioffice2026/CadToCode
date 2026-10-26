@@ -350,7 +350,7 @@ public static class EquipmentRegistry
                 "CYCLONE",
                 "Cyclone Separator",
                 "Reverse-flow cyclone separator for gas-solid separation.",
-                CalculatorStatus.NotImplemented,
+                CalculatorStatus.Preview,
                 new[]
                 {
                     new ParameterDescriptor("airflow_m3s", "Gas Flow", "m3/s", true, "Inlet gas volumetric flow."),

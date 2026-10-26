@@ -142,7 +142,8 @@ public sealed class AxialFanDesignFlow : IEquipmentDesignFlow
             }
 
             text.AppendLine();
-            text.Append("For example: `airflow 5 m3/s, static pressure 450 Pa, speed 1450 rpm`.");
+            text.AppendLine("For example: `airflow 5 m3/s, static pressure 450 Pa, speed 1450 rpm`.");
+            text.Append("Or say `use defaults` and I will fill the axial fan with its standard engineering defaults (5 m3/s, 450 Pa, 1450 rpm, 80 mm blade chord, 4 mm blade thickness, 25 deg pitch).");
 
             return Turn(values, text, EquipmentDesignTurn.StatusNeedInputs, missing);
         }
@@ -243,7 +244,7 @@ public sealed class AxialFanDesignFlow : IEquipmentDesignFlow
         if (!request.GenerateRequested)
         {
             text.AppendLine();
-            text.Append("Everything needed is set. Say `generate` and I will build one script per part (casing, hub and blades).");
+            text.Append("Sizing is validated against the axial fan rule pack. Choose what to do next: view the component breakdown, generate individual part scripts (casing, hub, blades), or generate the full assembly STEP file.");
 
             return Turn(values, text, EquipmentDesignTurn.StatusCalculated, warnings: warnings);
         }

@@ -53,10 +53,17 @@ builder.Services.AddScoped<IDesignSessionStore, DesignSessionStore>();
 // Core registers the concrete EquipmentCalculatorRegistry only; expose it through its interface.
 builder.Services.AddSingleton<IEquipmentCalculatorRegistry>(sp => sp.GetRequiredService<EquipmentCalculatorRegistry>());
 
-// Centrifugal fan: part script builder, builder registry and design flow.
+// Part script builders: fans build from script composers, cyclone and wet scrubber build from manifest templates.
 builder.Services.AddSingleton<IPartScriptBuilder, CentrifugalFanPartScriptBuilder>();
+builder.Services.AddSingleton<IPartScriptBuilder, AxialFanPartScriptBuilder>();
+builder.Services.AddSingleton<IPartScriptBuilder, TemplatePartScriptBuilder>();
 builder.Services.AddSingleton<IPartScriptBuilderRegistry, PartScriptBuilderRegistry>();
+
+// One design flow per equipment type, each with its own rule pack and prompts.
 builder.Services.AddScoped<IEquipmentDesignFlow, CentrifugalFanDesignFlow>();
+builder.Services.AddScoped<IEquipmentDesignFlow, AxialFanDesignFlow>();
+builder.Services.AddScoped<IEquipmentDesignFlow, CycloneDesignFlow>();
+builder.Services.AddScoped<IEquipmentDesignFlow, WetScrubberDesignFlow>();
 builder.Services.AddScoped<IEquipmentDesignDispatcher, EquipmentDesignDispatcher>();
 
 // Web search is advisory only. Tavily is used when configured, otherwise DuckDuckGo.

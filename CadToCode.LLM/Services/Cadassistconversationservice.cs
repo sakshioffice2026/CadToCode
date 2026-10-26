@@ -1411,7 +1411,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
                 s.Stage = EquipmentSessionStage.None;
                 s.PendingSourceFileName = null;
                 s.ProposedManifestId = null;
-                s.OfferedManifestIds = new List<string>();
+                s.OfferedManifestIds.Clear();
             });
 
             return false;

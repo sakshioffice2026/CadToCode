@@ -1734,9 +1734,13 @@ public class CadAssistController : Controller
         long faces = 0;
         long elapsed = 0;
 
-        foreach (var block in blocks)
+        // Scripts are verified in parallel. The sandbox runner limits how many run at once, so this only removes idle waiting.
+        var results = await Task.WhenAll(blocks.Select(item => VerifyBlockAsync(item, cancellationToken)));
+
+        for (var index = 0; index < blocks.Count; index++)
         {
-            var result = await VerifyBlockAsync(block, cancellationToken);
+            var block = blocks[index];
+            var result = results[index];
 
             if (result.Verified)
             {

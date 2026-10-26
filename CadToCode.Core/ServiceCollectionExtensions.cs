@@ -36,10 +36,13 @@ public static class ServiceCollectionExtensions
 
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, AxialFanCalculator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, CentrifugalFanCalculator>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, CycloneCalculator>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<IEquipmentCalculator, WetScrubberCalculator>());
         services.TryAddSingleton<EquipmentCalculatorRegistry>();
 
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICalculatorTemplateMapper, AxialFanTemplateMapper>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICalculatorTemplateMapper, CentrifugalFanTemplateMapper>());
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<ICalculatorTemplateMapper, CycloneTemplateMapper>());
         services.TryAddEnumerable(ServiceDescriptor.Singleton<ICalculatorTemplateMapper, WetScrubberTemplateMapper>());
         services.TryAddSingleton<ICalculatorTemplateMapperRegistry, CalculatorTemplateMapperRegistry>();
 

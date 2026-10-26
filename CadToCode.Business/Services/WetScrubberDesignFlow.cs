@@ -133,7 +133,8 @@ public sealed class WetScrubberDesignFlow : IEquipmentDesignFlow
             }
 
             text.AppendLine();
-            text.Append("For example: `gas flow 2 m3/s`. Optional: `superficial velocity 2 m/s, residence time 2 s, wall 8 mm, L/G ratio 2 l/m3`.");
+            text.AppendLine("For example: `gas flow 2 m3/s`. Optional: `superficial velocity 2 m/s, residence time 2 s, wall 8 mm, L/G ratio 2 l/m3`.");
+            text.Append("Or say `use defaults` and I will fill the wet scrubber with its standard engineering defaults (2 m3/s gas flow, 1.2 m/s gas velocity, 2 s residence time, 2 l/m3 liquid to gas ratio).");
 
             return Turn(values, text, EquipmentDesignTurn.StatusNeedInputs, missing);
         }
@@ -238,7 +239,7 @@ public sealed class WetScrubberDesignFlow : IEquipmentDesignFlow
         if (!request.GenerateRequested)
         {
             text.AppendLine();
-            text.Append("Everything needed is set. Say `generate` and I will build one script per part (vessel shell with conical bottom, top cover, gas outlet stack, drain pipe and side gas inlet), or say `generate assembly` for one combined STEP file.");
+            text.Append("Sizing is validated against the wet scrubber rule pack. Choose what to do next: view the component breakdown, generate individual part scripts (vessel shell with conical bottom, top cover, gas outlet stack, drain pipe, side gas inlet), or generate the full assembly STEP file.");
 
             return Turn(values, text, EquipmentDesignTurn.StatusCalculated, warnings: warnings);
         }
