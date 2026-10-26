@@ -106,6 +106,32 @@
         </div>
     </section>
 
+    <section id="cc-zoo-viewer-panel" class="cc-panel" aria-labelledby="cc-zoo-viewer-title">
+        <div class="cc-panel-header cc-zoo-viewer-header">
+            <h2 class="cc-panel-title" id="cc-zoo-viewer-title">3D Preview</h2>
+            <span class="cc-zoo-badge" data-zoo-viewer-status role="status">No model loaded</span>
+        </div>
+
+        <div class="cc-panel-body">
+            <div class="cc-zoo-viewer" id="cc-zoo-viewer" data-zoo-viewer>
+                <div class="cc-zoo-viewer-empty" data-zoo-viewer-empty>
+                    <p class="cc-empty-title">No 3D model yet</p>
+                    <p class="mb-0">Generate a STEP model or open a .step file to see it here.</p>
+                </div>
+            </div>
+
+            <div class="cc-zoo-viewer-toolbar">
+                <button type="button" class="cc-btn cc-btn-small cc-btn-ghost" data-zoo-viewer-fit>Fit view</button>
+                <button type="button" class="cc-btn cc-btn-small cc-btn-ghost" data-zoo-viewer-wire>Wireframe</button>
+                <label class="cc-btn cc-btn-small cc-btn-ghost cc-zoo-viewer-open">
+                    Open STEP file
+                    <input type="file" accept=".step,.stp" data-zoo-viewer-file hidden />
+                </label>
+                <span class="cc-zoo-viewer-hint">Drag to rotate &middot; right-drag to pan &middot; scroll to zoom</span>
+            </div>
+        </div>
+    </section>
+
     <section class="cc-panel" aria-labelledby="cc-zoo-history-title">
         <div class="cc-panel-header">
             <h2 class="cc-panel-title" id="cc-zoo-history-title">Recent generations</h2>
@@ -135,6 +161,14 @@
                                 <span class="cc-zoo-badge cc-zoo-badge-@job.Status">@StatusLabel(job.Status)</span>
                                 @foreach (var file in job.Files)
                                 {
+                                    @if (file.Name.EndsWith(".step", StringComparison.OrdinalIgnoreCase) || file.Name.EndsWith(".stp", StringComparison.OrdinalIgnoreCase))
+                                    {
+                                        <button type="button"
+                                                class="cc-btn cc-btn-primary cc-btn-small"
+                                                data-zoo-view
+                                                data-id="@job.Id"
+                                                data-name="@file.Name">View 3D</button>
+                                    }
                                     <a class="cc-btn cc-btn-ghost cc-btn-small"
                                        asp-controller="Zoo"
                                        asp-action="Download"
@@ -151,5 +185,13 @@
 </div>
 
 @section Scripts {
+    <script src="~/lib/three/three.min.js"></script>
+    <script>
+        window.THREE || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+    </script>
+    <script>
+        window.THREE || document.write('<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"><\/script>');
+    </script>
+    <script src="~/js/zoo-viewer.js" asp-append-version="true"></script>
     <script src="~/js/zoo.js" asp-append-version="true"></script>
 }

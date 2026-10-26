@@ -55,6 +55,40 @@
         submitButton.textContent = busy ? "Generating..." : "Generate model";
     }
 
+    var lastPreviewedJob = "";
+    var viewerPanel = document.getElementById("cc-zoo-viewer-panel");
+
+    function fileUrl(id, name) {
+        return downloadUrl + "?id=" + encodeURIComponent(id) + "&name=" + encodeURIComponent(name);
+    }
+
+    function isStep(name) {
+        return /\.(step|stp)$/i.test(name || "");
+    }
+
+    function previewStep(id, name, scroll) {
+        if (!window.CcZooViewer) {
+            return;
+        }
+
+        lastPreviewedJob = id;
+        window.CcZooViewer.loadUrl(fileUrl(id, name), name);
+
+        if (scroll && viewerPanel) {
+            viewerPanel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
+    }
+
+    document.addEventListener("click", function (event) {
+        var button = event.target.closest ? event.target.closest("[data-zoo-view]") : null;
+
+        if (!button) {
+            return;
+        }
+
+        previewStep(button.getAttribute("data-id"), button.getAttribute("data-name"), true);
+    });
+
     function statusLabel(status) {
         switch (status) {
             case "completed": return "Done";
@@ -76,17 +110,37 @@
 
         filesEl.textContent = "";
 
+        var stepFile = null;
+
         (job.files || []).forEach(function (file) {
             var item = document.createElement("li");
             var link = document.createElement("a");
 
             link.className = "cc-btn cc-btn-primary cc-btn-small";
-            link.href = downloadUrl + "?id=" + encodeURIComponent(job.id) + "&name=" + encodeURIComponent(file.name);
+            link.href = fileUrl(job.id, file.name);
             link.textContent = "Download " + file.name;
 
             item.appendChild(link);
+
+            if (isStep(file.name)) {
+                stepFile = stepFile || file;
+
+                var view = document.createElement("button");
+                view.type = "button";
+                view.className = "cc-btn cc-btn-ghost cc-btn-small";
+                view.textContent = "View 3D";
+                view.addEventListener("click", function () {
+                    previewStep(job.id, file.name, true);
+                });
+                item.appendChild(view);
+            }
+
             filesEl.appendChild(item);
         });
+
+        if (job.status === "completed" && stepFile && lastPreviewedJob !== job.id) {
+            previewStep(job.id, stepFile.name, false);
+        }
 
         if (job.kcl) {
             codeEl.textContent = job.kcl;
