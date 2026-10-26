@@ -380,6 +380,16 @@
                     curveSegments: 24
                 });
                 geometry.translate(0, 0, solid.z || 0);
+
+                if (solid.frame && solid.frame.origin && solid.frame.xAxis && solid.frame.yAxis && solid.frame.zAxis) {
+                    var f = solid.frame;
+                    var basis = new THREE.Matrix4().makeBasis(
+                        new THREE.Vector3(f.xAxis[0], f.xAxis[1], f.xAxis[2]),
+                        new THREE.Vector3(f.yAxis[0], f.yAxis[1], f.yAxis[2]),
+                        new THREE.Vector3(f.zAxis[0], f.zAxis[1], f.zAxis[2]));
+                    basis.setPosition(f.origin[0], f.origin[1], f.origin[2]);
+                    geometry.applyMatrix4(basis);
+                }
             } else if (solid.type === "revolve" && solid.outer && solid.outer.length >= 3) {
                 geometry = new THREE.LatheGeometry(toVector(solid.outer), 64);
                 geometry.rotateX(Math.PI / 2);

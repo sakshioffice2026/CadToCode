@@ -37,6 +37,14 @@ public class SandboxBounds
     public double Depth => MaxZ - MinZ;
 }
 
+public class SandboxFrame
+{
+    public double[] Origin { get; set; } = new double[3];
+    public double[] XAxis { get; set; } = new double[] { 1, 0, 0 };
+    public double[] YAxis { get; set; } = new double[] { 0, 1, 0 };
+    public double[] ZAxis { get; set; } = new double[] { 0, 0, 1 };
+}
+
 public class SandboxSolid
 {
     public string Type { get; set; } = string.Empty;
@@ -63,6 +71,9 @@ public class SandboxSolid
 
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? Height { get; set; }
+
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SandboxFrame? Frame { get; set; }
 }
 
 public class SandboxRunResult

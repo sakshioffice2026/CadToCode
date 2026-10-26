@@ -412,6 +412,47 @@ public sealed class StepScriptRunner : IStepScriptRunner
             }
         }
 
+        if (solid is ExtrudedProfileSolid tilted)
+        {
+            var tiltedProfile = tilted.Profile;
+            var tiltedBounds = tiltedProfile.Bounds;
+            var tiltedDeviation = Math.Max(
+                ProfileLoop.DefaultFlattenDeviation,
+                Math.Max(tiltedBounds.MaxX - tiltedBounds.MinX, tiltedBounds.MaxY - tiltedBounds.MinY) / 400.0);
+
+            var tiltedOuter = tiltedProfile.FlattenOuter(tiltedDeviation);
+            var tiltedHoles = tiltedProfile.FlattenHoles(tiltedDeviation);
+            var tiltedCount = tiltedOuter.Count + tiltedHoles.Sum(h => h.Count);
+
+            if (tiltedOuter.Count >= 3 && previewPoints + tiltedCount <= MaxTotalPoints)
+            {
+                previewPoints += tiltedCount;
+
+                var placement = tilted.WorldFrame;
+
+                result.Solids.Add(new SandboxSolid
+                {
+                    Type = "prism",
+                    Name = tilted.Name,
+                    Z = 0,
+                    Depth = tilted.Depth,
+                    Outer = tiltedOuter.Select(p => new SandboxPoint { X = p.X, Y = p.Y }).ToList(),
+                    Holes = tiltedHoles
+                        .Select(h => h.Select(p => new SandboxPoint { X = p.X, Y = p.Y }).ToList())
+                        .ToList(),
+                    Frame = new SandboxFrame
+                    {
+                        Origin = new[] { placement.Origin.X, placement.Origin.Y, placement.Origin.Z },
+                        XAxis = new[] { placement.XAxis.X, placement.XAxis.Y, placement.XAxis.Z },
+                        YAxis = new[] { placement.YAxis.X, placement.YAxis.Y, placement.YAxis.Z },
+                        ZAxis = new[] { placement.ZAxis.X, placement.ZAxis.Y, placement.ZAxis.Z }
+                    }
+                });
+
+                return true;
+            }
+        }
+
         var box = solid.Bounds;
 
         result.Solids.Add(new SandboxSolid

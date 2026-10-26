@@ -58,10 +58,15 @@
                         @foreach (var c in components)
                         {
                             var formId = $"cc-edit-{c.Id}";
+                            var fromStep = string.Equals(c.Layer, "STEP", StringComparison.Ordinal);
 
                             <tr data-cc-row>
                                 <th scope="row">
                                     <span>@c.Name</span>
+                                    @if (fromStep)
+                                    {
+                                        <span class="cc-chip cc-chip-muted">From 3D model</span>
+                                    }
                                     @if (c.IsManuallyEdited)
                                     {
                                         <span class="cc-chip cc-chip-muted">Edited</span>
@@ -153,9 +158,12 @@
                                 </td>
 
                                 <td>
-                                    <button type="button" class="cc-btn cc-btn-ghost cc-btn-small" data-cc-edit-start data-cc-view>Edit</button>
-                                    <button type="submit" form="@formId" class="cc-btn cc-btn-primary cc-btn-small" data-cc-edit hidden>Save</button>
-                                    <button type="button" class="cc-btn cc-btn-ghost cc-btn-small" data-cc-edit-cancel data-cc-edit hidden>Cancel</button>
+                                    @if (!fromStep)
+                                    {
+                                        <button type="button" class="cc-btn cc-btn-ghost cc-btn-small" data-cc-edit-start data-cc-view>Edit</button>
+                                        <button type="submit" form="@formId" class="cc-btn cc-btn-primary cc-btn-small" data-cc-edit hidden>Save</button>
+                                        <button type="button" class="cc-btn cc-btn-ghost cc-btn-small" data-cc-edit-cancel data-cc-edit hidden>Cancel</button>
+                                    }
                                 </td>
                             </tr>
                         }
@@ -163,7 +171,7 @@
                 </table>
             </div>
 
-            @foreach (var c in components)
+            @foreach (var c in components.Where(x => !string.Equals(x.Layer, "STEP", StringComparison.Ordinal)))
             {
                 <form id="cc-edit-@c.Id" asp-controller="Project" asp-action="UpdateComponent" method="post">
                     <input type="hidden" name="Id" value="@c.Id" />

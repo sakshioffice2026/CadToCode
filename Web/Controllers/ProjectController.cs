@@ -217,6 +217,42 @@ public class ProjectController : Controller
             ? await _codeGenerationService.GenerateAssemblyAsync(id, false, cancellationToken, keyDimensions)
             : new AssemblyGenerationResult { ProjectId = id };
 
+        if (project.Status == ProjectStatus.Processed)
+        {
+            var needsComponents = project.Components.Count == 0;
+            var needsTree = !assembly.Success || assembly.Tree.Nodes.Count == 0;
+
+            if (needsComponents || needsTree)
+            {
+                var step = await AnalyzeStepAsync(id, code, cancellationToken);
+
+                if (step is not null)
+                {
+                    if (needsComponents && step.Components.Count > 0)
+                    {
+                        foreach (var component in step.Components)
+                        {
+                            component.ProjectId = id;
+                        }
+
+                        project.Components = step.Components;
+                    }
+
+                    if (needsTree && step.Tree.Nodes.Count > 0)
+                    {
+                        assembly = new AssemblyGenerationResult
+                        {
+                            Success = true,
+                            ProjectId = id,
+                            Tree = step.Tree,
+                            Source = AssemblyCodeSource.Deterministic,
+                            Confidence = 0.9m
+                        };
+                    }
+                }
+            }
+        }
+
         return View(DetailsViewPath, new ProjectResultViewModel
         {
             Project = project,
@@ -369,6 +405,58 @@ public class ProjectController : Controller
         };
 
         return File(stream, contentType, project.OriginalFileName);
+    }
+
+    private async Task<CadToCode.Step.StepAnalysisResult?> AnalyzeStepAsync(int projectId, string? code, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+        {
+            return null;
+        }
+
+        try
+        {
+            var cacheKey = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(code)));
+
+            if (!RunCache.TryGetValue(cacheKey, out var run))
+            {
+                run = await _stepScriptRunner.RunAsync(code, cancellationToken);
+
+                if (run is not null && run.Success)
+                {
+                    if (RunCache.Count >= MaxCachedRuns)
+                    {
+                        RunCache.Clear();
+                    }
+
+                    RunCache[cacheKey] = run;
+                }
+            }
+
+            if (run is null || !run.Success || string.IsNullOrWhiteSpace(run.StepContent))
+            {
+                return null;
+            }
+
+            var analysis = CadToCode.Step.StepGeometryAnalyzer.Analyze(run.StepContent, projectId);
+
+            if (!analysis.Success)
+            {
+                _logger.LogInformation("STEP analysis for project {ProjectId} produced no result: {Reason}", projectId, analysis.Error);
+                return null;
+            }
+
+            return analysis;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "STEP analysis for project {ProjectId} failed.", projectId);
+            return null;
+        }
     }
 
     private static bool HasNegativeValue(KeyDimensionsDto? keys)
