@@ -2,8 +2,10 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using CadToCode.Core.Calculators;
 using CadToCode.Core.Domain;
 using CadToCode.Core.Manifests;
+using CadToCode.Core.Mapping;
 using CadToCode.LLM.Interfaces;
 using CadToCode.LLM.Memory;
 using CadToCode.LLM.Templates;
@@ -104,10 +106,56 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(250));
 
-    // Design progress must outlive a single request, and this service is scoped, so the map is static.
-    private static readonly ConcurrentDictionary<DesignSessionKey, DesignSessionState> DesignSessions = new();
+    // Each equipment type keeps its own conversation state. The store outlives a single request.
+    // The fallback is used only when no store is registered in dependency injection.
+    private static readonly EquipmentConversationStore SharedFallbackStore = new();
+
+    private static readonly Regex UseDefaultsRegex = new(
+        @"\b(use|apply|accept|take|go with|go for|load|fill)\b.{0,24}\bdefaults?\b|\bdefault\s+(values|dimensions|settings)\b|^\s*defaults?\s*[.!]?\s*$|\bstandard\s+(values|defaults)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex ConfirmRegex = new(
+        @"^\s*(yes|yep|yeah|y|correct|right|confirmed?|that'?s right|that is right|it is|it's|ok|okay|sure)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex GenericFanWordRegex = new(
+        @"\b(fan|fans|blower|blowers|ventilator)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex SpecificFanWordRegex = new(
+        @"\b(axial|propeller|tube\s*axial|tubeaxial|vane\s*axial|vaneaxial|centrifugal|radial|scroll|squirrel|sirocco|plug|forward|backward|airfoil|aerofoil|paddle)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex BreakdownRegex = new(
+        @"\b(breakdown|break down|components?|parts?\s+list|list\s+(?:the\s+)?parts|what\s+parts|view\s+(?:the\s+)?(?:parts|components?)|show\s+(?:me\s+)?(?:the\s+)?(?:parts|components?))\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex PartScriptsRegex = new(
+        @"\b(individual|separate|each|per)\s+(part|parts|component|components)\b|\bpart\s+scripts?\b|\bscripts?\s+(?:for|of)\s+(?:each|every|all)\s+parts?\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex ChangeValuesRegex = new(
+        @"\b(change|modify|edit|update|adjust|revise|redo|resize)\b.{0,24}\b(value|values|input|inputs|dimension|dimensions|duty|parameter|parameters)\b|^\s*(change|modify)\s*$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private static readonly Regex WordSplitRegex = new(
+        @"[^a-z0-9]+",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
+    private const string GenerateHintMarker = "Everything needed is set.";
+
+    private const string NextActionQuestion = "What would you like to do next?";
 
     private readonly IReadOnlyList<IEquipmentDesignFlow> _designFlows;
+    private readonly IEquipmentConversationStore _equipment;
 
     public CadAssistConversationService(
         ICadAssistSessionStore store,
@@ -115,7 +163,8 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         IChatMemoryStore memory,
         ILlmParameterExtractor extractor,
         IEquipmentManifestRegistry? manifests = null,
-        IEnumerable<IEquipmentDesignFlow>? designFlows = null)
+        IEnumerable<IEquipmentDesignFlow>? designFlows = null,
+        IEquipmentConversationStore? equipmentStore = null)
     {
         _store = store;
         _matcher = matcher;
@@ -123,6 +172,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         _extractor = extractor;
         _manifests = manifests;
         _designFlows = designFlows?.ToList() ?? new List<IEquipmentDesignFlow>();
+        _equipment = equipmentStore ?? SharedFallbackStore;
     }
 
     public bool HasActiveTemplate(int projectId, string sessionId)
@@ -133,7 +183,8 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
     public bool IsDesignActive(int projectId, string sessionId)
     {
         return !string.IsNullOrWhiteSpace(sessionId)
-               && DesignSessions.ContainsKey(new DesignSessionKey(projectId, sessionId));
+               && (_equipment.IsActive(projectId, sessionId)
+                   || _equipment.IsAwaitingEquipmentType(projectId, sessionId));
     }
 
     public bool CanRouteToDesign(int projectId, string sessionId, string? prompt)
@@ -162,6 +213,35 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         CadAssistUploadInput input,
         CancellationToken cancellationToken = default)
     {
+        // An image never goes straight to template matching or sizing. The equipment type is confirmed first.
+        var identification = BeginImageIdentification(input);
+
+        if (identification is not null)
+        {
+            _store.Update(input.ProjectId, input.SessionId, s =>
+            {
+                s.SourceFileName = input.FileName;
+                s.SourceIsImage = input.IsImage;
+
+                if (input.Vision is not null)
+                {
+                    s.SetVisionData(
+                        input.Vision.Views.Select(v => new DetectedViewInfo { Name = v.Name, Description = v.Description }),
+                        input.Vision.Uncertainties.Concat(input.Vision.Warnings));
+                }
+
+                s.TemplateKey = null;
+                s.TemplateTitle = null;
+                s.Stage = CadAssistStage.Uploaded;
+            });
+
+            AppendUser(input.ProjectId, input.SessionId, "Uploaded " + input.FileName +
+                (string.IsNullOrWhiteSpace(input.Prompt) ? string.Empty : ": " + input.Prompt.Trim()));
+
+            _memory.Append(input.ProjectId, input.SessionId, identification);
+            return identification;
+        }
+
         var match = await _matcher.MatchAsync(
             input.Project,
             input.Tree,
@@ -295,7 +375,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         if (CadAssistIntentParser.Parse(text, null).Reset)
         {
             _store.Reset(projectId, sessionId);
-            DesignSessions.TryRemove(new DesignSessionKey(projectId, sessionId), out _);
+            _equipment.Reset(projectId, sessionId);
 
             var cleared = CadAssistReplyBuilder.BuildNoTemplate();
             cleared.Content = "Session cleared.\n\n" + cleared.Content;
@@ -1307,33 +1387,74 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             return false;
         }
 
-        var key = new DesignSessionKey(projectId, sessionId);
-        DesignSessions.TryGetValue(key, out var active);
+        var session = _equipment.Get(projectId, sessionId);
+
+        // Step 1: an image is waiting for the user to name the equipment type.
+        if (session.Stage == EquipmentSessionStage.AwaitingEquipmentType)
+        {
+            var answered = AnswerEquipmentQuestion(projectId, sessionId, text, session, out reply);
+
+            if (answered)
+            {
+                return true;
+            }
+
+            if (reply is not null)
+            {
+                return true;
+            }
+
+            // The answer names equipment this assistant does not design from calculator inputs.
+            // Leave the question and let the template pipeline handle it.
+            _equipment.Update(projectId, sessionId, s =>
+            {
+                s.Stage = EquipmentSessionStage.None;
+                s.PendingSourceFileName = null;
+                s.ProposedManifestId = null;
+                s.OfferedManifestIds = new List<string>();
+            });
+
+            return false;
+        }
+
+        var activeManifestId = session.Stage == EquipmentSessionStage.Active ? session.ActiveManifestId : null;
 
         var route = ResolveDesignRoute(text);
         var manifest = route.Manifest;
         var flow = route.Flow;
 
-        // A message that names different equipment with no design flow (for example a wet scrubber)
-        // must not be answered by the active design session of another equipment (for example a centrifugal fan).
-        if (manifest is null && active is not null && _manifests is not null)
+        // While one equipment is being designed, a loose word such as "fan" must not switch it.
+        // Only a clear equipment name that differs from the active equipment switches the conversation.
+        if (activeManifestId is not null && manifest is not null
+            && !string.Equals(manifest.Id, activeManifestId, StringComparison.OrdinalIgnoreCase)
+            && !NamesEquipmentClearly(text, manifest))
+        {
+            manifest = null;
+            flow = null;
+        }
+
+        // A message that names different equipment with no design flow (for example a pressure vessel)
+        // must not be answered by the active design of another equipment.
+        if (manifest is null && activeManifestId is not null && _manifests is not null)
         {
             var named = _manifests.ResolveDetailed(text);
 
             if (named.IsResolved
                 && named.Manifest is not null
-                && !string.Equals(named.Manifest.Id, active.ManifestId, StringComparison.OrdinalIgnoreCase))
+                && !string.Equals(named.Manifest.Id, activeManifestId, StringComparison.OrdinalIgnoreCase)
+                && NamesEquipmentClearly(text, named.Manifest)
+                && FindFlow(named.Manifest.Id) is null)
             {
-                DesignSessions.TryRemove(new KeyValuePair<DesignSessionKey, DesignSessionState>(key, active));
+                _equipment.Update(projectId, sessionId, s => s.Discard(activeManifestId));
                 return false;
             }
         }
 
-        // A follow-up such as "5000 m3/h" continues the equipment already being designed.
+        // A follow-up such as "5000 m3/h" or "use defaults" continues the equipment already being designed.
         if (manifest is null
-            && active is not null
+            && activeManifestId is not null
             && _manifests is not null
-            && _manifests.TryGet(active.ManifestId, out var activeManifest))
+            && _manifests.TryGet(activeManifestId, out var activeManifest))
         {
             manifest = activeManifest;
             flow = FindFlow(activeManifest.Id);
@@ -1341,7 +1462,7 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
 
         if (manifest is null || flow is null)
         {
-            if (route.Clarify.Count > 0 && active is null && !current.HasTemplate)
+            if (route.Clarify.Count > 0 && activeManifestId is null && !current.HasTemplate)
             {
                 reply = BuildDesignClarification(route.Clarify);
                 return true;
@@ -1364,44 +1485,489 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             return true;
         }
 
-        var state = active is not null
-                    && string.Equals(active.ManifestId, manifest.Id, StringComparison.OrdinalIgnoreCase)
-            ? active
-            : DesignSessions.AddOrUpdate(
-                key,
-                _ => new DesignSessionState(manifest.Id),
-                (_, __) => new DesignSessionState(manifest.Id));
+        var turnReply = RunEquipmentTurn(projectId, sessionId, manifest, flow, text, intent);
 
-        lock (state.SyncRoot)
+        if (turnReply is null)
         {
-            var partKeys = FindRequestedPartKeys(manifest, text);
+            return false;
+        }
 
-            // A request for the assembly (and no named part) asks for one combined STEP file, not separate parts.
-            var assemblyRequested = partKeys.Count == 0 && SafeIsMatch(AssemblyRequestRegex, text);
+        reply = turnReply;
+        return true;
+    }
 
-            var request = new EquipmentDesignRequest
+    /// <summary>
+    /// One turn of the guided workflow for one equipment type: collect values, apply defaults on request,
+    /// calculate, pause with the "what next" menu, then generate exactly what the user asks for.
+    /// </summary>
+    private CadAssistMessageDto? RunEquipmentTurn(
+        int projectId,
+        string sessionId,
+        EquipmentManifest manifest,
+        IEquipmentDesignFlow flow,
+        string text,
+        CadAssistEquipmentIntent intent)
+    {
+        // Each equipment has its own state. Switching equipment never reuses another equipment's values.
+        var snapshot = _equipment.Update(projectId, sessionId, s => s.Activate(manifest.Id));
+        var state = snapshot.States[manifest.Id];
+
+        var action = ResolveNextAction(text, state);
+        var useDefaults = !string.IsNullOrWhiteSpace(text)
+                          && (SafeIsMatch(UseDefaultsRegex, text) || CadAssistIntentParser.Parse(text, null).UseDefaults);
+
+        var partKeys = FindRequestedPartKeys(manifest, text);
+        var assemblyRequested = partKeys.Count == 0 && SafeIsMatch(AssemblyRequestRegex, text);
+
+        if (action == EquipmentNextAction.GenerateAssembly)
+        {
+            assemblyRequested = true;
+        }
+
+        if (action == EquipmentNextAction.ViewBreakdown && state.CalculationValidated)
+        {
+            var breakdown = BuildPartsReply(manifest);
+            breakdown.Content += "\n\n" + BuildNextActionMenu(manifest);
+            breakdown.Status = EquipmentDesignTurn.StatusCalculated;
+            return breakdown;
+        }
+
+        if (action == EquipmentNextAction.ChangeValues && state.CalculationValidated)
+        {
+            _equipment.Update(projectId, sessionId, s => s.Activate(manifest.Id).Reopen());
+
+            return new CadAssistMessageDto
             {
-                ManifestId = manifest.Id,
-                Text = text,
-                Values = new Dictionary<string, double>(state.Values, StringComparer.OrdinalIgnoreCase),
-                GenerateRequested = intent == CadAssistEquipmentIntent.GenerateCad
-                                    || assemblyRequested
-                                    || SafeIsMatch(GenerateVerbRegex, text),
-                PartKeys = assemblyRequested ? new[] { "Assembly" } : partKeys
+                Role = CadAssistRole.Assistant,
+                Status = EquipmentDesignTurn.StatusNeedInputs,
+                Content = "Tell me the value or values to change, for example `" + ChangeExample(manifest)
+                          + "`. Everything else stays as it is, and I will size the "
+                          + DisplayNameOf(manifest).ToLowerInvariant() + " again."
             };
+        }
 
-            var turn = flow.Handle(request);
+        var defaultsNote = string.Empty;
+        var values = new Dictionary<string, double>(state.Values, StringComparer.OrdinalIgnoreCase);
 
-            if (turn is null)
+        if (useDefaults)
+        {
+            var defaults = EquipmentStandardDefaults.For(manifest);
+            var added = 0;
+
+            var applied = _equipment.Update(projectId, sessionId, s => added = s.Activate(manifest.Id).ApplyDefaults(defaults));
+            values = new Dictionary<string, double>(applied.States[manifest.Id].Values, StringComparer.OrdinalIgnoreCase);
+
+            defaultsNote = BuildDefaultsNote(manifest, defaults, applied.States[manifest.Id], added);
+        }
+
+        // A bare "generate" before any calculation passed must not skip the sizing step.
+        // A named part, an assembly request or an explicit "write code / STEP" request is honoured.
+        var explicitGenerate = IsExplicitGenerateRequest(text) || assemblyRequested || partKeys.Count > 0
+                               || action is EquipmentNextAction.GeneratePartScripts or EquipmentNextAction.GenerateAssembly;
+
+        var verbGenerate = intent == CadAssistEquipmentIntent.GenerateCad || SafeIsMatch(GenerateVerbRegex, text);
+
+        var generateRequested = explicitGenerate || (verbGenerate && state.CalculationValidated);
+
+        var request = new EquipmentDesignRequest
+        {
+            ManifestId = manifest.Id,
+            Text = text,
+            Values = values,
+            GenerateRequested = generateRequested,
+            PartKeys = assemblyRequested ? new[] { "Assembly" } : partKeys
+        };
+
+        var turn = flow.Handle(request);
+
+        if (turn is null)
+        {
+            _equipment.Update(projectId, sessionId, s => s.Discard(manifest.Id));
+            return null;
+        }
+
+        var isCalculated = turn.Status == EquipmentDesignTurn.StatusCalculated
+                           && turn.MissingKeys.Count == 0
+                           && turn.Errors.Count == 0;
+
+        var generatedScope = turn.Parts is { Success: true } built
+            ? built.Parts.Select(p => p.PartKey).ToList()
+            : new List<string>();
+
+        _equipment.Update(projectId, sessionId, s =>
+        {
+            var current = s.Activate(manifest.Id);
+            current.ReplaceValues(turn.Values);
+
+            if (turn.Generated)
             {
-                DesignSessions.TryRemove(new KeyValuePair<DesignSessionKey, DesignSessionState>(key, state));
+                current.MarkCalculated();
+                current.MarkGenerated(generatedScope);
+            }
+            else if (isCalculated)
+            {
+                current.MarkCalculated();
+                current.MarkMenuShown();
+            }
+            else
+            {
+                current.Reopen();
+            }
+        });
+
+        string? footer = null;
+
+        if (turn.Generated || isCalculated)
+        {
+            footer = BuildNextActionMenu(manifest);
+        }
+        else if (turn.Status == EquipmentDesignTurn.StatusNeedInputs)
+        {
+            footer = "Or say `use defaults` and I will fill the " + DisplayNameOf(manifest).ToLowerInvariant()
+                     + " with the standard engineering defaults.";
+        }
+
+        var message = BuildDesignReply(turn, footer);
+
+        if (defaultsNote.Length > 0)
+        {
+            message.Content = defaultsNote + "\n\n" + message.Content;
+        }
+
+        return message;
+    }
+
+    /// <summary>
+    /// Reads the answer to "Which equipment type is this?". Returns true when the equipment was confirmed
+    /// and a reply is ready. When false and reply is set, the assistant asks again. When false and reply is null,
+    /// the answer names equipment that is not designed from calculator inputs.
+    /// </summary>
+    private bool AnswerEquipmentQuestion(
+        int projectId,
+        string sessionId,
+        string text,
+        EquipmentConversationSession session,
+        out CadAssistMessageDto? reply)
+    {
+        reply = null;
+
+        EquipmentManifest? confirmed = null;
+
+        if (!string.IsNullOrWhiteSpace(session.ProposedManifestId)
+            && SafeIsMatch(ConfirmRegex, text)
+            && _manifests is not null
+            && _manifests.TryGet(session.ProposedManifestId, out var proposed)
+            && FindFlow(proposed.Id) is not null
+            && !NamesDifferentEquipment(text, proposed))
+        {
+            confirmed = proposed;
+        }
+
+        if (confirmed is null)
+        {
+            var route = ResolveDesignRoute(text);
+
+            if (route.Manifest is not null && route.Flow is not null)
+            {
+                confirmed = route.Manifest;
+            }
+            else if (route.Clarify.Count > 0)
+            {
+                reply = BuildDesignClarification(route.Clarify);
                 return false;
             }
-
-            state.Values = new Dictionary<string, double>(turn.Values, StringComparer.OrdinalIgnoreCase);
-            reply = BuildDesignReply(turn);
-            return true;
         }
+
+        if (confirmed is null)
+        {
+            return false;
+        }
+
+        var flow = FindFlow(confirmed.Id)!;
+
+        reply = RunEquipmentTurn(
+            projectId,
+            sessionId,
+            confirmed,
+            flow,
+            string.Empty,
+            CadAssistEquipmentIntent.Unknown);
+
+        if (reply is null)
+        {
+            return false;
+        }
+
+        reply.Content = "Got it, this is a **" + DisplayNameOf(confirmed) + "**. I will use its own rule set.\n\n" + reply.Content;
+        return true;
+    }
+
+    /// <summary>
+    /// Builds the "Which equipment type is this?" question for an uploaded image. Returns null only when
+    /// there is nothing to ask: no design flows, or the user already named the equipment in their own words.
+    /// </summary>
+    private CadAssistMessageDto? BeginImageIdentification(CadAssistUploadInput input)
+    {
+        if (!input.IsImage || _manifests is null || _designFlows.Count == 0)
+        {
+            return null;
+        }
+
+        var designable = _manifests.All
+            .Where(candidate => FindFlow(candidate.Id) is not null)
+            .ToList();
+
+        if (designable.Count == 0)
+        {
+            return null;
+        }
+
+        var userText = string.Join(
+            " ",
+            new[] { input.Prompt, input.DrawingType, Path.GetFileNameWithoutExtension(input.FileName) }
+                .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        // The user named the equipment in their own words: that is the confirmation.
+        var named = ResolveDesignRoute(userText);
+
+        if (named.Manifest is not null
+            && named.Flow is not null
+            && NamesEquipmentClearly(userText, named.Manifest))
+        {
+            var direct = RunEquipmentTurn(
+                input.ProjectId,
+                input.SessionId,
+                named.Manifest,
+                named.Flow,
+                string.Empty,
+                CadAssistEquipmentIntent.Unknown);
+
+            if (direct is not null)
+            {
+                direct.Content = "You named this as a **" + DisplayNameOf(named.Manifest) + "**, so I will treat it as one.\n\n"
+                                 + direct.Content;
+
+                return direct;
+            }
+        }
+
+        // The image is inspected only to propose a type. Nothing is sized until the user confirms it.
+        var detectedText = string.Join(
+            " ",
+            new[] { input.Vision?.EquipmentType, input.Vision?.Summary }
+                .Where(t => !string.IsNullOrWhiteSpace(t)));
+
+        EquipmentManifest? proposal = null;
+
+        if (detectedText.Length > 0)
+        {
+            var detected = ResolveDesignRoute(detectedText);
+
+            if (detected.Manifest is not null
+                && detected.Flow is not null
+                && NamesEquipmentClearly(detectedText, detected.Manifest))
+            {
+                proposal = detected.Manifest;
+            }
+        }
+
+        _equipment.Update(input.ProjectId, input.SessionId, s =>
+            s.BeginIdentification(input.FileName, proposal?.Id, designable.Select(m => m.Id)));
+
+        var text = new StringBuilder();
+
+        if (proposal is not null)
+        {
+            text.AppendLine("This looks like a **" + DisplayNameOf(proposal) + "**. Is that right?");
+            text.AppendLine();
+            text.AppendLine("Reply `yes` to confirm, or tell me which one it is:");
+        }
+        else
+        {
+            text.AppendLine("Which equipment type is this?");
+            text.AppendLine();
+            text.AppendLine("Pick one:");
+        }
+
+        text.AppendLine();
+
+        foreach (var item in designable)
+        {
+            text.AppendLine("- " + DisplayNameOf(item));
+        }
+
+        text.AppendLine();
+        text.Append("I will not size anything until the equipment type is confirmed.");
+
+        return new CadAssistMessageDto
+        {
+            Role = CadAssistRole.Assistant,
+            Content = text.ToString().TrimEnd(),
+            Status = "equipment-confirm"
+        };
+    }
+
+    private EquipmentNextAction ResolveNextAction(string text, EquipmentConversationState state)
+    {
+        if (!state.CalculationValidated)
+        {
+            return EquipmentNextAction.None;
+        }
+
+        if (SafeIsMatch(ChangeValuesRegex, text))
+        {
+            return EquipmentNextAction.ChangeValues;
+        }
+
+        if (SafeIsMatch(AssemblyRequestRegex, text))
+        {
+            return EquipmentNextAction.GenerateAssembly;
+        }
+
+        if (SafeIsMatch(PartScriptsRegex, text))
+        {
+            return EquipmentNextAction.GeneratePartScripts;
+        }
+
+        if (SafeIsMatch(BreakdownRegex, text) && !SafeIsMatch(GenerateVerbRegex, text))
+        {
+            return EquipmentNextAction.ViewBreakdown;
+        }
+
+        var trimmed = text.Trim();
+
+        return trimmed switch
+        {
+            "1" => EquipmentNextAction.ViewBreakdown,
+            "2" => EquipmentNextAction.GeneratePartScripts,
+            "3" => EquipmentNextAction.GenerateAssembly,
+            "4" => EquipmentNextAction.ChangeValues,
+            _ => EquipmentNextAction.None
+        };
+    }
+
+    private static string BuildNextActionMenu(EquipmentManifest manifest)
+    {
+        var firstPart = manifest.Parts.FirstOrDefault(p => !string.IsNullOrWhiteSpace(p.Title))?.Title
+                        ?? manifest.Parts.FirstOrDefault()?.Key
+                        ?? "main body";
+
+        var menu = new StringBuilder();
+
+        menu.AppendLine("**" + NextActionQuestion + "**");
+        menu.AppendLine();
+        menu.AppendLine("1. View the component breakdown (" + manifest.Parts.Count.ToString(CultureInfo.InvariantCulture) + " parts)");
+        menu.AppendLine("2. Generate individual part scripts, one body each (for example `generate the " + firstPart.ToLowerInvariant() + "`)");
+        menu.AppendLine("3. Generate the full assembly STEP file (`generate the full assembly`)");
+        menu.Append("4. Change a value and size it again (for example `" + ChangeExample(manifest) + "`)");
+
+        return menu.ToString();
+    }
+
+    private static string ChangeExample(EquipmentManifest manifest)
+    {
+        var first = manifest.Inputs.FirstOrDefault(i => i.IsRequired) ?? manifest.Inputs.FirstOrDefault();
+
+        if (first is null)
+        {
+            return "change a value";
+        }
+
+        var unit = string.IsNullOrWhiteSpace(first.Unit) || first.Unit == "-" ? string.Empty : " " + first.Unit;
+        var alias = first.Aliases.FirstOrDefault() ?? first.DisplayName.ToLowerInvariant();
+
+        return alias + " 3" + unit;
+    }
+
+    private static string BuildDefaultsNote(
+        EquipmentManifest manifest,
+        IReadOnlyDictionary<string, double> defaults,
+        EquipmentConversationState state,
+        int added)
+    {
+        var text = new StringBuilder();
+
+        text.AppendLine("Using the standard engineering defaults for the **" + DisplayNameOf(manifest) + "**:");
+        text.AppendLine();
+
+        var shown = 0;
+
+        foreach (var pair in defaults.OrderBy(p => p.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            if (!state.DefaultedKeys.Contains(pair.Key))
+            {
+                continue;
+            }
+
+            var input = manifest.Inputs.FirstOrDefault(i => string.Equals(i.Key, pair.Key, StringComparison.OrdinalIgnoreCase));
+            var label = input is not null && !string.IsNullOrWhiteSpace(input.DisplayName) ? input.DisplayName : pair.Key;
+            var unit = input is null || string.IsNullOrWhiteSpace(input.Unit) || input.Unit == "-" ? string.Empty : " " + input.Unit;
+
+            text.AppendLine("- " + label + " = " + pair.Value.ToString("0.######", CultureInfo.InvariantCulture) + unit);
+            shown++;
+        }
+
+        if (shown == 0)
+        {
+            text.AppendLine("- You already gave every value, so nothing needed a default.");
+        }
+
+        text.AppendLine();
+        text.Append("These are starting values. Give me your real duty values at any time and I will size it again.");
+
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// True when the text names the equipment itself (its name or a specific alias), not just a loose word such as "fan".
+    /// </summary>
+    private static bool NamesEquipmentClearly(string text, EquipmentManifest manifest)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        if (string.Equals(manifest.Id, "axial-fan", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(manifest.Id, "centrifugal-fan", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!SafeIsMatch(SpecificFanWordRegex, text))
+            {
+                return false;
+            }
+        }
+
+        var type = EquipmentRegistry.Resolve(text);
+
+        if (type != EquipmentType.Unknown)
+        {
+            return string.Equals(type.ToString(), manifest.CalculatorId, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var padded = " " + string.Join(" ", WordSplitRegex.Split(text.ToLowerInvariant()).Where(w => w.Length > 0)) + " ";
+
+        var names = new List<string> { manifest.Id.Replace('-', ' '), manifest.DisplayName };
+        names.AddRange(manifest.Aliases.Where(a => a.Trim().Contains(' ') || a.Trim().Length >= 6));
+
+        return names
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Select(n => " " + string.Join(" ", WordSplitRegex.Split(n.ToLowerInvariant()).Where(w => w.Length > 0)) + " ")
+            .Any(n => n.Trim().Length > 0 && padded.Contains(n, StringComparison.Ordinal));
+    }
+
+    private bool NamesDifferentEquipment(string text, EquipmentManifest proposed)
+    {
+        if (_manifests is null)
+        {
+            return false;
+        }
+
+        var resolved = _manifests.ResolveDetailed(text);
+
+        return resolved.IsResolved
+               && resolved.Manifest is not null
+               && !string.Equals(resolved.Manifest.Id, proposed.Id, StringComparison.OrdinalIgnoreCase)
+               && NamesEquipmentClearly(text, resolved.Manifest);
     }
 
     private DesignRoute ResolveDesignRoute(string text)
@@ -1422,6 +1988,26 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             {
                 manifest = _manifests.All.FirstOrDefault(candidate =>
                     string.Equals(candidate.CalculatorId, type.ToString(), StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        // A loose word such as "fan" or "blower" must never default to the axial fan.
+        // When the text does not say which kind of fan, ask.
+        if (manifest is not null
+            && string.Equals(manifest.Id, "axial-fan", StringComparison.OrdinalIgnoreCase)
+            && SafeIsMatch(GenericFanWordRegex, text)
+            && !SafeIsMatch(SpecificFanWordRegex, text)
+            && EquipmentRegistry.Resolve(text) == EquipmentType.Unknown)
+        {
+            var fans = _manifests.All
+                .Where(candidate => (string.Equals(candidate.Id, "axial-fan", StringComparison.OrdinalIgnoreCase)
+                                     || string.Equals(candidate.Id, "centrifugal-fan", StringComparison.OrdinalIgnoreCase))
+                                    && FindFlow(candidate.Id) is not null)
+                .ToList();
+
+            if (fans.Count > 1)
+            {
+                return new DesignRoute(null, null, fans);
             }
         }
 
@@ -1522,12 +2108,40 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         }
 
         // An empty list means the flow builds every part the manifest declares.
+        var words = new HashSet<string>(
+            WordSplitRegex.Split(text.ToLowerInvariant()).Where(w => w.Length > 0),
+            StringComparer.Ordinal);
+
         return manifest.Parts
-            .Where(part => ContainsPhrase(text, part.Key) || ContainsPhrase(text, part.Title))
+            .Where(part => ContainsPhrase(text, part.Key)
+                           || ContainsPhrase(text, part.Title)
+                           || ContainsAllWords(words, part.Title)
+                           || ContainsAllWords(words, SplitCamelCase(part.Key)))
             .Select(part => part.Key)
             .Where(key => !string.IsNullOrWhiteSpace(key))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private static bool ContainsAllWords(HashSet<string> words, string? phrase)
+    {
+        if (string.IsNullOrWhiteSpace(phrase))
+        {
+            return false;
+        }
+
+        var needed = WordSplitRegex.Split(phrase.ToLowerInvariant())
+            .Where(w => w.Length >= 3)
+            .ToList();
+
+        return needed.Count > 0 && needed.All(words.Contains);
+    }
+
+    private static string SplitCamelCase(string? key)
+    {
+        return string.IsNullOrWhiteSpace(key)
+            ? string.Empty
+            : Regex.Replace(key, "(?<=[a-z0-9])(?=[A-Z])", " ", RegexOptions.CultureInvariant, TimeSpan.FromMilliseconds(250));
     }
 
     private static bool ContainsPhrase(string text, string? phrase)
@@ -1611,9 +2225,22 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         };
     }
 
-    private static CadAssistMessageDto BuildDesignReply(EquipmentDesignTurn turn)
+    private static CadAssistMessageDto BuildDesignReply(EquipmentDesignTurn turn, string? footer = null)
     {
-        var text = new StringBuilder(turn.Reply?.TrimEnd() ?? string.Empty);
+        var reply = turn.Reply?.TrimEnd() ?? string.Empty;
+
+        // The "what next" menu replaces the flow's own "say generate" hint.
+        if (footer is not null)
+        {
+            var hint = reply.LastIndexOf(GenerateHintMarker, StringComparison.Ordinal);
+
+            if (hint >= 0)
+            {
+                reply = reply[..hint].TrimEnd();
+            }
+        }
+
+        var text = new StringBuilder(reply);
 
         AppendDesignNotes(text, "Errors", turn.Errors);
         AppendDesignNotes(text, "Warnings", turn.Warnings);
@@ -1651,6 +2278,17 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             {
                 AppendDesignNotes(text, "Script errors", parts.Errors);
             }
+        }
+
+        if (!string.IsNullOrWhiteSpace(footer))
+        {
+            if (text.Length > 0)
+            {
+                text.AppendLine();
+                text.AppendLine();
+            }
+
+            text.Append(footer);
         }
 
         message.Content = text.ToString().TrimEnd();
@@ -1693,22 +2331,6 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         public static readonly DesignRoute None = new(null, null, Array.Empty<EquipmentManifest>());
     }
 
-    private readonly record struct DesignSessionKey(int ProjectId, string SessionId);
-
-    private sealed class DesignSessionState
-    {
-        public DesignSessionState(string manifestId)
-        {
-            ManifestId = manifestId;
-        }
-
-        public object SyncRoot { get; } = new();
-
-        public string ManifestId { get; }
-
-        public Dictionary<string, double> Values { get; set; } = new(StringComparer.OrdinalIgnoreCase);
-    }
-
     private void AppendUser(int projectId, string sessionId, string content)
     {
         if (string.IsNullOrWhiteSpace(content))
@@ -1721,5 +2343,84 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
             Role = CadAssistRole.User,
             Content = content
         });
+    }
+}
+
+/// <summary>
+/// Standard starting values for "use defaults", one set per equipment type. Values are SI and keyed by the
+/// calculator and mapper keys. Manifest input defaults come first; the equipment design point fills the rest.
+/// Duty values are the worked examples the equipment's own design flow shows the user, or the rulepack design values.
+/// Nothing here replaces a value the user gave, and none of it is an engineering approval.
+/// </summary>
+internal static class EquipmentStandardDefaults
+{
+    private const double StandardSpeedRpm = 1450.0;
+
+    public static IReadOnlyDictionary<string, double> For(EquipmentManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+
+        var values = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var input in manifest.Inputs)
+        {
+            if (input.Default.HasValue)
+            {
+                values[input.Key] = input.Default.Value;
+            }
+        }
+
+        foreach (var pair in DesignPoint(manifest.Id))
+        {
+            values.TryAdd(pair.Key, pair.Value);
+        }
+
+        return values;
+    }
+
+    private static double RpmToRadS(double rpm) => rpm * 2.0 * Math.PI / 60.0;
+
+    private static IReadOnlyDictionary<string, double> DesignPoint(string manifestId)
+    {
+        var id = (manifestId ?? string.Empty).Trim().ToLowerInvariant();
+
+        return id switch
+        {
+            "cyclone-separator" => new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+            {
+                [CycloneCalculator.Keys.AirflowM3s] = 1.0,
+                [CycloneCalculator.Keys.InletVelocityMs] = 20.0
+            },
+
+            "wet-scrubber" => new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+            {
+                [WetScrubberCalculator.Keys.AirflowM3s] = 2.0,
+                [WetScrubberCalculator.Keys.GasVelocityMs] = 1.2,
+                [WetScrubberCalculator.Keys.GasResidenceTimeS] = 2.0,
+                [WetScrubberCalculator.Keys.InletVelocityMs] = 15.0,
+                [WetScrubberCalculator.Keys.StackVelocityMs] = 10.0,
+                [WetScrubberCalculator.Keys.LiquidToGasRatioLm3] = 2.0
+            },
+
+            "axial-fan" => new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+            {
+                [AxialFanCalculator.Keys.AirflowM3s] = 5.0,
+                [AxialFanCalculator.Keys.StaticPressurePa] = 450.0,
+                [AxialFanCalculator.Keys.SpeedRadS] = RpmToRadS(StandardSpeedRpm),
+                [AxialFanTemplateMapper.BladeChordM] = 0.08,
+                [AxialFanTemplateMapper.BladeThicknessM] = 0.004,
+                [AxialFanTemplateMapper.BladePitchDeg] = 25.0
+            },
+
+            "centrifugal-fan" => new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+            {
+                [CentrifugalFanCalculator.Keys.AirflowM3s] = 5.0,
+                [CentrifugalFanCalculator.Keys.StaticPressurePa] = 1200.0,
+                [CentrifugalFanCalculator.Keys.SpeedRadS] = RpmToRadS(StandardSpeedRpm),
+                [CentrifugalFanCalculator.Keys.BladeType] = CentrifugalBladeTypes.ToCode(CentrifugalBladeType.BackwardCurved)
+            },
+
+            _ => new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase)
+        };
     }
 }
