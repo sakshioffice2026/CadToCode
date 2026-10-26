@@ -1,4 +1,6 @@
-﻿using CadToCode.Business.Interfaces;
+﻿using System.Globalization;
+using System.Security.Cryptography;
+using CadToCode.Business.Interfaces;
 using CadToCode.LLM.Services;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
@@ -130,6 +132,7 @@ public class ProjectProcessingService : IProjectProcessingService
         if (result.Success && result.ProjectId.HasValue)
         {
             await RunAssemblyAnalysisAsync(result.ProjectId.Value, cancellationToken);
+            await PersistDesignStateQuietlyAsync(result.ProjectId.Value, cancellationToken);
         }
 
         if (result.ProjectId.HasValue)
@@ -249,6 +252,8 @@ public class ProjectProcessingService : IProjectProcessingService
         await _unitOfWork.Components.UpdateAsync(component, cancellationToken);
         await _unitOfWork.SaveChangesAsync(cancellationToken);
 
+        await RefreshDesignStateQuietlyAsync(component.ProjectId, cancellationToken);
+
         return true;
     }
 
@@ -286,6 +291,246 @@ public class ProjectProcessingService : IProjectProcessingService
         }
 
         return await _storage.ReadTextAsync(path + ChatSnapshotSuffix, cancellationToken);
+    }
+
+    public async Task<bool> SaveDesignStateAsync(int projectId, DesignStateDocument state, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+
+        var storedPath = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+        if (string.IsNullOrWhiteSpace(storedPath))
+        {
+            return false;
+        }
+
+        state.ProjectId = projectId;
+        state.SchemaVersion = DesignStateDocument.CurrentSchemaVersion;
+        state.UpdatedUtc = DateTimeOffset.UtcNow;
+
+        var json = state.ToJson();
+
+        await _unitOfWork.Projects.SaveDesignStateAsync(projectId, json, state.SchemaVersion, cancellationToken);
+        await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+        await MirrorDesignStateAsync(projectId, json, cancellationToken);
+
+        return true;
+    }
+
+    public async Task<DesignStateDocument?> LoadDesignStateAsync(int projectId, CancellationToken cancellationToken = default)
+    {
+        if (_historyIndex.IsConfigured)
+        {
+            try
+            {
+                var cached = DesignStateDocument.FromJson(await _historyIndex.GetDesignStateAsync(projectId, cancellationToken));
+                if (cached is not null)
+                {
+                    return cached;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogWarning(ex, "Design state for project {ProjectId} could not be read from Qdrant. Falling back to MySQL.", projectId);
+            }
+        }
+
+        var stored = await _unitOfWork.Projects.GetDesignStateJsonAsync(projectId, cancellationToken);
+        var state = DesignStateDocument.FromJson(stored);
+
+        if (state is not null && !string.IsNullOrWhiteSpace(stored))
+        {
+            await MirrorDesignStateAsync(projectId, stored, cancellationToken);
+        }
+
+        return state;
+    }
+
+    public async Task<DesignStateDocument?> RefreshDesignStateAsync(int projectId, CancellationToken cancellationToken = default)
+    {
+        var project = await _unitOfWork.Projects.GetByIdAsync(projectId, cancellationToken);
+        if (project is null || project.Status != ProjectStatus.Processed)
+        {
+            return null;
+        }
+
+        var existing = await LoadDesignStateAsync(projectId, cancellationToken);
+        var sha = await ResolveSourceHashAsync(projectId, project, existing, cancellationToken);
+        var state = BuildDesignState(project, existing, sha);
+
+        return await SaveDesignStateAsync(projectId, state, cancellationToken) ? state : null;
+    }
+
+    private async Task PersistDesignStateQuietlyAsync(int projectId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await RefreshDesignStateAsync(projectId, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Design state for project {ProjectId} could not be saved.", projectId);
+        }
+    }
+
+    private Task RefreshDesignStateQuietlyAsync(int projectId, CancellationToken cancellationToken)
+    {
+        return PersistDesignStateQuietlyAsync(projectId, cancellationToken);
+    }
+
+    private async Task MirrorDesignStateAsync(int projectId, string json, CancellationToken cancellationToken)
+    {
+        if (!_historyIndex.IsConfigured || string.IsNullOrWhiteSpace(json))
+        {
+            return;
+        }
+
+        try
+        {
+            await _historyIndex.UpsertDesignStateAsync(projectId, json, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Design state for project {ProjectId} could not be mirrored to Qdrant.", projectId);
+        }
+    }
+
+    private async Task<string?> ResolveSourceHashAsync(
+        int projectId,
+        ProjectResultDto project,
+        DesignStateDocument? existing,
+        CancellationToken cancellationToken)
+    {
+        if (existing is not null
+            && !string.IsNullOrWhiteSpace(existing.Source.Sha256)
+            && string.Equals(existing.Source.FileName, project.OriginalFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return existing.Source.Sha256;
+        }
+
+        try
+        {
+            var path = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return null;
+            }
+
+            await using var stream = await _storage.OpenReadAsync(path, cancellationToken);
+            if (stream is null)
+            {
+                return null;
+            }
+
+            var hash = await SHA256.HashDataAsync(stream, cancellationToken);
+            return Convert.ToHexString(hash);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Source hash for project {ProjectId} could not be computed.", projectId);
+            return null;
+        }
+    }
+
+    private static DesignStateDocument BuildDesignState(ProjectResultDto project, DesignStateDocument? existing, string? sha256)
+    {
+        var state = existing ?? new DesignStateDocument { CreatedUtc = DateTimeOffset.UtcNow };
+
+        state.ProjectId = project.Id;
+        state.Revision = existing is null ? 1 : existing.Revision + 1;
+
+        state.Source.FileName = project.OriginalFileName;
+        state.Source.SourceFileType = project.SourceFileType.ToString();
+        state.Source.Sha256 = sha256;
+        state.Source.Unit = project.Unit.ToString();
+        state.Source.ScaleMmPerPixel = project.ScaleMmPerPixel;
+        state.Source.Origin = project.SourceFileType == SourceFileType.Dxf ? "Dxf" : "Vision";
+
+        var ordered = project.Components.OrderBy(c => c.SequenceIndex).ToList();
+        var toMeters = ToMetersFactor(project.Unit);
+
+        state.Classification.EquipmentType = ResolveEquipmentType(ordered);
+        state.Classification.Confidence = ordered.Count == 0
+            ? null
+            : (double)ordered.Average(c => c.Confidence);
+
+        state.Components = ordered.Select(c => ToStateComponent(c, toMeters)).ToList();
+
+        state.PartCounts = ordered
+            .GroupBy(c => string.IsNullOrWhiteSpace(c.Name) ? c.ComponentType.ToString() : c.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.Count(), StringComparer.OrdinalIgnoreCase);
+
+        return state;
+    }
+
+    private static DesignStateComponent ToStateComponent(ComponentDto component, double toMeters)
+    {
+        var item = new DesignStateComponent
+        {
+            Id = component.Id,
+            SequenceIndex = component.SequenceIndex,
+            Name = component.Name,
+            ComponentType = component.ComponentType.ToString(),
+            Count = 1
+        };
+
+        AddDimension(item, "height_m", component.Height, toMeters);
+        AddDimension(item, "width_m", component.Width, toMeters);
+        AddDimension(item, "diameter_m", component.Diameter, toMeters);
+        AddDimension(item, "top_diameter_m", component.TopDiameter, toMeters);
+        AddDimension(item, "bottom_diameter_m", component.BottomDiameter, toMeters);
+
+        if (component.Angle.HasValue)
+        {
+            item.Dimensions["angle_deg"] = (double)component.Angle.Value;
+        }
+
+        return item;
+    }
+
+    private static void AddDimension(DesignStateComponent item, string key, decimal? value, double toMeters)
+    {
+        if (value.HasValue)
+        {
+            item.Dimensions[key] = Math.Round((double)value.Value * toMeters, 9);
+        }
+    }
+
+    private static string ResolveEquipmentType(IReadOnlyCollection<ComponentDto> components)
+    {
+        if (components.Any(c => c.ComponentType == ComponentType.CentrifugalFan))
+        {
+            return "CentrifugalFan";
+        }
+
+        if (components.Any(c => c.ComponentType == ComponentType.AxialFan))
+        {
+            return "AxialFan";
+        }
+
+        if (components.Any(c => c.ComponentType == ComponentType.Cyclone))
+        {
+            return "Cyclone";
+        }
+
+        return "Unknown";
+    }
+
+    private static double ToMetersFactor(DrawingUnit unit)
+    {
+        return unit switch
+        {
+            DrawingUnit.Millimeter => 0.001,
+            DrawingUnit.Centimeter => 0.01,
+            DrawingUnit.Meter => 1.0,
+            DrawingUnit.Inch => 0.0254,
+            DrawingUnit.Foot => 0.3048,
+            _ => 0.001
+        };
     }
 
     private async Task<long> GetStoredFileSizeAsync(string storedPath, CancellationToken cancellationToken)
@@ -333,6 +578,12 @@ public class ProjectProcessingService : IProjectProcessingService
                     LastOpenedAt = project.LastOpenedAt
                 },
                 cancellationToken);
+
+            var stored = await _unitOfWork.Projects.GetDesignStateJsonAsync(projectId, cancellationToken);
+            if (!string.IsNullOrWhiteSpace(stored))
+            {
+                await MirrorDesignStateAsync(projectId, stored, cancellationToken);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
@@ -346,6 +597,15 @@ public class ProjectProcessingService : IProjectProcessingService
         {
             var all = await _unitOfWork.Projects.ListHistoryAsync(null, cancellationToken);
             await _historyIndex.UpsertManyAsync(all, cancellationToken);
+
+            foreach (var item in all)
+            {
+                var stored = await _unitOfWork.Projects.GetDesignStateJsonAsync(item.Id, cancellationToken);
+                if (!string.IsNullOrWhiteSpace(stored))
+                {
+                    await MirrorDesignStateAsync(item.Id, stored, cancellationToken);
+                }
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

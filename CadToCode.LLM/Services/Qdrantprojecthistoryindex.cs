@@ -22,6 +22,12 @@ public interface IProjectHistoryIndex
     Task<List<ProjectHistoryItemDto>> ListAsync(int? take = null, CancellationToken cancellationToken = default);
 
     Task<ulong> CountAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>Attaches the serialized design state to the project's point payload. No-op when the point does not exist yet.</summary>
+    Task UpsertDesignStateAsync(int projectId, string designStateJson, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads the serialized design state from the project's point payload. Null when absent.</summary>
+    Task<string?> GetDesignStateAsync(int projectId, CancellationToken cancellationToken = default);
 }
 
 public sealed class QdrantProjectHistoryIndex : IProjectHistoryIndex, IDisposable
@@ -41,6 +47,7 @@ public sealed class QdrantProjectHistoryIndex : IProjectHistoryIndex, IDisposabl
     private const string FieldComponentCount = "component_count";
     private const string FieldCreatedAt = "created_at";
     private const string FieldLastOpenedAt = "last_opened_at";
+    private const string FieldDesignState = "design_state";
 
     private readonly QdrantOptions _options;
     private readonly ILogger<QdrantProjectHistoryIndex> _logger;
@@ -124,7 +131,10 @@ public sealed class QdrantProjectHistoryIndex : IProjectHistoryIndex, IDisposabl
                 HistoryCollectionName,
                 limit: ScrollPageSize,
                 offset: offset,
-                payloadSelector: true,
+                payloadSelector: new WithPayloadSelector
+                {
+                    Exclude = new PayloadExcludeSelector { Fields = { FieldDesignState } }
+                },
                 vectorsSelector: false,
                 cancellationToken: cancellationToken);
 
@@ -148,6 +158,53 @@ public sealed class QdrantProjectHistoryIndex : IProjectHistoryIndex, IDisposabl
         return take.HasValue && take.Value > 0
             ? ordered.Take(take.Value).ToList()
             : ordered.ToList();
+    }
+
+    public async Task UpsertDesignStateAsync(int projectId, string designStateJson, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(designStateJson))
+        {
+            return;
+        }
+
+        await EnsureCollectionAsync(cancellationToken);
+
+        var payload = new Dictionary<string, Value> { [FieldDesignState] = designStateJson };
+
+        try
+        {
+            await GetClient().SetPayloadAsync(
+                HistoryCollectionName,
+                payload,
+                ToPointId(projectId),
+                wait: true,
+                cancellationToken: cancellationToken);
+        }
+        catch (Grpc.Core.RpcException ex) when (ex.StatusCode == Grpc.Core.StatusCode.NotFound)
+        {
+            // The history point is created by UpsertAsync; the design state is mirrored again right after it.
+        }
+    }
+
+    public async Task<string?> GetDesignStateAsync(int projectId, CancellationToken cancellationToken = default)
+    {
+        await EnsureCollectionAsync(cancellationToken);
+
+        var points = await GetClient().RetrieveAsync(
+            HistoryCollectionName,
+            ToPointId(projectId),
+            withPayload: true,
+            withVectors: false,
+            cancellationToken: cancellationToken);
+
+        var point = points.FirstOrDefault();
+
+        if (point is null || !point.Payload.TryGetValue(FieldDesignState, out var value))
+        {
+            return null;
+        }
+
+        return string.IsNullOrWhiteSpace(value.StringValue) ? null : value.StringValue;
     }
 
     public async Task<ulong> CountAsync(CancellationToken cancellationToken = default)

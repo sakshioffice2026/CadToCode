@@ -31,6 +31,8 @@ public class DesignStartRequest
     public string? Equipment { get; set; }
 
     public string? Title { get; set; }
+
+    public int? ProjectId { get; set; }
 }
 
 public class DesignRequirementsRequest
@@ -114,6 +116,7 @@ public class CadAssistController : Controller
     private readonly ICadAssistSessionStore _sessionStore;
     private readonly IDesignWorkflowEngine _workflow;
     private readonly IDesignSessionStore _designStore;
+    private readonly IDesignStateService _designState;
     private readonly IEngineeringKnowledgeService _knowledge;
     private readonly IWebSearchService _webSearch;
     private readonly LocalAiOptions _options;
@@ -131,6 +134,7 @@ public class CadAssistController : Controller
         ICadAssistSessionStore sessionStore,
         IDesignWorkflowEngine workflow,
         IDesignSessionStore designStore,
+        IDesignStateService designState,
         IEngineeringKnowledgeService knowledge,
         IWebSearchService webSearch,
         IOptions<LocalAiOptions> options,
@@ -138,6 +142,7 @@ public class CadAssistController : Controller
     {
         _workflow = workflow;
         _designStore = designStore;
+        _designState = designState;
         _knowledge = knowledge;
         _webSearch = webSearch;
         _ai = ai;
@@ -182,6 +187,8 @@ public class CadAssistController : Controller
 
         if (projectId > 0)
         {
+            await RestoreSessionFromDesignStateAsync(projectId, sessionId, cancellationToken);
+
             var json = await _processingService.LoadChatSnapshotAsync(projectId, cancellationToken);
 
             if (!string.IsNullOrWhiteSpace(json))
@@ -219,6 +226,48 @@ public class CadAssistController : Controller
             Messages = messages,
             EditorCode = editorCode
         });
+    }
+
+    private async Task RestoreSessionFromDesignStateAsync(int projectId, string sessionId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var current = _sessionStore.Get(projectId, sessionId);
+
+            if (current.HasTemplate)
+            {
+                return;
+            }
+
+            var state = await _processingService.LoadDesignStateAsync(projectId, cancellationToken);
+            var templateKey = state?.Classification.TemplateId;
+
+            if (state is null || string.IsNullOrWhiteSpace(templateKey) || state.Inputs.Count == 0)
+            {
+                return;
+            }
+
+            _sessionStore.Update(projectId, sessionId, session =>
+            {
+                session.SetTemplate(
+                    templateKey,
+                    state.Classification.TemplateTitle ?? templateKey,
+                    state.Classification.TemplateScore ?? 0d,
+                    state.Components.Select(c => new DetectedComponentInfo { Label = c.Name }));
+
+                session.SourceFileName = state.Source.FileName;
+                session.SourceIsImage = string.Equals(state.Source.SourceFileType, "Image", StringComparison.OrdinalIgnoreCase);
+
+                foreach (var pair in state.Inputs)
+                {
+                    session.SetValue(pair.Key, pair.Value, CadToCode.LLM.Templates.ParameterSource.User);
+                }
+            });
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Design state for project {ProjectId} could not be restored into the chat session.", projectId);
+        }
     }
 
     private static CadAssistSnapshotDto? ReadSnapshot(string json)
@@ -867,9 +916,21 @@ public class CadAssistController : Controller
             var session = await _workflow.StartAsync(GetOwnerId(), type, cancellationToken);
             var title = Limit(request.Title, MaxFieldChars);
 
-            if (title is not null)
+            var linkProject = request.ProjectId is > 0
+                && await _processingService.GetProjectAsync(request.ProjectId.Value, cancellationToken) is not null;
+
+            if (title is not null || linkProject)
             {
-                session.Rename(title);
+                if (title is not null)
+                {
+                    session.Rename(title);
+                }
+
+                if (linkProject)
+                {
+                    session.LinkSourceProject(request.ProjectId);
+                }
+
                 await _designStore.UpdateAsync(session, cancellationToken);
             }
 
@@ -954,6 +1015,7 @@ public class CadAssistController : Controller
         try
         {
             var updated = await _workflow.SubmitRequirementsAsync(request.SessionId, supplied, cancellationToken);
+            await _designState.CaptureFromSessionAsync(updated, cancellationToken);
             return Json(new { success = true, design = BuildDesignSummary(updated) });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
@@ -1445,6 +1507,7 @@ public class CadAssistController : Controller
         try
         {
             var updated = await transition(sessionId.Value, cancellationToken);
+            await _designState.CaptureFromSessionAsync(updated, cancellationToken);
             return Json(new { success = true, design = BuildDesignSummary(updated) });
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

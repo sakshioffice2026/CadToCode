@@ -380,6 +380,10 @@
                     curveSegments: 24
                 });
                 geometry.translate(0, 0, solid.z || 0);
+            } else if (solid.type === "revolve" && solid.outer && solid.outer.length >= 3) {
+                geometry = new THREE.LatheGeometry(toVector(solid.outer), 64);
+                geometry.rotateX(Math.PI / 2);
+                geometry.translate(solid.x || 0, solid.y || 0, solid.z || 0);
             } else if (solid.type === "cylinder") {
                 var height = Math.max(solid.height || 0.001, 0.001);
                 geometry = new THREE.CylinderGeometry(solid.radius, solid.radius, height, 64);

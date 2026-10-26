@@ -294,6 +294,72 @@ public sealed class StepScriptRunner : IStepScriptRunner
 
     private static bool AddFramedPreview(SandboxRunResult result, FramedSolid solid, ref int previewPoints)
     {
+        if (solid is RevolveSolid revolve && IsAxisAligned(revolve.WorldFrame))
+        {
+            var revolveOrigin = revolve.WorldFrame.Origin;
+            var revolveBounds = revolve.Profile.Bounds;
+            var revolveDeviation = Math.Max(
+                ProfileLoop.DefaultFlattenDeviation,
+                Math.Max(revolveBounds.MaxX - revolveBounds.MinX, revolveBounds.MaxY - revolveBounds.MinY) / 400.0);
+
+            var ring = revolve.Profile.FlattenOuter(revolveDeviation);
+
+            if (ring.Count >= 3 && previewPoints + ring.Count <= MaxTotalPoints)
+            {
+                previewPoints += ring.Count;
+
+                result.Solids.Add(new SandboxSolid
+                {
+                    Type = "revolve",
+                    Name = revolve.Name,
+                    Z = revolveOrigin.Z,
+                    X = revolveOrigin.X,
+                    Y = revolveOrigin.Y,
+                    Outer = ring.Select(p => new SandboxPoint { X = p.X, Y = p.Y }).ToList()
+                });
+
+                return true;
+            }
+        }
+
+        if (solid is SweepSolid sweep
+            && IsAxisAligned(sweep.WorldFrame)
+            && sweep.Route.Segments.Count == 1
+            && sweep.Route.Segments[0] is LineSegment3D line
+            && sweep.Profile.IsCircle
+            && Math.Abs(line.Start.X - line.End.X) <= 1e-9
+            && Math.Abs(line.Start.Y - line.End.Y) <= 1e-9
+            && previewPoints + 4 <= MaxTotalPoints)
+        {
+            var sweepOrigin = sweep.WorldFrame.Origin;
+            var outerArc = sweep.Profile.Outer.CircleArc!;
+            var innerArc = sweep.Profile.HoleCount > 0 ? sweep.Profile.Holes[0].CircleArc : null;
+            var outerRadius = outerArc.Radius;
+            var innerRadius = innerArc != null ? innerArc.Radius : 0.0;
+            var low = Math.Min(line.Start.Z, line.End.Z);
+            var high = Math.Max(line.Start.Z, line.End.Z);
+
+            previewPoints += 4;
+
+            result.Solids.Add(new SandboxSolid
+            {
+                Type = "revolve",
+                Name = sweep.Name,
+                Z = sweepOrigin.Z + low,
+                X = sweepOrigin.X + line.Start.X + outerArc.Center.X,
+                Y = sweepOrigin.Y + line.Start.Y + outerArc.Center.Y,
+                Outer = new List<SandboxPoint>
+                {
+                    new() { X = innerRadius, Y = 0 },
+                    new() { X = outerRadius, Y = 0 },
+                    new() { X = outerRadius, Y = high - low },
+                    new() { X = innerRadius, Y = high - low }
+                }
+            });
+
+            return true;
+        }
+
         if (solid is ExtrudedProfileSolid extrusion && IsAxisAligned(extrusion.WorldFrame))
         {
             var origin = extrusion.WorldFrame.Origin;

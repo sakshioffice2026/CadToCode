@@ -8,18 +8,12 @@ public static class VisionPromptTemplates
         "You are a mechanical drawing reader. Reply with one raw JSON object and nothing else. Be extremely brief.";
 
     public const string Instructions =
-        "Describe this engineering drawing as one JSON object with the keys equipmentType, summary, views, components, dimensions, uncertainties. "
-        + "equipmentType: exactly one of axial fan, centrifugal fan, cyclone separator, industrial wet scrubber, pressure vessel, piping layout, unknown. "
-        + "Use axial fan for any fan with an impeller, hub and blades inside a short cylindrical casing. "
-        + "Use centrifugal fan for any fan or blower with a scroll (spiral) casing, a side inlet and a drum or disc impeller with blades around its rim. "
-        + "Use cyclone separator only for a drawing with a conical hopper and tangential inlet. "
-        + "Use unknown when unsure. "
-        + "summary: under 8 words. "
-        + "views: each visible view (front, side, top, section, detail) as name and description. "
-        + "components: each visible part as name, description, quantity (0 if unknown) and view. "
-        + "dimensions: ONLY numbers printed on the drawing, each as label, value, unit (mm, cm, m, in, deg or count), component, view and evidence (the exact printed text containing that number). Never use a view name as a label. If no numbers are printed, return an empty list. "
-        + "uncertainties: short notes or an empty list. "
-        + "Name the real equipment and parts you can see. Every description is under 5 words. Never repeat yourself. "
+        "Describe this engineering drawing as one JSON object with keys equipmentType, summary, views, components, dimensions, uncertainties. "
+        + "equipmentType: one of axial fan, centrifugal fan, cyclone separator, industrial wet scrubber, pressure vessel, piping layout, unknown. "
+        + "Cyclone separator: tall barrel over a cone with a bottom outlet and a side inlet. Fans need visible blades. Use unknown when unsure. "
+        + "summary: under 6 words. views: name and description. components: name, description, quantity (0 if unknown), view. "
+        + "dimensions: ONLY printed numbers, each as label, value, unit (mm, cm, m, in, deg or count), component, view, evidence (the printed text). Empty list if none. "
+        + "uncertainties: empty list or short notes. Descriptions under 4 words. "
         + "Raw JSON only: start with { and end with }, no markdown, no code fences.";
 
     public static string BuildUserPrompt(string? userHint)

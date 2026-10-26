@@ -183,6 +183,28 @@ public class ProjectRepository : IProjectRepository
         _context.Projects.Remove(entity);
     }
 
+    public async Task SaveDesignStateAsync(int id, string designStateJson, int schemaVersion, CancellationToken cancellationToken = default)
+    {
+        var entity = await _context.Projects.FirstOrDefaultAsync(p => p.Id == id, cancellationToken);
+        if (entity is null)
+        {
+            return;
+        }
+
+        entity.DesignStateJson = designStateJson;
+        entity.DesignStateSchemaVersion = schemaVersion;
+        entity.DesignStateUpdatedAt = DateTime.UtcNow;
+    }
+
+    public async Task<string?> GetDesignStateJsonAsync(int id, CancellationToken cancellationToken = default)
+    {
+        return await _context.Projects
+            .AsNoTracking()
+            .Where(p => p.Id == id)
+            .Select(p => p.DesignStateJson)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     private static string? Truncate(string? value)
     {
         if (string.IsNullOrEmpty(value))

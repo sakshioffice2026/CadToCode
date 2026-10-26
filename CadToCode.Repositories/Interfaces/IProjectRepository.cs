@@ -24,4 +24,10 @@ public interface IProjectRepository
     Task UpdateDetectedUnitAsync(int id, DrawingUnit detectedUnit, CancellationToken cancellationToken = default);
 
     Task DeleteAsync(int id, CancellationToken cancellationToken = default);
+
+    /// <summary>Stores the serialized design state on the project record. Caller commits via the unit of work.</summary>
+    Task SaveDesignStateAsync(int id, string designStateJson, int schemaVersion, CancellationToken cancellationToken = default);
+
+    /// <summary>Reads only the serialized design state column. Returns null when none is stored.</summary>
+    Task<string?> GetDesignStateJsonAsync(int id, CancellationToken cancellationToken = default);
 }

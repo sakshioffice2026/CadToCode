@@ -198,6 +198,12 @@ public class ProjectController : Controller
                 await using var scope = _scopeFactory.CreateAsyncScope();
                 var service = scope.ServiceProvider.GetRequiredService<IProjectProcessingService>();
                 await service.MarkOpenedAsync(id, CancellationToken.None);
+
+                var designState = await service.LoadDesignStateAsync(id, CancellationToken.None);
+                if (designState is null)
+                {
+                    await service.RefreshDesignStateAsync(id, CancellationToken.None);
+                }
             }
             catch (Exception ex)
             {

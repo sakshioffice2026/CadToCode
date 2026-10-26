@@ -45,5 +45,20 @@ public class Project
     [Column("LastOpenedAt")]
     public DateTime? LastOpenedAt { get; set; }
 
+    /// <summary>
+    /// Backend-only serialized engineering design state (DesignStateDocument).
+    /// Never exposed to the client. Used to restore a project without re-running vision/OCR.
+    /// </summary>
+    [Column("DesignStateJson", TypeName = "longtext")]
+    public string? DesignStateJson { get; set; }
+
+    /// <summary>UTC time the stored design state was last written.</summary>
+    [Column("DesignStateUpdatedAt")]
+    public DateTime? DesignStateUpdatedAt { get; set; }
+
+    /// <summary>Schema version of the stored design state, used for safe forward migration.</summary>
+    [Column("DesignStateSchemaVersion")]
+    public int? DesignStateSchemaVersion { get; set; }
+
     public ICollection<DrawingComponent> DrawingComponents { get; set; } = new List<DrawingComponent>();
 }

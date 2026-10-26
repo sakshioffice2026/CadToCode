@@ -167,6 +167,24 @@
       "sourceReference": "Fabrication assumption of this calculator; not from a published standard.",
       "reviewStatus": "PENDING_ENGINEERING_REVIEW",
       "value": 0.5
+    },
+    {
+      "id": "CYC-RULE-019",
+      "key": "standard_gas_density_kgm3",
+      "description": "Gas density used when the user does not supply one (air at about 20 C and 101.325 kPa).",
+      "siUnit": "kg/m3",
+      "sourceReference": "Standard properties of air at about 20 C and 1 atm; Perry's Chemical Engineers' Handbook",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.2
+    },
+    {
+      "id": "CYC-RULE-020",
+      "key": "standard_gas_viscosity_pas",
+      "description": "Gas dynamic viscosity used when the user does not supply one (air at about 20 C).",
+      "siUnit": "Pa.s",
+      "sourceReference": "Standard properties of air at about 20 C and 1 atm; Perry's Chemical Engineers' Handbook",
+      "reviewStatus": "PENDING_ENGINEERING_REVIEW",
+      "value": 1.81e-5
     }
   ]
 }
