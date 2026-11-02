@@ -69,6 +69,48 @@
     </div>
 </div>
 
+<div class="row">
+    <div class="col-xl-8">
+        <form id="bom-form"
+              asp-controller="Manufacturing"
+              asp-action="BomSheets"
+              method="post"
+              enctype="multipart/form-data"
+              class="mb-4"
+              data-report-url="@Url.Action("BomSheetReport", "Manufacturing")">
+            <p class="cc-mfg-detail-heading">Part sheets from BOM</p>
+            <p class="cc-dropzone-hint">Upload a BOM (.csv or .json). Each part sheet is generated from the BOM sizes, not from the drawing lines.</p>
+
+            <div class="d-flex flex-wrap gap-3 align-items-end mt-2">
+                <div>
+                    <label for="bom-file" class="cc-mfg-label">BOM file</label>
+                    <input type="file" id="bom-file" name="bomFile" accept=".csv,.json" required />
+                </div>
+                <div>
+                    <label for="bom-project" class="cc-mfg-label">Job no.</label>
+                    <input type="text" id="bom-project" name="projectCode" class="cc-mfg-select" maxlength="40" />
+                </div>
+                <div>
+                    <label for="bom-material" class="cc-mfg-label">Default material</label>
+                    <input type="text" id="bom-material" name="defaultMaterial" class="cc-mfg-select" value="MS" maxlength="40" />
+                </div>
+                <div>
+                    <label for="bom-thickness" class="cc-mfg-label">Default thickness (mm)</label>
+                    <input type="number" id="bom-thickness" name="defaultThickness" class="cc-mfg-select" min="0" step="any" />
+                </div>
+            </div>
+
+            <div class="d-flex align-items-center gap-3 mt-3">
+                <button type="button" id="bom-check" class="cc-btn cc-btn-ghost">Check BOM</button>
+                <button type="submit" class="cc-btn cc-btn-primary">Generate part sheets</button>
+            </div>
+        </form>
+
+        <div id="bom-status" class="cc-alert" role="status" hidden></div>
+        <ul id="bom-issues" class="cc-mfg-list" hidden></ul>
+    </div>
+</div>
+
 <form method="get" asp-controller="Manufacturing" asp-action="Index" class="cc-mfg-picker">
     <label for="mfg-project" class="cc-mfg-label">Drawing</label>
     <select id="mfg-project" name="id" class="cc-mfg-select" onchange="this.form.submit()">
@@ -262,4 +304,94 @@ else
             </table>
         </div>
     }
+}
+
+@section Scripts {
+    <script>
+        (function () {
+            var form = document.getElementById('bom-form');
+            if (!form) { return; }
+
+            var status = document.getElementById('bom-status');
+            var list = document.getElementById('bom-issues');
+            var checkButton = document.getElementById('bom-check');
+
+            function showStatus(text, kind) {
+                status.textContent = text;
+                status.className = 'cc-alert ' + kind;
+                status.hidden = false;
+            }
+
+            function showIssues(issues) {
+                list.innerHTML = '';
+                issues.forEach(function (issue) {
+                    var item = document.createElement('li');
+                    item.textContent = '[' + String(issue.severity).toUpperCase() + '] ' + issue.part + ' (' + issue.code + '): ' + issue.message;
+                    list.appendChild(item);
+                });
+                list.hidden = issues.length === 0;
+            }
+
+            async function runReport() {
+                var response = await fetch(form.getAttribute('data-report-url'), { method: 'POST', body: new FormData(form) });
+                var data = null;
+                try { data = await response.json(); } catch (e) { data = null; }
+
+                if (!response.ok || !data) {
+                    showIssues([]);
+                    showStatus((data && data.error) || 'The BOM could not be checked.', 'cc-alert-error');
+                    return null;
+                }
+
+                showIssues(data.issues || []);
+                showStatus(
+                    data.sheetCount + ' of ' + data.requestedCount + ' part sheets can be generated.' + (data.hasErrors ? ' Some parts were skipped. See the list below.' : ''),
+                    data.hasErrors ? 'cc-alert-error' : 'cc-alert-success');
+                return data;
+            }
+
+            function fileNameFrom(response) {
+                var header = response.headers.get('Content-Disposition') || '';
+                var match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+                return match ? decodeURIComponent(match[1]) : 'part-sheets.zip';
+            }
+
+            checkButton.addEventListener('click', async function () {
+                if (!form.reportValidity()) { return; }
+                checkButton.disabled = true;
+                try { await runReport(); } finally { checkButton.disabled = false; }
+            });
+
+            form.addEventListener('submit', async function (event) {
+                event.preventDefault();
+                if (!form.reportValidity()) { return; }
+
+                var submit = form.querySelector('button[type="submit"]');
+                submit.disabled = true;
+
+                try {
+                    var report = await runReport();
+                    if (!report || report.sheetCount === 0) { return; }
+
+                    var response = await fetch(form.action, { method: 'POST', body: new FormData(form) });
+                    if (!response.ok) {
+                        showStatus('The part sheet package could not be generated.', 'cc-alert-error');
+                        return;
+                    }
+
+                    var blob = await response.blob();
+                    var url = URL.createObjectURL(blob);
+                    var link = document.createElement('a');
+                    link.href = url;
+                    link.download = fileNameFrom(response);
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    URL.revokeObjectURL(url);
+                } finally {
+                    submit.disabled = false;
+                }
+            });
+        })();
+    </script>
 }

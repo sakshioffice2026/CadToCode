@@ -1,10 +1,12 @@
-﻿using System.Globalization;
-using System.Text;
-using CadToCode.Business.Interfaces;
+﻿using CadToCode.Business.Interfaces;
+using CadToCode.Business.Services;
 using CadToCode.Models.Dtos;
+using CadToCode.Business.Services;
 using CadToCode.Models.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using System.Globalization;
+using System.Text;
 
 namespace Web.Controllers;
 
@@ -19,22 +21,25 @@ public class ManufacturingController : Controller
 {
     private const string IndexViewPath = "~/Views/Manufacturing/Index.cshtml";
     private const long MaxUploadBytes = 52_428_800;
-
+    private const long MaxBomBytes = 5_242_880;
+    private readonly ParametricPartSheetService _parametricSheets;
     private readonly IProjectProcessingService _processingService;
     private readonly IBlockBreakdownService _breakdownService;
     private readonly ILogger<ManufacturingController> _logger;
     private readonly IPartManufacturingDxfService _manufacturingDxfService;
 
     public ManufacturingController(
-        IProjectProcessingService processingService,
-        IBlockBreakdownService breakdownService,
-        ILogger<ManufacturingController> logger,
-        IPartManufacturingDxfService manufacturingDxfService)
+    IProjectProcessingService processingService,
+    IBlockBreakdownService breakdownService,
+    ILogger<ManufacturingController> logger,
+    IPartManufacturingDxfService manufacturingDxfService,
+    ParametricPartSheetService parametricSheets)
     {
         _processingService = processingService;
         _breakdownService = breakdownService;
         _logger = logger;
         _manufacturingDxfService = manufacturingDxfService;
+        _parametricSheets = parametricSheets;
     }
 
     [HttpGet]
@@ -192,8 +197,125 @@ public class ManufacturingController : Controller
         }
 
         return File(zip, "application/zip", "manufacturing-dxf-package-" + id + ".zip");
+
     }
 
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxBomBytes)]
+    public async Task<IActionResult> BomSheetReport(
+        IFormFile? bomFile,
+        string? projectCode,
+        string? defaultMaterial,
+        double? defaultThickness,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await BuildBomPackageAsync(bomFile, projectCode, defaultMaterial, defaultThickness, cancellationToken);
+
+        if (result.Error is not null)
+        {
+            return BadRequest(new { error = result.Error });
+        }
+
+        var package = result.Package!;
+
+        return Json(new
+        {
+            sheetCount = package.SheetCount,
+            requestedCount = package.RequestedCount,
+            hasErrors = package.HasErrors,
+            issues = IssueRows(package)
+        });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxBomBytes)]
+    public async Task<IActionResult> BomSheets(
+        IFormFile? bomFile,
+        string? projectCode,
+        string? defaultMaterial,
+        double? defaultThickness,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await BuildBomPackageAsync(bomFile, projectCode, defaultMaterial, defaultThickness, cancellationToken);
+
+        if (result.Error is not null)
+        {
+            return BadRequest(new { error = result.Error });
+        }
+
+        var package = result.Package!;
+
+        if (package.Zip is null)
+        {
+            return UnprocessableEntity(new
+            {
+                error = "No sheet could be generated from the BOM.",
+                issues = IssueRows(package)
+            });
+        }
+
+        var code = string.IsNullOrWhiteSpace(projectCode) ? "bom" : SafeFileName(projectCode);
+        return File(package.Zip, "application/zip", "part-sheets-" + code + ".zip");
+    }
+
+    private async Task<(ParametricSheetPackage? Package, string? Error)> BuildBomPackageAsync(
+        IFormFile? bomFile,
+        string? projectCode,
+        string? defaultMaterial,
+        double? defaultThickness,
+        CancellationToken cancellationToken)
+    {
+        if (bomFile is null || bomFile.Length == 0)
+        {
+            return (null, "Please choose a BOM file (.csv or .json).");
+        }
+
+        var extension = Path.GetExtension(bomFile.FileName);
+        var isCsv = string.Equals(extension, ".csv", StringComparison.OrdinalIgnoreCase);
+        var isJson = string.Equals(extension, ".json", StringComparison.OrdinalIgnoreCase);
+
+        if (!isCsv && !isJson)
+        {
+            return (null, "The BOM must be a .csv or .json file.");
+        }
+
+        try
+        {
+            string text;
+            using (var reader = new StreamReader(bomFile.OpenReadStream(), Encoding.UTF8, true))
+            {
+                text = await reader.ReadToEndAsync(cancellationToken);
+            }
+
+            var package = isCsv
+                ? _parametricSheets.BuildFromCsv(text, projectCode, defaultMaterial, defaultThickness)
+                : _parametricSheets.BuildFromJson(text, projectCode, defaultMaterial, defaultThickness);
+
+            return (package, null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "BOM sheet generation failed for file {FileName}.", bomFile.FileName);
+            return (null, "The BOM could not be processed.");
+        }
+    }
+
+    private static IEnumerable<object> IssueRows(ParametricSheetPackage package)
+    {
+        return package.Issues.Select(i => (object)new
+        {
+            severity = i.Severity.ToString(),
+            code = i.Code,
+            part = i.PartName,
+            message = i.Message
+        });
+    }
     [HttpGet]
     public async Task<IActionResult> Export(int id, CancellationToken cancellationToken)
     {

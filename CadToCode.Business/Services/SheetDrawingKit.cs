@@ -155,6 +155,64 @@ public static class SheetDrawingKit
         }
     }
 
+    /// <summary>Smallest standard enlargement that makes a feature at least targetPaperMm wide on the sheet.</summary>
+    public static double DetailScale(double featureMm, double targetPaperMm = 24.0)
+    {
+        foreach (var factor in new[] { 1.0, 2.0, 2.5, 4.0, 5.0, 10.0, 20.0, 25.0, 50.0 })
+        {
+            if (featureMm * factor >= targetPaperMm)
+            {
+                return factor;
+            }
+        }
+
+        return 50.0;
+    }
+
+    /// <summary>Circle and letter on the parent view that mark the area shown in a detail view.</summary>
+    public static void DetailMark(DxfFile dxf, string label, double x, double y, double radius)
+    {
+        Circle(dxf, x, y, radius, CenterLayer);
+        Text(dxf, x + radius + 1.5, y + radius + 1.5, 3.5, label, TextLayer);
+    }
+
+    /// <summary>
+    /// Enlarged view of one hole of a bolt circle: true hole CIRCLE, true PCD ARC, diameter dimension and the
+    /// title DETAIL VIEW 'X' with its scale. (x, y) is the hole centre on the sheet.
+    /// </summary>
+    public static void HoleDetailView(DxfFile dxf, string label, double holeDiameterMm, double pcdMm, double x, double y)
+    {
+        var factor = DetailScale(holeDiameterMm);
+        var holeRadius = holeDiameterMm * factor / 2.0;
+        var pcdRadius = pcdMm * factor / 2.0;
+        var mark = holeRadius + 4.0;
+
+        Circle(dxf, x, y, holeRadius, OutlineLayer);
+        Line(dxf, x - mark, y, x + mark, y, CenterLayer);
+        Line(dxf, x, y - mark, x, y + mark, CenterLayer);
+
+        var halfSpan = Math.Min(Math.PI / 3.0, (holeRadius + 14.0) / pcdRadius);
+        var halfDegrees = halfSpan * 180.0 / Math.PI;
+        dxf.Entities.Add(new DxfArc(new DxfPoint(x, y - pcdRadius, 0), pcdRadius, 90.0 - halfDegrees, 90.0 + halfDegrees) { Layer = CenterLayer });
+
+        var dimY = y - holeRadius - 10.0;
+        var xa = x - holeRadius;
+        var xb = x + holeRadius;
+        Line(dxf, xa, y - holeRadius - 1.5, xa, dimY - 2.0, DimLayer);
+        Line(dxf, xb, y - holeRadius - 1.5, xb, dimY - 2.0, DimLayer);
+        Line(dxf, xa, dimY, xb, dimY, DimLayer);
+        Line(dxf, xa, dimY, xa + 3.0, dimY + 0.8, DimLayer);
+        Line(dxf, xa, dimY, xa + 3.0, dimY - 0.8, DimLayer);
+        Line(dxf, xb, dimY, xb - 3.0, dimY + 0.8, DimLayer);
+        Line(dxf, xb, dimY, xb - 3.0, dimY - 0.8, DimLayer);
+
+        var dimText = "%%C" + Format(holeDiameterMm);
+        Text(dxf, x - dimText.Length * 3.5 * 0.3, dimY + 1.5, 3.5, dimText, DimLayer);
+
+        Text(dxf, x - 24.0, dimY - 14.0, 3.5, "DETAIL VIEW '" + label + "'", TextLayer);
+        Text(dxf, x - 24.0, dimY - 20.0, 3.0, "SCALE " + Format(factor) + ":1", TextLayer);
+    }
+
     public static void Bom(DxfFile dxf, SheetRules sheet, SheetFrameResult area, int itemNo, string rmSize, double rawWeightKg, double finishWeightKg)
     {
         var headers = sheet.BomColumns.Count == 4

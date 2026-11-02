@@ -150,6 +150,8 @@ public sealed class HubPartDrawingBuilder
         {
             var note = FormatHoleNote(rules.Sheet, request);
             Text(dxf, cx - plateRadius, cy - plateRadius - 42.0, 3.5, note, TextLayer);
+            SheetDrawingKit.DetailMark(dxf, "B", cx, cy + request.HolePcdMm / 2.0 / scaleDivisor, request.HoleDiameterMm / 2.0 / scaleDivisor + 4.0);
+            SheetDrawingKit.HoleDetailView(dxf, "B", request.HoleDiameterMm, request.HolePcdMm, sectionX2 + 70.0, cy - 40.0);
         }
 
         var calloutLines = FormatCallout(rules.Sheet, request, finishWeight);

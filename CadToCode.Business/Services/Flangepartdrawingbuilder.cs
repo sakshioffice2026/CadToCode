@@ -140,6 +140,8 @@ public sealed class FlangePartDrawingBuilder
         {
             var note = FormatHoleNote(rules.Sheet, request);
             Text(dxf, cx - radius, cy - radius - 26.0, 3.5, note, TextLayer);
+            SheetDrawingKit.DetailMark(dxf, "A", cx, cy + request.HolePcdMm / 2.0 / scaleDivisor, request.HoleDiameterMm / 2.0 / scaleDivisor + 4.0);
+            SheetDrawingKit.HoleDetailView(dxf, "A", request.HoleDiameterMm, request.HolePcdMm, sideX1 + 45.0, cy - 30.0);
         }
 
         var calloutLines = FormatCallout(rules.Sheet, request, finishWeight);

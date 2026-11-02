@@ -150,15 +150,15 @@ public sealed class ScrollFlatPatternDrawingBuilder
     private static void DrawPlan(DxfFile dxf, ScrollFlatPatternRequest request, double growth, double sweep, double divisor, double cx, double cy)
     {
         var steps = Math.Max(24, (int)Math.Ceiling(sweep * 180.0 / Math.PI / 2.0));
-        var vertices = new List<DxfLwPolylineVertex>(steps + 1);
-        for (var i = 0; i <= steps; i++)
+        var segments = Math.Max(8, (int)Math.Ceiling(request.SweepDegrees / 15.0));
+        for (var i = 0; i < segments; i++)
         {
-            var theta = sweep * i / steps;
-            var radius = (request.StartRadiusMm + growth * theta) / divisor;
-            vertices.Add(new DxfLwPolylineVertex { X = cx + radius * Math.Cos(theta), Y = cy + radius * Math.Sin(theta) });
+            var t0 = sweep * i / segments;
+            var t1 = sweep * (i + 0.5) / segments;
+            var t2 = sweep * (i + 1) / segments;
+            AddSpiralArc(dxf, request, growth, divisor, cx, cy, t0, t1, t2);
         }
 
-        dxf.Entities.Add(new DxfLwPolyline(vertices) { Layer = SheetDrawingKit.OutlineLayer });
 
         var startRadius = request.StartRadiusMm / divisor;
         var endRadius = request.EndRadiusMm / divisor;
@@ -170,6 +170,63 @@ public sealed class ScrollFlatPatternDrawingBuilder
         SheetDrawingKit.Text(dxf, cx + startRadius + 2.0, cy + 2.0, 3.0, "R" + SheetDrawingKit.Format(request.StartRadiusMm), SheetDrawingKit.TextLayer);
         SheetDrawingKit.Text(dxf, cx + endRadius * Math.Cos(sweep) + 2.0, cy + endRadius * Math.Sin(sweep) + 2.0, 3.0,
             "R" + SheetDrawingKit.Format(request.EndRadiusMm), SheetDrawingKit.TextLayer);
+    }
+
+    /// <summary>
+    /// Adds one true ARC through three points of the spiral (start, middle, end of the segment).
+    /// </summary>
+    private static void AddSpiralArc(DxfFile dxf, ScrollFlatPatternRequest request, double growth, double divisor, double cx, double cy, double t0, double t1, double t2)
+    {
+        (double X, double Y) Point(double t)
+        {
+            var r = (request.StartRadiusMm + growth * t) / divisor;
+            return (cx + r * Math.Cos(t), cy + r * Math.Sin(t));
+        }
+
+        var a = Point(t0);
+        var b = Point(t1);
+        var c = Point(t2);
+
+        var bx = b.X - a.X;
+        var by = b.Y - a.Y;
+        var ccx = c.X - a.X;
+        var ccy = c.Y - a.Y;
+        var d = 2.0 * (bx * ccy - by * ccx);
+
+        if (Math.Abs(d) < 1e-9)
+        {
+            SheetDrawingKit.Line(dxf, a.X, a.Y, c.X, c.Y, SheetDrawingKit.OutlineLayer);
+            return;
+        }
+
+        var b2 = bx * bx + by * by;
+        var c2 = ccx * ccx + ccy * ccy;
+        var ux = (ccy * b2 - by * c2) / d;
+        var uy = (bx * c2 - ccx * b2) / d;
+        var radius = Math.Sqrt(ux * ux + uy * uy);
+
+        var centerX = a.X + ux;
+        var centerY = a.Y + uy;
+        var startAngle = Math.Atan2(a.Y - centerY, a.X - centerX) * 180.0 / Math.PI;
+        var endAngle = Math.Atan2(c.Y - centerY, c.X - centerX) * 180.0 / Math.PI;
+
+        var cross = (b.X - a.X) * (c.Y - b.Y) - (b.Y - a.Y) * (c.X - b.X);
+        if (cross < 0.0)
+        {
+            (startAngle, endAngle) = (endAngle, startAngle);
+        }
+
+        if (startAngle < 0.0)
+        {
+            startAngle += 360.0;
+        }
+
+        if (endAngle < 0.0)
+        {
+            endAngle += 360.0;
+        }
+
+        dxf.Entities.Add(new DxfArc(new DxfPoint(centerX, centerY, 0), radius, startAngle, endAngle) { Layer = SheetDrawingKit.OutlineLayer });
     }
 
     /// <summary>Arc length of r(t) = r0 + growth * t from 0 to angle, by Simpson's rule.</summary>
