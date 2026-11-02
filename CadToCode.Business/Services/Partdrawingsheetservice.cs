@@ -57,7 +57,7 @@ public sealed class PartDrawingSheetService
 
                 switch (candidate.Shape)
                 {
-                    case PartShape.Flange:
+                    case SheetPartShape.Flange:
                         {
                             if (candidate.OuterDiameterMm is not > 0.0 || thickness is not > 0.0)
                             {
@@ -84,7 +84,7 @@ public sealed class PartDrawingSheetService
                             break;
                         }
 
-                    case PartShape.Plate:
+                    case SheetPartShape.Plate:
                         {
                             if (candidate.LengthMm is not > 0.0 || candidate.WidthMm is not > 0.0 || thickness is not > 0.0)
                             {
@@ -108,7 +108,7 @@ public sealed class PartDrawingSheetService
                             break;
                         }
 
-                    case PartShape.Bar:
+                    case SheetPartShape.Bar:
                         {
                             if (candidate.OuterDiameterMm is not > 0.0 || candidate.LengthMm is not > 0.0)
                             {

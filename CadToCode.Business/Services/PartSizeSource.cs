@@ -5,7 +5,7 @@ using IxMilia.Dxf.Entities;
 
 namespace CadToCode.Business.Services;
 
-public enum PartShape
+public enum SheetPartShape
 {
     Unknown = 0,
     Flange = 1,
@@ -20,7 +20,7 @@ public sealed class PartSizeCandidate
 
     public string Label { get; set; } = string.Empty;
 
-    public PartShape Shape { get; set; } = PartShape.Unknown;
+    public SheetPartShape Shape { get; set; } = SheetPartShape.Unknown;
 
     public double? OuterDiameterMm { get; set; }
 
@@ -143,17 +143,17 @@ public static class PartSizeParser
                 if (second <= diameters[0] * 0.5)
                 {
                     candidate.ThicknessMm = second;
-                    candidate.Shape = PartShape.Flange;
+                    candidate.Shape = SheetPartShape.Flange;
                 }
                 else
                 {
                     candidate.LengthMm = second;
-                    candidate.Shape = PartShape.Bar;
+                    candidate.Shape = SheetPartShape.Bar;
                 }
             }
             else if (candidate.ThicknessMm is not null)
             {
-                candidate.Shape = PartShape.Flange;
+                candidate.Shape = SheetPartShape.Flange;
             }
         }
         else if (numbers.Count >= 2)
@@ -167,11 +167,11 @@ public static class PartSizeParser
 
             if (candidate.ThicknessMm is not null)
             {
-                candidate.Shape = PartShape.Plate;
+                candidate.Shape = SheetPartShape.Plate;
             }
         }
 
-        var hasSize = candidate.Shape != PartShape.Unknown;
+        var hasSize = candidate.Shape != SheetPartShape.Unknown;
         var holeOnly = candidate.HoleCount is not null;
         return hasSize || holeOnly ? candidate : null;
     }
@@ -247,13 +247,13 @@ public sealed class GaTextPartSizeSource
 
             candidate.X = x;
             candidate.Y = y;
-            (candidate.Shape == PartShape.Unknown ? holeOnly : sized).Add(candidate);
+            (candidate.Shape == SheetPartShape.Unknown ? holeOnly : sized).Add(candidate);
         }
 
         foreach (var note in holeOnly)
         {
             var target = sized
-                .Where(s => s.HoleCount is null && s.Shape is PartShape.Flange or PartShape.Plate)
+                .Where(s => s.HoleCount is null && s.Shape is SheetPartShape.Flange or SheetPartShape.Plate)
                 .OrderBy(s => Math.Pow((s.X ?? 0.0) - (note.X ?? 0.0), 2) + Math.Pow((s.Y ?? 0.0) - (note.Y ?? 0.0), 2))
                 .FirstOrDefault();
 
@@ -300,7 +300,7 @@ public static class DesignFlowPartSizeSource
             var body = colon > 0 ? line[(colon + 1)..] : line;
 
             var candidate = PartSizeParser.Parse(body);
-            if (candidate is null || candidate.Shape == PartShape.Unknown)
+            if (candidate is null || candidate.Shape == SheetPartShape.Unknown)
             {
                 continue;
             }
@@ -323,7 +323,7 @@ public static class PartSizeRequestFactory
 {
     public static FlangePartRequest? ToFlange(PartSizeCandidate candidate, SheetFrameRequest frame, int itemNo)
     {
-        if (candidate.Shape != PartShape.Flange || candidate.OuterDiameterMm is not > 0.0 || candidate.ThicknessMm is not > 0.0)
+        if (candidate.Shape != SheetPartShape.Flange || candidate.OuterDiameterMm is not > 0.0 || candidate.ThicknessMm is not > 0.0)
         {
             return null;
         }
@@ -346,7 +346,7 @@ public static class PartSizeRequestFactory
 
     public static RectangularPlateRequest? ToPlate(PartSizeCandidate candidate, SheetFrameRequest frame, int itemNo)
     {
-        if (candidate.Shape != PartShape.Plate || candidate.LengthMm is not > 0.0 || candidate.WidthMm is not > 0.0 || candidate.ThicknessMm is not > 0.0)
+        if (candidate.Shape != SheetPartShape.Plate || candidate.LengthMm is not > 0.0 || candidate.WidthMm is not > 0.0 || candidate.ThicknessMm is not > 0.0)
         {
             return null;
         }
@@ -366,7 +366,7 @@ public static class PartSizeRequestFactory
 
     public static RoundBarRequest? ToBar(PartSizeCandidate candidate, SheetFrameRequest frame, int itemNo)
     {
-        if (candidate.Shape != PartShape.Bar || candidate.OuterDiameterMm is not > 0.0 || candidate.LengthMm is not > 0.0)
+        if (candidate.Shape != SheetPartShape.Bar || candidate.OuterDiameterMm is not > 0.0 || candidate.LengthMm is not > 0.0)
         {
             return null;
         }

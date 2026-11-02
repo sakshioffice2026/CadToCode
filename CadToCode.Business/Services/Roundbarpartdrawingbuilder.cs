@@ -8,7 +8,7 @@ using IxMilia.Dxf.Tables;
 namespace CadToCode.Business.Services;
 
 /// <summary>Inputs for one round bar part sheet. All sizes are in mm.</summary>
-public sealed class RoundBarPartRequest
+public sealed class RoundBarRequest
 {
     public string Name { get; init; } = "ROUND BAR";
 
@@ -79,7 +79,7 @@ public sealed class RoundBarPartDrawingBuilder
     private const double BomRowHeight = 8.0;
     private static readonly double[] StandardScales = { 1.0, 2.0, 2.5, 4.0, 5.0, 10.0, 20.0, 25.0, 50.0 };
 
-    public RoundBarPartResult Build(ManufacturingRules rules, RoundBarPartRequest request)
+    public RoundBarPartResult Build(ManufacturingRules rules, RoundBarRequest request)
     {
         ArgumentNullException.ThrowIfNull(rules);
         ArgumentNullException.ThrowIfNull(request);
@@ -148,7 +148,7 @@ public sealed class RoundBarPartDrawingBuilder
         return new RoundBarPartResult(dxf, finishWeight, rawWeight, scaleText);
     }
 
-    private static void Validate(RoundBarPartRequest request)
+    private static void Validate(RoundBarRequest request)
     {
         if (request.DiameterMm <= 0.0 || request.LengthMm <= 0.0)
         {
@@ -172,7 +172,7 @@ public sealed class RoundBarPartDrawingBuilder
         }
     }
 
-    private static double CalculateFinishWeight(ManufacturingRules rules, RoundBarPartRequest request)
+    private static double CalculateFinishWeight(ManufacturingRules rules, RoundBarRequest request)
     {
         var weight = rules.DiscWeightKg(request.DiameterMm, request.LengthMm);
 
@@ -193,7 +193,7 @@ public sealed class RoundBarPartDrawingBuilder
         return Math.Max(weight, 0.0);
     }
 
-    private static double ChooseScale(RoundBarPartRequest request, SheetFrameResult area)
+    private static double ChooseScale(RoundBarRequest request, SheetFrameResult area)
     {
         var availableHeight = area.DrawingMaxY - area.DrawingMinY - BottomMargin - TopMargin - AboveDimSpace - 2.0 * BomRowHeight - 10.0;
         var availableWidth = area.DrawingMaxX - area.DrawingMinX - 2.0 * SideMargin;
@@ -211,7 +211,7 @@ public sealed class RoundBarPartDrawingBuilder
         return StandardScales[^1];
     }
 
-    private static void DrawSideView(DxfFile dxf, RoundBarPartRequest request, double divisor, double x0, double x1, double cy)
+    private static void DrawSideView(DxfFile dxf, RoundBarRequest request, double divisor, double x0, double x1, double cy)
     {
         var radius = request.DiameterMm / 2.0 / divisor;
         var c = request.ChamferMm / divisor;
@@ -243,7 +243,7 @@ public sealed class RoundBarPartDrawingBuilder
         }
     }
 
-    private static void DrawEndView(DxfFile dxf, RoundBarPartRequest request, double divisor, double cx, double cy)
+    private static void DrawEndView(DxfFile dxf, RoundBarRequest request, double divisor, double cx, double cy)
     {
         var radius = request.DiameterMm / 2.0 / divisor;
         Circle(dxf, cx, cy, radius, OutlineLayer);
@@ -258,7 +258,7 @@ public sealed class RoundBarPartDrawingBuilder
         Line(dxf, cx, cy - radius - extend, cx, cy + radius + extend, CenterLayer);
     }
 
-    private static void DrawDimensions(DxfFile dxf, RoundBarPartRequest request, double divisor, double x0, double x1, double cy, double endCx)
+    private static void DrawDimensions(DxfFile dxf, RoundBarRequest request, double divisor, double x0, double x1, double cy, double endCx)
     {
         var radius = request.DiameterMm / 2.0 / divisor;
 
@@ -298,7 +298,7 @@ public sealed class RoundBarPartDrawingBuilder
         Text(dxf, (xa + xb) / 2.0 - textWidth / 2.0, yDim + 1.5, textHeight, text, DimLayer);
     }
 
-    private static void DrawBom(DxfFile dxf, SheetRules sheet, RoundBarPartRequest request, SheetFrameResult area, double rawDiameter, double rawLength, double rawWeight, double finishWeight)
+    private static void DrawBom(DxfFile dxf, SheetRules sheet, RoundBarRequest request, SheetFrameResult area, double rawDiameter, double rawLength, double rawWeight, double finishWeight)
     {
         var headers = sheet.BomColumns.Count == 4
             ? sheet.BomColumns
@@ -338,7 +338,7 @@ public sealed class RoundBarPartDrawingBuilder
         }
     }
 
-    private static List<string> FormatCallout(RoundBarPartRequest request, double weightKg)
+    private static List<string> FormatCallout(RoundBarRequest request, double weightKg)
     {
         return new List<string>
         {

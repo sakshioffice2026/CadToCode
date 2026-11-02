@@ -339,7 +339,10 @@ public static class LineArcConverter
 
         radius = Math.Sqrt(square);
         var limit = radius * 0.003 + nodeTolerance * 5.0;
-        return points.All(p => Math.Abs(Math.Sqrt((p.X - cx) * (p.X - cx) + (p.Y - cy) * (p.Y - cy)) - radius) <= limit);
+        var fitCx = cx;
+        var fitCy = cy;
+        var fitRadius = radius;
+        return points.All(p => Math.Abs(Math.Sqrt((p.X - fitCx) * (p.X - fitCx) + (p.Y - fitCy) * (p.Y - fitCy)) - fitRadius) <= limit);
     }
 
     private static bool Solve3(double[,] a, double[] b, out double[] x)

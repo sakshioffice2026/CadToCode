@@ -13,8 +13,8 @@ public static class DxfDimensionWriter
     public static void Configure(DxfFile dxf, double textHeight = 3.5, double arrowSize = 3.0)
     {
         ArgumentNullException.ThrowIfNull(dxf);
-        dxf.Header.DimensionTextHeight = textHeight;
-        dxf.Header.DimensionArrowSize = arrowSize;
+        dxf.Header.DimensioningTextHeight = textHeight;
+        dxf.Header.DimensioningArrowSize = arrowSize;
         dxf.Header.DimensionExtensionLineExtension = 2.0;
         dxf.Header.DimensionLineGap = 1.5;
     }
