@@ -12,10 +12,10 @@ namespace CadToCode.Business.Services;
 public class DxfGeometryExtractor : IGeometryExtractor
 {
     private const int MaxBlockDepth = 8;
-    private const int MaxPrimitives = 250_000;
+    private const int MaxPrimitives = 1_000_000;
     private const int MaxInsertInstances = 2_000;
-    private const double ArcStepDegrees = 5.0;
-    private const int SplineSamples = 64;
+    private const double ArcStepDegrees = 1.0;
+    private const int SplineSamples = 256;
 
     private static readonly Regex MTextCodes = new(
         @"\\[fFHhCcQqWwAaTtSs][^;]*;|\\[LlOoKk~]|\{|\}",

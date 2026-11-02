@@ -163,6 +163,8 @@ public class ManufacturingController : Controller
         string? defaultMaterial,
         decimal? defaultThickness,
         bool includeReferenceGeometry = false,
+        bool includeAllParts = false,
+        string? cutLayers = null,
         PartOriginMode origin = PartOriginMode.BottomLeft,
         CancellationToken cancellationToken = default)
     {
@@ -172,6 +174,10 @@ public class ManufacturingController : Controller
             ProjectCode = projectCode,
             Origin = origin,
             IncludeReferenceGeometry = includeReferenceGeometry,
+            IncludeAllParts = includeAllParts,
+            CutLayers = (cutLayers ?? string.Empty)
+                .Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .ToList(),
             DefaultMaterial = defaultMaterial,
             DefaultThickness = defaultThickness,
             Specs = specs ?? new List<PartManufacturingSpecDto>()

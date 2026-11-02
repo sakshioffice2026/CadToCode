@@ -39,6 +39,8 @@ namespace CadToCode.Models.Dtos
         public double MinPartSize { get; set; } = 25.0;
         public int MinEntityCount { get; set; } = 3;
         public bool RequireClosedProfile { get; set; } = true;
+        public bool IncludeAllParts { get; set; }
+        public List<string> CutLayers { get; set; } = new();
         public string? DefaultMaterial { get; set; }
         public decimal? DefaultThickness { get; set; }
         public List<string> NodeIds { get; set; } = new();
@@ -71,6 +73,7 @@ namespace CadToCode.Models.Dtos
         public string? ErrorMessage { get; set; }
         public List<PartManufacturingFileDto> Files { get; set; } = new();
         public List<string> Warnings { get; set; } = new();
+        public List<string> SkippedParts { get; set; } = new();
     }
 }
 
@@ -164,7 +167,7 @@ namespace CadToCode.Business.Services
                     }
 
                     var spec = FindSpec(specs, group);
-                    var file = BuildPartFile(group, spec, request, package.ProjectCode, usedNames, package.Warnings);
+                    var file = BuildPartFile(group, spec, request, package.ProjectCode, usedNames, package.Warnings, package.SkippedParts);
                     if (file is not null)
                     {
                         package.Files.Add(file);
@@ -217,6 +220,8 @@ namespace CadToCode.Business.Services
                 MinPartSize = request.MinPartSize,
                 MinEntityCount = request.MinEntityCount,
                 RequireClosedProfile = request.RequireClosedProfile,
+                IncludeAllParts = request.IncludeAllParts,
+                CutLayers = request.CutLayers,
                 DefaultMaterial = request.DefaultMaterial,
                 DefaultThickness = request.DefaultThickness,
                 Specs = request.Specs,
@@ -356,14 +361,15 @@ namespace CadToCode.Business.Services
             CancellationToken cancellationToken)
         {
             var result = new List<PartGroup>();
-            var explicitlyRequested = request.NodeIds is { Count: > 0 };
+            var explicitlyRequested = request.NodeIds is { Count: > 0 } || request.IncludeAllParts;
 
             foreach (var group in groups)
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var node = group.Representative;
-                var cut = DrawingEntity.FromGeometry(node.Geometry).Where(e => e.IsOutlineCandidate).ToList();
+                var minPartSize = ScaledMinPartSize(request, node.Geometry.DetectedUnit);
+                var cut = DrawingEntity.FromGeometry(node.Geometry).Where(e => IsCutEntity(e, request)).ToList();
 
                 if (cut.Count <= request.SplitThreshold || !TryGetBounds(cut, out var bx0, out var by0, out var bx1, out var by1))
                 {
@@ -389,7 +395,7 @@ namespace CadToCode.Business.Services
                     var h = y1 - y0;
 
                     if (!explicitlyRequested
-                        && (Math.Max(w, h) < request.MinPartSize || component.Count < request.MinEntityCount))
+                        && (Math.Max(w, h) < minPartSize || component.Count < request.MinEntityCount))
                     {
                         skipped++;
                         continue;
@@ -657,51 +663,64 @@ namespace CadToCode.Business.Services
             PartManufacturingRequestDto request,
             string projectCode,
             HashSet<string> usedNames,
-            List<string> warnings)
+            List<string> warnings,
+            List<string> skippedParts)
         {
             var node = group.Representative;
             var entities = group.Entities ?? DrawingEntity.FromGeometry(node.Geometry);
 
-            var cut = entities.Where(e => e.IsOutlineCandidate).ToList();
+            var cut = entities.Where(e => IsCutEntity(e, request)).ToList();
             var reference = request.IncludeReferenceGeometry
-                ? entities.Where(e => !e.IsOutlineCandidate).ToList()
+                ? entities.Where(e => !IsCutEntity(e, request)).ToList()
                 : new List<DrawingEntity>();
 
             if (cut.Count == 0)
             {
-                warnings.Add(node.Name + " (" + node.Id + "): no cuttable geometry found; skipped.");
+                var message = node.Name + " (" + node.Id + "): no cuttable geometry found; skipped.";
+                warnings.Add(message);
+                skippedParts.Add(message);
                 return null;
             }
 
             if (!TryGetBounds(cut.Concat(reference), out var minX, out var minY, out var maxX, out var maxY))
             {
-                warnings.Add(node.Name + " (" + node.Id + "): bounds could not be computed; skipped.");
+                var message = node.Name + " (" + node.Id + "): bounds could not be computed; skipped.";
+                warnings.Add(message);
+                skippedParts.Add(message);
                 return null;
             }
 
             var width = maxX - minX;
             var height = maxY - minY;
 
-            var explicitlyRequested = request.NodeIds is { Count: > 0 };
+            var explicitlyRequested = request.NodeIds is { Count: > 0 } || request.IncludeAllParts;
             if (!explicitlyRequested)
             {
                 var label = node.Name + " (" + node.Id + ")";
+                var minPartSize = ScaledMinPartSize(request, node.Geometry.DetectedUnit);
 
-                if (Math.Max(width, height) < request.MinPartSize)
+                if (Math.Max(width, height) < minPartSize)
                 {
-                    warnings.Add(label + ": " + width.ToString("0.##", CultureInfo.InvariantCulture) + " x " + height.ToString("0.##", CultureInfo.InvariantCulture) + " is below the minimum part size; skipped as a fragment.");
+                    var message = label + ": " + width.ToString("0.##", CultureInfo.InvariantCulture) + " x " + height.ToString("0.##", CultureInfo.InvariantCulture)
+                        + " is below the minimum part size (" + minPartSize.ToString("0.###", CultureInfo.InvariantCulture) + " drawing units); skipped as a fragment.";
+                    warnings.Add(message);
+                    skippedParts.Add(message);
                     return null;
                 }
 
                 if (cut.Count < request.MinEntityCount)
                 {
-                    warnings.Add(label + ": only " + cut.Count.ToString(CultureInfo.InvariantCulture) + " cut entities; skipped as a fragment.");
+                    var message = label + ": only " + cut.Count.ToString(CultureInfo.InvariantCulture) + " cut entities; skipped as a fragment.";
+                    warnings.Add(message);
+                    skippedParts.Add(message);
                     return null;
                 }
 
                 if (request.RequireClosedProfile && !node.HasClosedProfile)
                 {
-                    warnings.Add(label + ": no closed cutting profile; skipped as a fragment.");
+                    var message = label + ": no closed cutting profile; skipped as a fragment.";
+                    warnings.Add(message);
+                    skippedParts.Add(message);
                     return null;
                 }
             }
@@ -985,12 +1004,49 @@ namespace CadToCode.Business.Services
             var cy = (y1 + y2) / 2.0 + side * (dx / chord) * offset;
             var startAngle = Math.Atan2(y1 - cy, x1 - cx);
 
-            const int steps = 16;
-            for (var i = 1; i < steps; i++)
+            var twoPi = Math.PI * 2.0;
+            var sweep = Math.Abs(theta);
+
+            for (var quadrant = 0; quadrant < 4; quadrant++)
             {
-                var t = startAngle + theta * i / steps;
-                yield return (cx + radius * Math.Cos(t), cy + radius * Math.Sin(t));
+                var angle = quadrant * Math.PI / 2.0;
+                var distance = ((angle - startAngle) * side) % twoPi;
+                if (distance < 0)
+                {
+                    distance += twoPi;
+                }
+
+                if (distance <= sweep)
+                {
+                    yield return (cx + radius * Math.Cos(angle), cy + radius * Math.Sin(angle));
+                }
             }
+        }
+
+        private static bool IsCutEntity(DrawingEntity entity, PartManufacturingRequestDto request)
+        {
+            var allowed = request.CutLayers;
+            if (allowed is null || allowed.Count == 0)
+            {
+                return entity.IsOutlineCandidate;
+            }
+
+            return !string.IsNullOrEmpty(entity.Layer)
+                && allowed.Any(l => string.Equals(l?.Trim(), entity.Layer, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static double ScaledMinPartSize(PartManufacturingRequestDto request, DrawingUnit unit)
+        {
+            var millimetresPerUnit = unit switch
+            {
+                DrawingUnit.Centimeter => 10.0,
+                DrawingUnit.Meter => 1000.0,
+                DrawingUnit.Inch => 25.4,
+                DrawingUnit.Foot => 304.8,
+                _ => 1.0
+            };
+
+            return request.MinPartSize / millimetresPerUnit;
         }
 
         private static DxfUnits MapUnits(DrawingUnit unit)

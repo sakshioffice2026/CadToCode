@@ -110,6 +110,14 @@
                 Include centerlines and hidden lines (REF layer)
             </label>
 
+            <label for="mfg-cut-layers" class="cc-mfg-label">Cut layers (comma-separated, blank = automatic)</label>
+            <input id="mfg-cut-layers" name="cutLayers" type="text" class="cc-mfg-select" placeholder="e.g. 0, CUT, OUTLINE" />
+
+            <label class="cc-mfg-label">
+                <input type="checkbox" name="includeAllParts" value="true" />
+                Keep every part (disable small-fragment and open-profile filters)
+            </label>
+
             <button type="submit" class="cc-btn cc-btn-primary">Generate Manufacturing DXF Package</button>
         </form>
 
