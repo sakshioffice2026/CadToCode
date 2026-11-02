@@ -23,6 +23,12 @@
 
     string Mm(double value) => (value * scale).ToString("0.##", CultureInfo.InvariantCulture);
 
+    double ViewWidth(CadToCode.Models.Dtos.AssemblyNode node) =>
+        node.Parameters.TryGetValue("viewWidth", out var w) ? w : node.Bounds.Width;
+
+    double ViewHeight(CadToCode.Models.Dtos.AssemblyNode node) =>
+        node.Parameters.TryGetValue("viewHeight", out var h) ? h : node.Bounds.Height;
+
     string DisplayName(CadToCode.Models.Dtos.AssemblyNode node) =>
         semantic.TryGetValue(node.Id, out var item) && !string.IsNullOrWhiteSpace(item.Name) ? item.Name : node.Name;
 }
@@ -93,8 +99,8 @@
                                     }
                                 </th>
                                 <td>@node.Shape</td>
-                                <td class="cc-num">@Mm(node.Bounds.Width)</td>
-                                <td class="cc-num">@Mm(node.Bounds.Height)</td>
+                                <td class="cc-num">@Mm(ViewWidth(node))</td>
+                                <td class="cc-num">@Mm(ViewHeight(node))</td>
                                 <td class="cc-num">@Mm(node.Bounds.MinX - tree.Bounds.MinX)</td>
                                 <td class="cc-num">@Mm(node.Bounds.MinY - tree.Bounds.MinY)</td>
                                 <td>@(node.Labels.Count > 0 ? string.Join(", ", node.Labels) : "-")</td>

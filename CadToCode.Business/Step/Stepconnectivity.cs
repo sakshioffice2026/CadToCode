@@ -972,32 +972,193 @@ public static class StepGeometryAnalyzer
         };
     }
 
+    private static int MainAxis(List<SolidInfo> solids)
+    {
+        var best = solids
+            .Where(s => (s.Type == ComponentType.Cylinder || s.Type == ComponentType.Cone) && s.AxisIndex >= 0)
+            .OrderByDescending(s => s.Radius)
+            .FirstOrDefault();
+
+        return best?.AxisIndex ?? 1;
+    }
+
+    private static (double U, double V) Project(V3 p, int axis)
+    {
+        return axis switch
+        {
+            0 => (p.Y, p.Z),
+            2 => (p.X, p.Y),
+            _ => (p.X, p.Z)
+        };
+    }
+
+    private static (double U, double V) ProjectedCenter(SolidInfo solid, int axis)
+    {
+        var a = Project(solid.Min, axis);
+        var b = Project(solid.Max, axis);
+        return ((a.U + b.U) / 2.0, (a.V + b.V) / 2.0);
+    }
+
+    private static List<(double U, double V)> ProjectedPoints(SolidInfo solid, int axis)
+    {
+        return solid.Faces
+            .SelectMany(f => f.Points)
+            .Select(p => Project(p, axis))
+            .ToList();
+    }
+
+    private static List<(double U, double V)> ConvexHull(List<(double U, double V)> input)
+    {
+        var pts = input.Distinct().OrderBy(p => p.U).ThenBy(p => p.V).ToList();
+
+        if (pts.Count < 3)
+        {
+            return pts;
+        }
+
+        double Cross((double U, double V) o, (double U, double V) a, (double U, double V) b)
+        {
+            return (a.U - o.U) * (b.V - o.V) - (a.V - o.V) * (b.U - o.U);
+        }
+
+        var hull = new List<(double U, double V)>();
+
+        foreach (var p in pts)
+        {
+            while (hull.Count >= 2 && Cross(hull[hull.Count - 2], hull[hull.Count - 1], p) <= 0)
+            {
+                hull.RemoveAt(hull.Count - 1);
+            }
+
+            hull.Add(p);
+        }
+
+        var lower = hull.Count + 1;
+
+        for (var i = pts.Count - 2; i >= 0; i--)
+        {
+            var p = pts[i];
+
+            while (hull.Count >= lower && Cross(hull[hull.Count - 2], hull[hull.Count - 1], p) <= 0)
+            {
+                hull.RemoveAt(hull.Count - 1);
+            }
+
+            hull.Add(p);
+        }
+
+        hull.RemoveAt(hull.Count - 1);
+        return hull;
+    }
+
+    private static bool TryOrientedBox(
+        List<(double U, double V)> points,
+        out List<(double U, double V)> corners,
+        out double width,
+        out double height,
+        out double angleDegrees)
+    {
+        corners = new List<(double U, double V)>();
+        width = 0.0;
+        height = 0.0;
+        angleDegrees = 0.0;
+
+        var hull = ConvexHull(points);
+
+        if (hull.Count < 3)
+        {
+            return false;
+        }
+
+        var bestArea = double.MaxValue;
+        var bestAngle = 0.0;
+
+        for (var i = 0; i < hull.Count; i++)
+        {
+            var a = hull[i];
+            var b = hull[(i + 1) % hull.Count];
+            var angle = Math.Atan2(b.V - a.V, b.U - a.U);
+            var cos = Math.Cos(-angle);
+            var sin = Math.Sin(-angle);
+
+            var minX = double.MaxValue;
+            var maxX = double.MinValue;
+            var minY = double.MaxValue;
+            var maxY = double.MinValue;
+
+            foreach (var p in hull)
+            {
+                var x = p.U * cos - p.V * sin;
+                var y = p.U * sin + p.V * cos;
+                minX = Math.Min(minX, x);
+                maxX = Math.Max(maxX, x);
+                minY = Math.Min(minY, y);
+                maxY = Math.Max(maxY, y);
+            }
+
+            var w = maxX - minX;
+            var h = maxY - minY;
+            var area = w * h;
+
+            if (area < bestArea)
+            {
+                bestArea = area;
+                bestAngle = angle;
+                width = w;
+                height = h;
+
+                var rc = Math.Cos(angle);
+                var rs = Math.Sin(angle);
+
+                (double U, double V) Back(double x, double y) => (x * rc - y * rs, x * rs + y * rc);
+
+                corners = new List<(double U, double V)>
+                {
+                    Back(minX, minY),
+                    Back(maxX, minY),
+                    Back(maxX, maxY),
+                    Back(minX, maxY)
+                };
+            }
+        }
+
+        var degrees = bestAngle * 180.0 / Math.PI;
+        degrees = ((degrees % 90.0) + 90.0) % 90.0;
+
+        if (degrees > 45.0)
+        {
+            degrees -= 90.0;
+        }
+
+        angleDegrees = degrees;
+
+        return width > 1e-9 && height > 1e-9;
+    }
+
     private static void BuildTree(List<SolidInfo> solids, int projectId, StepAnalysisResult result)
     {
         var tree = new AssemblyTree { Unit = DrawingUnit.Millimeter };
         var nodes = new List<AssemblyNode>();
+        var mainAxis = MainAxis(solids);
 
         for (var i = 0; i < solids.Count; i++)
         {
             var solid = solids[i];
             var component = result.Components[i];
-            var bounds = new BoundingBox2D(solid.Min.X, solid.Min.Z, solid.Max.X, solid.Max.Z);
+            var lo = Project(solid.Min, mainAxis);
+            var hi = Project(solid.Max, mainAxis);
+            var bounds = new BoundingBox2D(
+                Math.Min(lo.U, hi.U),
+                Math.Min(lo.V, hi.V),
+                Math.Max(lo.U, hi.U),
+                Math.Max(lo.V, hi.V));
             var geometry = new ExtractedGeometry { DetectedUnit = DrawingUnit.Millimeter };
             var shape = PartShape.Rectangular;
+            var localWidth = bounds.Width;
+            var localHeight = bounds.Height;
+            var rotation = 0.0;
 
-            if (solid.Type == ComponentType.Cone
-                && solid.AxisIndex == 2
-                && (solid.TopRadius > 0 || solid.BottomRadius > 0))
-            {
-                shape = PartShape.Polygonal;
-
-                geometry.Polylines.Add(Polygon(
-                    (bounds.CenterX - solid.BottomRadius, bounds.MinY),
-                    (bounds.CenterX + solid.BottomRadius, bounds.MinY),
-                    (bounds.CenterX + solid.TopRadius, bounds.MaxY),
-                    (bounds.CenterX - solid.TopRadius, bounds.MaxY)));
-            }
-            else if (solid.Type == ComponentType.Cylinder && solid.AxisIndex == 1 && solid.Radius > 0)
+            if (solid.Type == ComponentType.Cylinder && solid.AxisIndex == mainAxis && solid.Radius > 0)
             {
                 shape = PartShape.Circular;
 
@@ -1006,14 +1167,92 @@ public static class StepGeometryAnalyzer
                     Center = new GeometryPoint(bounds.CenterX, bounds.CenterY),
                     Radius = solid.Radius
                 });
+
+                var center = ProjectedCenter(solid, mainAxis);
+
+                for (var j = 0; j < solids.Count; j++)
+                {
+                    var other = solids[j];
+
+                    if (j == i
+                        || other.Type != ComponentType.Cylinder
+                        || other.AxisIndex != solid.AxisIndex
+                        || other.Radius <= 0
+                        || other.Radius >= solid.Radius - 1e-6
+                        || !Contains(solid, other, 0.01))
+                    {
+                        continue;
+                    }
+
+                    var otherCenter = ProjectedCenter(other, mainAxis);
+                    var dx = otherCenter.U - center.U;
+                    var dy = otherCenter.V - center.V;
+
+                    if (Math.Sqrt(dx * dx + dy * dy) > StepConnectivity.DefaultTolerance)
+                    {
+                        continue;
+                    }
+
+                    shape = PartShape.Annular;
+
+                    geometry.Circles.Add(new GeometryCircle
+                    {
+                        Center = new GeometryPoint(otherCenter.U, otherCenter.V),
+                        Radius = other.Radius
+                    });
+                }
+            }
+            else if (solid.Type == ComponentType.Cone
+                && solid.AxisIndex == mainAxis
+                && (solid.TopRadius > 0 || solid.BottomRadius > 0))
+            {
+                shape = PartShape.Circular;
+
+                if (solid.TopRadius > 0)
+                {
+                    geometry.Circles.Add(new GeometryCircle
+                    {
+                        Center = new GeometryPoint(bounds.CenterX, bounds.CenterY),
+                        Radius = solid.TopRadius
+                    });
+                }
+
+                if (solid.BottomRadius > 0 && Math.Abs(solid.BottomRadius - solid.TopRadius) > 1e-6)
+                {
+                    geometry.Circles.Add(new GeometryCircle
+                    {
+                        Center = new GeometryPoint(bounds.CenterX, bounds.CenterY),
+                        Radius = solid.BottomRadius
+                    });
+
+                    shape = solid.TopRadius > 0 ? PartShape.Annular : PartShape.Circular;
+                }
             }
             else
             {
-                geometry.Polylines.Add(Polygon(
-                    (bounds.MinX, bounds.MinY),
-                    (bounds.MaxX, bounds.MinY),
-                    (bounds.MaxX, bounds.MaxY),
-                    (bounds.MinX, bounds.MaxY)));
+                var hasBox = TryOrientedBox(ProjectedPoints(solid, mainAxis), out var corners, out var boxWidth, out var boxHeight, out var boxAngle);
+
+                if (hasBox && Math.Abs(boxAngle) > 1.0)
+                {
+                    shape = PartShape.Polygonal;
+                    rotation = boxAngle;
+                    localWidth = boxWidth;
+                    localHeight = boxHeight;
+
+                    geometry.Polylines.Add(Polygon(
+                        (corners[0].U, corners[0].V),
+                        (corners[1].U, corners[1].V),
+                        (corners[2].U, corners[2].V),
+                        (corners[3].U, corners[3].V)));
+                }
+                else
+                {
+                    geometry.Polylines.Add(Polygon(
+                        (bounds.MinX, bounds.MinY),
+                        (bounds.MaxX, bounds.MinY),
+                        (bounds.MaxX, bounds.MaxY),
+                        (bounds.MinX, bounds.MaxY)));
+                }
             }
 
             var node = new AssemblyNode
@@ -1023,13 +1262,18 @@ public static class StepGeometryAnalyzer
                 Layer = StepGeometryAnalyzer.SourceLayer,
                 Shape = shape,
                 Bounds = bounds,
-                Local = new BoundingBox2D(0, 0, bounds.Width, bounds.Height),
+                Local = new BoundingBox2D(0, 0, localWidth, localHeight),
                 PolylineCount = geometry.Polylines.Count,
                 CircleCount = geometry.Circles.Count,
                 HasClosedProfile = true,
                 IsFilled = false,
                 Geometry = geometry
             };
+
+            node.Parameters["viewWidth"] = localWidth;
+            node.Parameters["viewHeight"] = localHeight;
+            node.Parameters["rotation"] = rotation;
+            node.Parameters["viewAxis"] = mainAxis;
 
             if (component.Height.HasValue)
             {
