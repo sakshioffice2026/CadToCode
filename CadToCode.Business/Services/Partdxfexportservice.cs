@@ -2,679 +2,869 @@
 using System.IO.Compression;
 using System.Text;
 using CadToCode.Business.Interfaces;
+using CadToCode.Business.Services;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using CadToCode.Repositories.Interfaces;
 using IxMilia.Dxf;
-using IxMilia.Dxf.Blocks;
 using IxMilia.Dxf.Entities;
 using IxMilia.Dxf.Tables;
 using Microsoft.Extensions.Logging;
 
-namespace CadToCode.Business.Services;
-
-public class PartDxfExportService : IPartDxfExportService
+namespace CadToCode.Models.Dtos
 {
-    private const int MaxBlockDepth = 8;
-    private const int MaxEntitiesPerPart = 100_000;
-    private const int MaxInsertInstances = 2_000;
-    private const string CutLayer = "CUT";
-    private const string NotesLayer = "NOTES";
-    private const double Epsilon = 1e-9;
-
-    private static readonly HashSet<string> SilentlySkipped = new(StringComparer.OrdinalIgnoreCase)
+    public enum PartOriginMode
     {
-        "TEXT", "MTEXT", "HATCH", "ATTRIB", "ATTDEF", "SEQEND", "VERTEX"
-    };
-
-    private readonly IUnitOfWork _unitOfWork;
-    private readonly IFileStorageService _storage;
-    private readonly IDxfCompatibilityService _compatibility;
-    private readonly IBlockBreakdownService _breakdown;
-    private readonly ILogger<PartDxfExportService> _logger;
-
-    public PartDxfExportService(
-        IUnitOfWork unitOfWork,
-        IFileStorageService storage,
-        IDxfCompatibilityService compatibility,
-        IBlockBreakdownService breakdown,
-        ILogger<PartDxfExportService> logger)
-    {
-        _unitOfWork = unitOfWork;
-        _storage = storage;
-        _compatibility = compatibility;
-        _breakdown = breakdown;
-        _logger = logger;
+        BottomLeft = 1,
+        Center = 2
     }
 
-    public async Task<PartDxfPackageDto> BuildPartFilesAsync(PartDxfRequestDto request, CancellationToken cancellationToken = default)
+    public class PartManufacturingSpecDto
     {
-        var package = new PartDxfPackageDto { ProjectId = request.ProjectId };
-
-        try
-        {
-            var source = await LoadSourceAsync(request.ProjectId, cancellationToken);
-            package.ProjectTitle = source.Title;
-            package.Warnings.AddRange(source.Warnings);
-
-            var breakdown = await _breakdown.BuildBreakdownAsync(request.ProjectId, cancellationToken);
-            if (!breakdown.Success)
-            {
-                package.ErrorMessage = breakdown.ErrorMessage ?? "The block breakdown could not be built.";
-                return package;
-            }
-
-            var blocks = IndexBlocks(source.File);
-            var specs = IndexSpecs(request.Specs);
-            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            foreach (var part in breakdown.Parts)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                if (!blocks.TryGetValue(part.BlockName, out var block))
-                {
-                    continue;
-                }
-
-                specs.TryGetValue(part.BlockName, out var spec);
-
-                var file = BuildPart(source, block, part.BlockName, part.Quantity, spec, usedNames, package.Warnings);
-                if (file is not null)
-                {
-                    package.Files.Add(file);
-                }
-            }
-
-            if (package.Files.Count == 0)
-            {
-                package.ErrorMessage = "No part geometry could be isolated from this drawing's blocks.";
-                return package;
-            }
-
-            package.Success = true;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (InvalidOperationException ex)
-        {
-            package.ErrorMessage = ex.Message;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Part DXF package failed for project {ProjectId}.", request.ProjectId);
-            package.ErrorMessage = "The part drawings could not be generated.";
-        }
-
-        return package;
+        public string NodeId { get; set; } = string.Empty;
+        public string? PartName { get; set; }
+        public string? Material { get; set; }
+        public decimal? Thickness { get; set; }
+        public int? Quantity { get; set; }
     }
 
-    public async Task<PartDxfFileDto?> BuildPartFileAsync(int projectId, PartDxfSpecDto spec, CancellationToken cancellationToken = default)
+    public class PartManufacturingRequestDto
     {
-        try
-        {
-            var source = await LoadSourceAsync(projectId, cancellationToken);
-            var blocks = IndexBlocks(source.File);
+        public int ProjectId { get; set; }
+        public string? ProjectCode { get; set; }
+        public PartOriginMode Origin { get; set; } = PartOriginMode.BottomLeft;
+        public bool IncludeReferenceGeometry { get; set; }
+        public bool SplitLargeComponents { get; set; } = true;
+        public int SplitThreshold { get; set; } = 30;
+        public double MinPartSize { get; set; } = 25.0;
+        public int MinEntityCount { get; set; } = 3;
+        public bool RequireClosedProfile { get; set; } = true;
+        public string? DefaultMaterial { get; set; }
+        public decimal? DefaultThickness { get; set; }
+        public List<string> NodeIds { get; set; } = new();
+        public List<PartManufacturingSpecDto> Specs { get; set; } = new();
+    }
 
-            if (string.IsNullOrWhiteSpace(spec.BlockName) || !blocks.TryGetValue(spec.BlockName, out var block))
+    public class PartManufacturingFileDto
+    {
+        public string NodeId { get; set; } = string.Empty;
+        public List<string> MemberNodeIds { get; set; } = new();
+        public string PartName { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public string Material { get; set; } = string.Empty;
+        public decimal? Thickness { get; set; }
+        public int Quantity { get; set; }
+        public double Width { get; set; }
+        public double Height { get; set; }
+        public double OffsetX { get; set; }
+        public double OffsetY { get; set; }
+        public int EntityCount { get; set; }
+        public byte[] Content { get; set; } = Array.Empty<byte>();
+    }
+
+    public class PartManufacturingPackageDto
+    {
+        public int ProjectId { get; set; }
+        public string ProjectCode { get; set; } = string.Empty;
+        public string ProjectTitle { get; set; } = string.Empty;
+        public bool Success { get; set; }
+        public string? ErrorMessage { get; set; }
+        public List<PartManufacturingFileDto> Files { get; set; } = new();
+        public List<string> Warnings { get; set; } = new();
+    }
+}
+
+namespace CadToCode.Business.Interfaces
+{
+    public interface IPartManufacturingDxfService
+    {
+        Task<PartManufacturingPackageDto> BuildPackageAsync(PartManufacturingRequestDto request, CancellationToken cancellationToken = default);
+
+        Task<PartManufacturingFileDto?> BuildPartAsync(PartManufacturingRequestDto request, string nodeId, CancellationToken cancellationToken = default);
+
+        Task<byte[]?> BuildZipAsync(PartManufacturingRequestDto request, CancellationToken cancellationToken = default);
+
+        Task<IReadOnlyList<string>> SaveToStorageAsync(PartManufacturingRequestDto request, CancellationToken cancellationToken = default);
+    }
+}
+
+namespace CadToCode.Business.Services
+{
+    public sealed class PartManufacturingDxfService : IPartManufacturingDxfService
+    {
+        private const string CutLayer = "CUT";
+        private const string ReferenceLayer = "REF";
+        private const string NotesLayer = "NOTES";
+        private const string NotesStyle = "NOTES";
+        private const double Epsilon = 1e-9;
+
+        private readonly IUnitOfWork _unitOfWork;
+        private readonly IFileStorageService _storage;
+        private readonly IEnumerable<IGeometryExtractor> _extractors;
+        private readonly IComponentDecomposer _decomposer;
+        private readonly IAssemblyTopologyMapper _topologyMapper;
+        private readonly ILogger<PartManufacturingDxfService> _logger;
+
+        public PartManufacturingDxfService(
+            IUnitOfWork unitOfWork,
+            IFileStorageService storage,
+            IEnumerable<IGeometryExtractor> extractors,
+            IComponentDecomposer decomposer,
+            IAssemblyTopologyMapper topologyMapper,
+            ILogger<PartManufacturingDxfService> logger)
+        {
+            _unitOfWork = unitOfWork;
+            _storage = storage;
+            _extractors = extractors;
+            _decomposer = decomposer;
+            _topologyMapper = topologyMapper;
+            _logger = logger;
+        }
+
+        public async Task<PartManufacturingPackageDto> BuildPackageAsync(
+            PartManufacturingRequestDto request,
+            CancellationToken cancellationToken = default)
+        {
+            var package = new PartManufacturingPackageDto
+            {
+                ProjectId = request.ProjectId,
+                ProjectCode = ResolveProjectCode(request)
+            };
+
+            try
+            {
+                var source = await LoadSourceAsync(request.ProjectId, cancellationToken);
+                package.ProjectTitle = source.Title;
+                package.Warnings.AddRange(source.Geometry.Warnings);
+
+                var nodes = _decomposer.Decompose(source.Geometry);
+                if (nodes.Count == 0)
+                {
+                    package.ErrorMessage = "No components could be isolated from this drawing.";
+                    return package;
+                }
+
+                var groups = BuildGroups(nodes, package.Warnings);
+                if (request.SplitLargeComponents)
+                {
+                    groups = ExpandLargeGroups(groups, request, package.Warnings, cancellationToken);
+                }
+
+                var specs = IndexSpecs(request.Specs);
+                var wanted = new HashSet<string>(request.NodeIds ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+                var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+                foreach (var group in groups)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    if (wanted.Count > 0 && !group.Members.Any(m => wanted.Contains(m.Id) || wanted.Contains(SourceNodeId(m.Id))))
+                    {
+                        continue;
+                    }
+
+                    var spec = FindSpec(specs, group);
+                    var file = BuildPartFile(group, spec, request, package.ProjectCode, usedNames, package.Warnings);
+                    if (file is not null)
+                    {
+                        package.Files.Add(file);
+                    }
+                }
+
+                if (package.Files.Count == 0)
+                {
+                    package.ErrorMessage = "No cuttable geometry was found in the isolated components.";
+                    return package;
+                }
+
+                package.Success = true;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (InvalidOperationException ex)
+            {
+                package.ErrorMessage = ex.Message;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Manufacturing DXF package failed for project {ProjectId}.", request.ProjectId);
+                package.ErrorMessage = "The manufacturing DXF files could not be generated.";
+            }
+
+            return package;
+        }
+
+        public async Task<PartManufacturingFileDto?> BuildPartAsync(
+            PartManufacturingRequestDto request,
+            string nodeId,
+            CancellationToken cancellationToken = default)
+        {
+            if (string.IsNullOrWhiteSpace(nodeId))
             {
                 return null;
             }
 
-            var breakdown = await _breakdown.BuildBreakdownAsync(projectId, cancellationToken);
-            var quantity = breakdown.Parts
-                .FirstOrDefault(p => string.Equals(p.BlockName, block.Name, StringComparison.OrdinalIgnoreCase))
-                ?.Quantity ?? 1;
-
-            return BuildPart(source, block, block.Name, quantity, spec, new HashSet<string>(StringComparer.OrdinalIgnoreCase), new List<string>());
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Part DXF failed for project {ProjectId}, block {Block}.", projectId, spec.BlockName);
-            return null;
-        }
-    }
-
-    public async Task<byte[]?> BuildPackageZipAsync(PartDxfRequestDto request, CancellationToken cancellationToken = default)
-    {
-        var package = await BuildPartFilesAsync(request, cancellationToken);
-        if (!package.Success || package.Files.Count == 0)
-        {
-            return null;
-        }
-
-        try
-        {
-            var source = await LoadSourceAsync(request.ProjectId, cancellationToken);
-
-            using var output = new MemoryStream();
-            using (var zip = new ZipArchive(output, ZipArchiveMode.Create, true))
+            var single = new PartManufacturingRequestDto
             {
-                var assemblyEntry = zip.CreateEntry("assembly_" + SafeName(package.ProjectTitle) + ".dxf", CompressionLevel.Optimal);
-                await using (var entryStream = assemblyEntry.Open())
+                ProjectId = request.ProjectId,
+                ProjectCode = request.ProjectCode,
+                Origin = request.Origin,
+                IncludeReferenceGeometry = request.IncludeReferenceGeometry,
+                SplitLargeComponents = request.SplitLargeComponents,
+                SplitThreshold = request.SplitThreshold,
+                MinPartSize = request.MinPartSize,
+                MinEntityCount = request.MinEntityCount,
+                RequireClosedProfile = request.RequireClosedProfile,
+                DefaultMaterial = request.DefaultMaterial,
+                DefaultThickness = request.DefaultThickness,
+                Specs = request.Specs,
+                NodeIds = new List<string> { nodeId.Trim() }
+            };
+
+            var package = await BuildPackageAsync(single, cancellationToken);
+            return package.Success ? package.Files.FirstOrDefault() : null;
+        }
+
+        public async Task<byte[]?> BuildZipAsync(
+            PartManufacturingRequestDto request,
+            CancellationToken cancellationToken = default)
+        {
+            var package = await BuildPackageAsync(request, cancellationToken);
+            if (!package.Success || package.Files.Count == 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                using var output = new MemoryStream();
+                using (var zip = new ZipArchive(output, ZipArchiveMode.Create, true))
                 {
-                    await entryStream.WriteAsync(source.Original, cancellationToken);
-                }
-
-                foreach (var file in package.Files)
-                {
-                    var entry = zip.CreateEntry("parts/" + file.FileName, CompressionLevel.Optimal);
-                    await using var entryStream = entry.Open();
-                    await entryStream.WriteAsync(file.Content, cancellationToken);
-                }
-            }
-
-            return output.ToArray();
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Part DXF zip failed for project {ProjectId}.", request.ProjectId);
-            return null;
-        }
-    }
-
-    private async Task<SourceDrawing> LoadSourceAsync(int projectId, CancellationToken cancellationToken)
-    {
-        var project = await _unitOfWork.Projects.GetByIdAsync(projectId, cancellationToken)
-            ?? throw new InvalidOperationException("The project was not found.");
-
-        if (project.SourceFileType != SourceFileType.Dxf)
-        {
-            throw new InvalidOperationException("Part drawings can only be generated from a DXF drawing.");
-        }
-
-        var path = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            throw new InvalidOperationException("The stored drawing file is missing.");
-        }
-
-        byte[] original;
-        await using (var stream = await _storage.OpenReadAsync(path, cancellationToken))
-        {
-            if (stream is null)
-            {
-                throw new InvalidOperationException("The stored drawing file could not be opened.");
-            }
-
-            using var buffer = new MemoryStream();
-            await stream.CopyToAsync(buffer, cancellationToken);
-            original = buffer.ToArray();
-        }
-
-        var warnings = new List<string>();
-
-        using var prepared = await _compatibility.PrepareAsync(new MemoryStream(original, writable: false), cancellationToken);
-        if (prepared.IsDwg)
-        {
-            throw new InvalidOperationException("DWG files are not supported. Export the drawing as DXF.");
-        }
-
-        DxfFile file;
-        try
-        {
-            prepared.Stream.Position = 0;
-            file = DxfFile.Load(prepared.Stream);
-        }
-        catch (Exception) when (prepared.HeaderPatched)
-        {
-            using var raw = new MemoryStream(original, writable: false);
-            file = DxfFile.Load(raw);
-            warnings.Add("The patched DXF header could not be read; the original file was used instead.");
-        }
-
-        return new SourceDrawing(file, original, project.Title, warnings);
-    }
-
-    private static Dictionary<string, DxfBlock> IndexBlocks(DxfFile file)
-    {
-        var blocks = new Dictionary<string, DxfBlock>(StringComparer.OrdinalIgnoreCase);
-        foreach (var block in file.Blocks)
-        {
-            if (!string.IsNullOrEmpty(block.Name) && !block.Name.StartsWith('*'))
-            {
-                blocks[block.Name] = block;
-            }
-        }
-
-        return blocks;
-    }
-
-    private static Dictionary<string, PartDxfSpecDto> IndexSpecs(IEnumerable<PartDxfSpecDto> specs)
-    {
-        var map = new Dictionary<string, PartDxfSpecDto>(StringComparer.OrdinalIgnoreCase);
-        foreach (var spec in specs)
-        {
-            if (!string.IsNullOrWhiteSpace(spec.BlockName))
-            {
-                map[spec.BlockName] = spec;
-            }
-        }
-
-        return map;
-    }
-
-    private PartDxfFileDto? BuildPart(
-        SourceDrawing source,
-        DxfBlock block,
-        string blockName,
-        int quantity,
-        PartDxfSpecDto? spec,
-        HashSet<string> usedNames,
-        List<string> warnings)
-    {
-        var blocks = IndexBlocks(source.File);
-        var sink = new Collected();
-
-        var stack = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { blockName };
-        var start = Affine.Translation(-block.BasePoint.X, -block.BasePoint.Y);
-
-        Collect(block.Entities, start, 0, stack, blocks, sink);
-
-        foreach (var skipped in sink.SkippedTypes.OrderBy(s => s))
-        {
-            warnings.Add(blockName + ": " + skipped + " entities are not supported and were left out.");
-        }
-
-        if (sink.IsEmpty || !sink.TryGetBounds(out var minX, out var minY, out var maxX, out var maxY))
-        {
-            warnings.Add(blockName + ": no cut geometry was found in this block.");
-            return null;
-        }
-
-        var dx = -minX;
-        var dy = -minY;
-        var width = maxX - minX;
-        var height = maxY - minY;
-
-        var dxf = new DxfFile();
-        dxf.Header.Version = DxfAcadVersion.R2000;
-        dxf.Header.DefaultDrawingUnits = source.File.Header.DefaultDrawingUnits;
-        dxf.Layers.Add(new DxfLayer(CutLayer));
-        dxf.Layers.Add(new DxfLayer(NotesLayer));
-
-        foreach (var line in sink.Lines)
-        {
-            dxf.Entities.Add(new DxfLine(
-                new DxfPoint(line.X1 + dx, line.Y1 + dy, 0),
-                new DxfPoint(line.X2 + dx, line.Y2 + dy, 0))
-            { Layer = CutLayer });
-        }
-
-        foreach (var circle in sink.Circles)
-        {
-            dxf.Entities.Add(new DxfCircle(new DxfPoint(circle.Cx + dx, circle.Cy + dy, 0), circle.R) { Layer = CutLayer });
-        }
-
-        foreach (var arc in sink.Arcs)
-        {
-            dxf.Entities.Add(new DxfArc(new DxfPoint(arc.Cx + dx, arc.Cy + dy, 0), arc.R, arc.StartAngle, arc.EndAngle) { Layer = CutLayer });
-        }
-
-        foreach (var poly in sink.Polylines)
-        {
-            var vertices = poly.Points.Select(p => new DxfLwPolylineVertex { X = p.X + dx, Y = p.Y + dy, Bulge = p.Bulge });
-            dxf.Entities.Add(new DxfLwPolyline(vertices) { IsClosed = poly.Closed, Layer = CutLayer });
-        }
-
-        AddNotes(dxf, blockName, quantity, spec, source.Title, width, height);
-
-        byte[] content;
-        using (var stream = new MemoryStream())
-        {
-            dxf.Save(stream);
-            content = stream.ToArray();
-        }
-
-        return new PartDxfFileDto
-        {
-            BlockName = blockName,
-            FileName = UniqueFileName("part_" + SafeName(blockName), usedNames),
-            Quantity = quantity,
-            Width = Math.Round(width, 3),
-            Height = Math.Round(height, 3),
-            Content = content
-        };
-    }
-
-    private static void AddNotes(DxfFile dxf, string blockName, int quantity, PartDxfSpecDto? spec, string projectTitle, double width, double height)
-    {
-        var textHeight = Math.Clamp(Math.Max(width, height) * 0.025, 2.5, 12.0);
-
-        var material = string.IsNullOrWhiteSpace(spec?.Material) ? "NOT SPECIFIED" : spec!.Material!.Trim();
-        var thickness = spec?.Thickness is > 0
-            ? " - " + spec.Thickness.Value.ToString("0.##", CultureInfo.InvariantCulture) + " mm THK"
-            : string.Empty;
-
-        var lines = new[]
-        {
-            "PART: " + blockName.ToUpperInvariant(),
-            "MATERIAL: " + material.ToUpperInvariant() + thickness,
-            "QTY: " + quantity.ToString(CultureInfo.InvariantCulture),
-            "SIZE: " + width.ToString("0.##", CultureInfo.InvariantCulture) + " x " + height.ToString("0.##", CultureInfo.InvariantCulture),
-            "PROJECT: " + projectTitle.ToUpperInvariant()
-        };
-
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var y = -textHeight * 2.0 * (i + 1);
-            dxf.Entities.Add(new DxfText(new DxfPoint(0, y, 0), textHeight, lines[i]) { Layer = NotesLayer });
-        }
-    }
-
-    private static void Collect(
-        IEnumerable<DxfEntity> entities,
-        Affine matrix,
-        int depth,
-        HashSet<string> stack,
-        Dictionary<string, DxfBlock> blocks,
-        Collected sink)
-    {
-        foreach (var entity in entities)
-        {
-            if (sink.Count >= MaxEntitiesPerPart)
-            {
-                sink.SkippedTypes.Add("EXCESS");
-                return;
-            }
-
-            switch (entity)
-            {
-                case DxfLine line:
+                    foreach (var file in package.Files)
                     {
-                        var (x1, y1) = matrix.Apply(line.P1.X, line.P1.Y);
-                        var (x2, y2) = matrix.Apply(line.P2.X, line.P2.Y);
-                        sink.Lines.Add(new LineG(x1, y1, x2, y2));
-                        break;
+                        var entry = zip.CreateEntry(file.FileName, CompressionLevel.Optimal);
+                        await using var entryStream = entry.Open();
+                        await entryStream.WriteAsync(file.Content, cancellationToken);
+                    }
+                }
+
+                return output.ToArray();
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Manufacturing DXF zip failed for project {ProjectId}.", request.ProjectId);
+                return null;
+            }
+        }
+
+        public async Task<IReadOnlyList<string>> SaveToStorageAsync(
+            PartManufacturingRequestDto request,
+            CancellationToken cancellationToken = default)
+        {
+            var saved = new List<string>();
+            var package = await BuildPackageAsync(request, cancellationToken);
+            if (!package.Success)
+            {
+                return saved;
+            }
+
+            foreach (var file in package.Files)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                using var stream = new MemoryStream(file.Content, writable: false);
+                var path = await _storage.SaveAsync(stream, file.FileName, cancellationToken);
+                saved.Add(path);
+            }
+
+            return saved;
+        }
+
+        private async Task<SourceData> LoadSourceAsync(int projectId, CancellationToken cancellationToken)
+        {
+            var project = await _unitOfWork.Projects.GetByIdAsync(projectId, cancellationToken)
+                ?? throw new InvalidOperationException("The project was not found.");
+
+            if (project.SourceFileType != SourceFileType.Dxf)
+            {
+                throw new InvalidOperationException("Manufacturing DXF files can only be generated from a DXF drawing.");
+            }
+
+            var path = await _unitOfWork.Projects.GetStoredFilePathAsync(projectId, cancellationToken);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                throw new InvalidOperationException("The stored drawing file is missing.");
+            }
+
+            var extractor = _extractors.FirstOrDefault(e => e.CanHandle(SourceFileType.Dxf))
+                ?? throw new InvalidOperationException("No DXF geometry extractor is registered.");
+
+            await using var stream = await _storage.OpenReadAsync(path, cancellationToken)
+                ?? throw new InvalidOperationException("The stored drawing file could not be opened.");
+
+            var geometry = await extractor.ExtractAsync(stream, cancellationToken);
+            return new SourceData(geometry, project.Title);
+        }
+
+        private List<PartGroup> BuildGroups(List<AssemblyNode> nodes, List<string> warnings)
+        {
+            try
+            {
+                _topologyMapper.Map(nodes.First().Geometry, nodes);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Topology mapping skipped; every component is exported separately.");
+                warnings.Add("Identical parts could not be grouped; each component is exported with quantity 1.");
+            }
+
+            var groups = new List<PartGroup>();
+            var bySharedProfile = new Dictionary<string, PartGroup>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var node in nodes)
+            {
+                if (string.IsNullOrWhiteSpace(node.SharedProfileId))
+                {
+                    groups.Add(new PartGroup(node));
+                    continue;
+                }
+
+                if (bySharedProfile.TryGetValue(node.SharedProfileId, out var existing))
+                {
+                    existing.Members.Add(node);
+                    continue;
+                }
+
+                var group = new PartGroup(node);
+                bySharedProfile[node.SharedProfileId] = group;
+                groups.Add(group);
+            }
+
+            return groups;
+        }
+
+        private List<PartGroup> ExpandLargeGroups(
+            List<PartGroup> groups,
+            PartManufacturingRequestDto request,
+            List<string> warnings,
+            CancellationToken cancellationToken)
+        {
+            var result = new List<PartGroup>();
+            var explicitlyRequested = request.NodeIds is { Count: > 0 };
+
+            foreach (var group in groups)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var node = group.Representative;
+                var cut = DrawingEntity.FromGeometry(node.Geometry).Where(e => e.IsOutlineCandidate).ToList();
+
+                if (cut.Count <= request.SplitThreshold || !TryGetBounds(cut, out var bx0, out var by0, out var bx1, out var by1))
+                {
+                    result.Add(group);
+                    continue;
+                }
+
+                var diagonal = Math.Sqrt((bx1 - bx0) * (bx1 - bx0) + (by1 - by0) * (by1 - by0));
+                var tolerance = Math.Max(diagonal * 2e-5, 1e-4);
+
+                var components = SplitByConnectivity(cut, tolerance);
+                var parts = new List<SubPart>();
+                var skipped = 0;
+
+                foreach (var component in components)
+                {
+                    if (!TryGetBounds(component, out var x0, out var y0, out var x1, out var y1))
+                    {
+                        continue;
                     }
 
-                case DxfArc arc:
-                    AddArc(sink, matrix, arc.Center.X, arc.Center.Y, arc.Radius, arc.StartAngle, arc.EndAngle);
-                    break;
+                    var w = x1 - x0;
+                    var h = y1 - y0;
 
-                case DxfCircle circle:
-                    AddCircle(sink, matrix, circle.Center.X, circle.Center.Y, circle.Radius);
-                    break;
-
-                case DxfLwPolyline lw:
+                    if (!explicitlyRequested
+                        && (Math.Max(w, h) < request.MinPartSize || component.Count < request.MinEntityCount))
                     {
-                        if (lw.Vertices.Count < 2)
+                        skipped++;
+                        continue;
+                    }
+
+                    parts.Add(new SubPart(component, x0, y0, x1, y1, IsClosedProfile(component, tolerance)));
+                }
+
+                if (parts.Count <= 1)
+                {
+                    result.Add(group);
+                    continue;
+                }
+
+                var baseName = node.Labels.FirstOrDefault(l => !string.IsNullOrWhiteSpace(l) && l.Length <= 40) ?? node.Name;
+                var bySignature = new Dictionary<string, PartGroup>(StringComparer.Ordinal);
+                var index = 0;
+
+                foreach (var part in parts.OrderBy(p => p.MinX).ThenBy(p => p.MinY))
+                {
+                    var signature = string.Join("|",
+                        Math.Round(part.MaxX - part.MinX, 1).ToString(CultureInfo.InvariantCulture),
+                        Math.Round(part.MaxY - part.MinY, 1).ToString(CultureInfo.InvariantCulture),
+                        part.Entities.Count.ToString(CultureInfo.InvariantCulture),
+                        part.Entities.Count(e => e.Kind == DrawingEntityKind.Circle).ToString(CultureInfo.InvariantCulture),
+                        part.Entities.Count(e => e.Kind == DrawingEntityKind.Arc).ToString(CultureInfo.InvariantCulture));
+
+                    index++;
+
+                    var subNode = new AssemblyNode
+                    {
+                        Id = node.Id + "." + index.ToString(CultureInfo.InvariantCulture),
+                        Name = baseName + "." + index.ToString(CultureInfo.InvariantCulture),
+                        Layer = node.Layer,
+                        Bounds = new BoundingBox2D(part.MinX, part.MinY, part.MaxX, part.MaxY),
+                        HasClosedProfile = part.Closed,
+                        ParentId = node.Id
+                    };
+
+                    if (bySignature.TryGetValue(signature, out var existing) && existing.Representative.HasClosedProfile == part.Closed)
+                    {
+                        existing.Members.Add(subNode);
+                        continue;
+                    }
+
+                    var subGroup = new PartGroup(subNode) { Entities = part.Entities };
+                    bySignature[signature] = subGroup;
+                    result.Add(subGroup);
+                }
+
+                if (skipped > 0)
+                {
+                    warnings.Add(node.Name + " (" + node.Id + "): split into " + parts.Count.ToString(CultureInfo.InvariantCulture)
+                        + " parts; " + skipped.ToString(CultureInfo.InvariantCulture) + " small fragments skipped.");
+                }
+                else
+                {
+                    warnings.Add(node.Name + " (" + node.Id + "): split into " + parts.Count.ToString(CultureInfo.InvariantCulture) + " parts.");
+                }
+            }
+
+            return result;
+        }
+
+        private static List<List<DrawingEntity>> SplitByConnectivity(List<DrawingEntity> entities, double tolerance)
+        {
+            var parent = new int[entities.Count];
+            for (var i = 0; i < parent.Length; i++)
+            {
+                parent[i] = i;
+            }
+
+            int Find(int i)
+            {
+                while (parent[i] != i)
+                {
+                    parent[i] = parent[parent[i]];
+                    i = parent[i];
+                }
+
+                return i;
+            }
+
+            void Union(int a, int b)
+            {
+                var ra = Find(a);
+                var rb = Find(b);
+                if (ra != rb)
+                {
+                    parent[ra] = rb;
+                }
+            }
+
+            var cells = new Dictionary<(long, long), int>();
+
+            void Touch(int index, double x, double y)
+            {
+                var cx = (long)Math.Floor(x / tolerance);
+                var cy = (long)Math.Floor(y / tolerance);
+
+                for (var ox = -1; ox <= 1; ox++)
+                {
+                    for (var oy = -1; oy <= 1; oy++)
+                    {
+                        if (cells.TryGetValue((cx + ox, cy + oy), out var other))
                         {
+                            Union(index, other);
+                        }
+                    }
+                }
+
+                cells.TryAdd((cx, cy), index);
+            }
+
+            var circles = new List<int>();
+
+            for (var i = 0; i < entities.Count; i++)
+            {
+                var entity = entities[i];
+
+                switch (entity.Kind)
+                {
+                    case DrawingEntityKind.Line:
+                        Touch(i, entity.Start.X, entity.Start.Y);
+                        Touch(i, entity.End.X, entity.End.Y);
+                        break;
+
+                    case DrawingEntityKind.Arc:
+                        if (entity.IsFullCircle)
+                        {
+                            circles.Add(i);
                             break;
                         }
 
-                        var flip = matrix.Determinant < 0 ? -1.0 : 1.0;
-                        var points = new List<PolyPoint>();
-                        foreach (var vertex in lw.Vertices)
+                        Touch(i, entity.Center.X + entity.Radius * Math.Cos(entity.StartAngle), entity.Center.Y + entity.Radius * Math.Sin(entity.StartAngle));
+                        Touch(i, entity.Center.X + entity.Radius * Math.Cos(entity.StartAngle + entity.SweepAngle), entity.Center.Y + entity.Radius * Math.Sin(entity.StartAngle + entity.SweepAngle));
+                        break;
+
+                    case DrawingEntityKind.Circle:
+                        circles.Add(i);
+                        break;
+
+                    case DrawingEntityKind.Polyline:
+                        foreach (var vertex in entity.Vertices)
                         {
-                            var (x, y) = matrix.Apply(vertex.X, vertex.Y);
-                            points.Add(new PolyPoint(x, y, vertex.Bulge * flip));
+                            Touch(i, vertex.X, vertex.Y);
                         }
 
-                        sink.Polylines.Add(new PolyG(points, lw.IsClosed));
                         break;
-                    }
+                }
+            }
 
-                case DxfPolyline polyline:
+            var circleSet = new HashSet<int>(circles);
+            var buckets = new Dictionary<int, List<DrawingEntity>>();
+
+            for (var i = 0; i < entities.Count; i++)
+            {
+                if (circleSet.Contains(i))
+                {
+                    continue;
+                }
+
+                var root = Find(i);
+                if (!buckets.TryGetValue(root, out var list))
+                {
+                    list = new List<DrawingEntity>();
+                    buckets[root] = list;
+                }
+
+                list.Add(entities[i]);
+            }
+
+            var components = buckets.Values.ToList();
+            var bounds = components
+                .Select(c => TryGetBounds(c, out var x0, out var y0, out var x1, out var y1) ? (X0: x0, Y0: y0, X1: x1, Y1: y1) : (X0: 0.0, Y0: 0.0, X1: -1.0, Y1: -1.0))
+                .ToList();
+
+            foreach (var circleIndex in circles)
+            {
+                var circle = entities[circleIndex];
+                var best = -1;
+                var bestArea = double.MaxValue;
+
+                for (var c = 0; c < components.Count; c++)
+                {
+                    var b = bounds[c];
+                    if (b.X1 < b.X0)
                     {
-                        if (polyline.IsPolyfaceMesh || polyline.Is3DPolygonMesh || polyline.Vertices.Count < 2)
-                        {
-                            break;
-                        }
-
-                        var flip = matrix.Determinant < 0 ? -1.0 : 1.0;
-                        var points = new List<PolyPoint>();
-                        foreach (var vertex in polyline.Vertices)
-                        {
-                            var (x, y) = matrix.Apply(vertex.Location.X, vertex.Location.Y);
-                            points.Add(new PolyPoint(x, y, vertex.Bulge * flip));
-                        }
-
-                        sink.Polylines.Add(new PolyG(points, polyline.IsClosed));
-                        break;
+                        continue;
                     }
 
-                case DxfInsert insert:
-                    CollectInsert(insert, matrix, depth, stack, blocks, sink);
-                    break;
+                    if (circle.Center.X >= b.X0 - tolerance && circle.Center.X <= b.X1 + tolerance
+                        && circle.Center.Y >= b.Y0 - tolerance && circle.Center.Y <= b.Y1 + tolerance)
+                    {
+                        var area = (b.X1 - b.X0) * (b.Y1 - b.Y0);
+                        if (area < bestArea)
+                        {
+                            bestArea = area;
+                            best = c;
+                        }
+                    }
+                }
 
-                case DxfDimensionBase:
-                    break;
+                if (best >= 0)
+                {
+                    components[best].Add(circle);
+                }
+                else
+                {
+                    components.Add(new List<DrawingEntity> { circle });
+                    bounds.Add((circle.Center.X - circle.Radius, circle.Center.Y - circle.Radius, circle.Center.X + circle.Radius, circle.Center.Y + circle.Radius));
+                }
+            }
+
+            return components;
+        }
+
+        private static bool IsClosedProfile(List<DrawingEntity> entities, double tolerance)
+        {
+            if (entities.Any(e => e.Kind == DrawingEntityKind.Circle || e.IsFullCircle || (e.Kind == DrawingEntityKind.Polyline && e.IsClosed)))
+            {
+                return true;
+            }
+
+            if (entities.Count < 3)
+            {
+                return false;
+            }
+
+            var degree = new Dictionary<(long, long), int>();
+
+            void Add(double x, double y)
+            {
+                var key = ((long)Math.Round(x / tolerance), (long)Math.Round(y / tolerance));
+                degree[key] = degree.TryGetValue(key, out var count) ? count + 1 : 1;
+            }
+
+            foreach (var entity in entities)
+            {
+                switch (entity.Kind)
+                {
+                    case DrawingEntityKind.Line:
+                        Add(entity.Start.X, entity.Start.Y);
+                        Add(entity.End.X, entity.End.Y);
+                        break;
+
+                    case DrawingEntityKind.Arc:
+                        Add(entity.Center.X + entity.Radius * Math.Cos(entity.StartAngle), entity.Center.Y + entity.Radius * Math.Sin(entity.StartAngle));
+                        Add(entity.Center.X + entity.Radius * Math.Cos(entity.StartAngle + entity.SweepAngle), entity.Center.Y + entity.Radius * Math.Sin(entity.StartAngle + entity.SweepAngle));
+                        break;
+
+                    case DrawingEntityKind.Polyline:
+                        Add(entity.Vertices[0].X, entity.Vertices[0].Y);
+                        Add(entity.Vertices[^1].X, entity.Vertices[^1].Y);
+                        break;
+                }
+            }
+
+            return degree.Count > 0 && degree.Values.All(v => v >= 2);
+        }
+
+        private PartManufacturingFileDto? BuildPartFile(
+            PartGroup group,
+            PartManufacturingSpecDto? spec,
+            PartManufacturingRequestDto request,
+            string projectCode,
+            HashSet<string> usedNames,
+            List<string> warnings)
+        {
+            var node = group.Representative;
+            var entities = group.Entities ?? DrawingEntity.FromGeometry(node.Geometry);
+
+            var cut = entities.Where(e => e.IsOutlineCandidate).ToList();
+            var reference = request.IncludeReferenceGeometry
+                ? entities.Where(e => !e.IsOutlineCandidate).ToList()
+                : new List<DrawingEntity>();
+
+            if (cut.Count == 0)
+            {
+                warnings.Add(node.Name + " (" + node.Id + "): no cuttable geometry found; skipped.");
+                return null;
+            }
+
+            if (!TryGetBounds(cut.Concat(reference), out var minX, out var minY, out var maxX, out var maxY))
+            {
+                warnings.Add(node.Name + " (" + node.Id + "): bounds could not be computed; skipped.");
+                return null;
+            }
+
+            var width = maxX - minX;
+            var height = maxY - minY;
+
+            var explicitlyRequested = request.NodeIds is { Count: > 0 };
+            if (!explicitlyRequested)
+            {
+                var label = node.Name + " (" + node.Id + ")";
+
+                if (Math.Max(width, height) < request.MinPartSize)
+                {
+                    warnings.Add(label + ": " + width.ToString("0.##", CultureInfo.InvariantCulture) + " x " + height.ToString("0.##", CultureInfo.InvariantCulture) + " is below the minimum part size; skipped as a fragment.");
+                    return null;
+                }
+
+                if (cut.Count < request.MinEntityCount)
+                {
+                    warnings.Add(label + ": only " + cut.Count.ToString(CultureInfo.InvariantCulture) + " cut entities; skipped as a fragment.");
+                    return null;
+                }
+
+                if (request.RequireClosedProfile && !node.HasClosedProfile)
+                {
+                    warnings.Add(label + ": no closed cutting profile; skipped as a fragment.");
+                    return null;
+                }
+            }
+
+            var dx = request.Origin == PartOriginMode.Center ? -(minX + maxX) / 2.0 : -minX;
+            var dy = request.Origin == PartOriginMode.Center ? -(minY + maxY) / 2.0 : -minY;
+
+            var dxf = new DxfFile();
+            dxf.Header.Version = DxfAcadVersion.R2000;
+            dxf.Header.DefaultDrawingUnits = MapUnits(node.Geometry.DetectedUnit);
+            dxf.Layers.Add(new DxfLayer(CutLayer));
+            dxf.Layers.Add(new DxfLayer(NotesLayer));
+            dxf.Styles.Add(new DxfStyle(NotesStyle) { PrimaryFontFileName = "arial.ttf" });
+
+            var count = 0;
+            foreach (var entity in cut)
+            {
+                if (AddEntity(dxf, entity, dx, dy, CutLayer))
+                {
+                    count++;
+                }
+            }
+
+            if (reference.Count > 0)
+            {
+                dxf.Layers.Add(new DxfLayer(ReferenceLayer));
+                foreach (var entity in reference)
+                {
+                    AddEntity(dxf, entity, dx, dy, ReferenceLayer);
+                }
+            }
+
+            var partName = ResolvePartName(node, spec);
+            var material = FirstNonBlank(spec?.Material, request.DefaultMaterial) ?? "NOT SPECIFIED";
+            var thickness = spec?.Thickness is > 0 ? spec.Thickness : request.DefaultThickness is > 0 ? request.DefaultThickness : null;
+            var quantity = spec?.Quantity is > 0 ? spec.Quantity.Value : group.Members.Count;
+
+            var lowestY = request.Origin == PartOriginMode.Center ? -height / 2.0 : 0.0;
+            AddNotes(dxf, partName, material, thickness, quantity, projectCode, width, height, lowestY, request.Origin == PartOriginMode.Center ? -width / 2.0 : 0.0);
+
+            byte[] content;
+            using (var stream = new MemoryStream())
+            {
+                dxf.Save(stream);
+                content = stream.ToArray();
+            }
+
+            return new PartManufacturingFileDto
+            {
+                NodeId = node.Id,
+                MemberNodeIds = group.Members.Select(m => m.Id).ToList(),
+                PartName = partName,
+                FileName = UniqueFileName(
+                    SafeName(node.Id.Contains('.') && string.Equals(partName, node.Name, StringComparison.Ordinal) && partName.LastIndexOf('.') > 0
+                        ? partName[..partName.LastIndexOf('.')]
+                        : partName)
+                    + "_" + SafeName(node.Id),
+                    usedNames),
+                Material = material,
+                Thickness = thickness,
+                Quantity = quantity,
+                Width = Math.Round(width, 3),
+                Height = Math.Round(height, 3),
+                OffsetX = Math.Round(dx, 6),
+                OffsetY = Math.Round(dy, 6),
+                EntityCount = count,
+                Content = content
+            };
+        }
+
+        private static bool AddEntity(DxfFile dxf, DrawingEntity entity, double dx, double dy, string layer)
+        {
+            switch (entity.Kind)
+            {
+                case DrawingEntityKind.Line:
+                    dxf.Entities.Add(new DxfLine(
+                        new DxfPoint(entity.Start.X + dx, entity.Start.Y + dy, 0),
+                        new DxfPoint(entity.End.X + dx, entity.End.Y + dy, 0))
+                    { Layer = layer });
+                    return true;
+
+                case DrawingEntityKind.Circle:
+                    dxf.Entities.Add(new DxfCircle(
+                        new DxfPoint(entity.Center.X + dx, entity.Center.Y + dy, 0),
+                        entity.Radius)
+                    { Layer = layer });
+                    return true;
+
+                case DrawingEntityKind.Arc:
+                    {
+                        var center = new DxfPoint(entity.Center.X + dx, entity.Center.Y + dy, 0);
+
+                        if (entity.IsFullCircle)
+                        {
+                            dxf.Entities.Add(new DxfCircle(center, entity.Radius) { Layer = layer });
+                            return true;
+                        }
+
+                        var start = NormalizeDegrees(entity.StartAngle * 180.0 / Math.PI);
+                        var end = NormalizeDegrees((entity.StartAngle + entity.SweepAngle) * 180.0 / Math.PI);
+                        dxf.Entities.Add(new DxfArc(center, entity.Radius, start, end) { Layer = layer });
+                        return true;
+                    }
+
+                case DrawingEntityKind.Polyline:
+                    {
+                        var vertices = entity.Vertices.Select(v => new DxfLwPolylineVertex
+                        {
+                            X = v.X + dx,
+                            Y = v.Y + dy,
+                            Bulge = v.Bulge
+                        });
+
+                        dxf.Entities.Add(new DxfLwPolyline(vertices) { IsClosed = entity.IsClosed, Layer = layer });
+                        return true;
+                    }
 
                 default:
-                    if (!SilentlySkipped.Contains(entity.EntityTypeString))
-                    {
-                        sink.SkippedTypes.Add(entity.EntityTypeString);
-                    }
-
-                    break;
-            }
-        }
-    }
-
-    private static void CollectInsert(
-        DxfInsert insert,
-        Affine matrix,
-        int depth,
-        HashSet<string> stack,
-        Dictionary<string, DxfBlock> blocks,
-        Collected sink)
-    {
-        var name = insert.Name;
-        if (string.IsNullOrEmpty(name) || !blocks.TryGetValue(name, out var child))
-        {
-            return;
-        }
-
-        if (depth >= MaxBlockDepth || stack.Contains(name))
-        {
-            sink.SkippedTypes.Add("INSERT");
-            return;
-        }
-
-        var columns = Math.Max((int)insert.ColumnCount, 1);
-        var rows = Math.Max((int)insert.RowCount, 1);
-        if ((long)columns * rows > MaxInsertInstances)
-        {
-            sink.SkippedTypes.Add("INSERT");
-            return;
-        }
-
-        var angle = insert.Rotation * Math.PI / 180.0;
-        var cos = Math.Cos(angle);
-        var sin = Math.Sin(angle);
-
-        stack.Add(name);
-
-        for (var row = 0; row < rows; row++)
-        {
-            for (var column = 0; column < columns; column++)
-            {
-                var offsetX = column * insert.ColumnSpacing;
-                var offsetY = row * insert.RowSpacing;
-                var locationX = insert.Location.X + cos * offsetX - sin * offsetY;
-                var locationY = insert.Location.Y + sin * offsetX + cos * offsetY;
-
-                var a = cos * insert.XScaleFactor;
-                var b = sin * insert.XScaleFactor;
-                var c = -sin * insert.YScaleFactor;
-                var d = cos * insert.YScaleFactor;
-                var tx = locationX - (a * child.BasePoint.X + c * child.BasePoint.Y);
-                var ty = locationY - (b * child.BasePoint.X + d * child.BasePoint.Y);
-
-                var local = new Affine(a, b, c, d, tx, ty);
-                Collect(child.Entities, matrix.Then(local), depth + 1, stack, blocks, sink);
-            }
-        }
-
-        stack.Remove(name);
-    }
-
-    private static void AddCircle(Collected sink, Affine matrix, double cx, double cy, double radius)
-    {
-        if (matrix.IsSimilarity)
-        {
-            var (x, y) = matrix.Apply(cx, cy);
-            sink.Circles.Add(new CircleG(x, y, radius * matrix.Scale));
-            return;
-        }
-
-        var points = new List<PolyPoint>();
-        for (var i = 0; i < 48; i++)
-        {
-            var t = 2.0 * Math.PI * i / 48.0;
-            var (x, y) = matrix.Apply(cx + radius * Math.Cos(t), cy + radius * Math.Sin(t));
-            points.Add(new PolyPoint(x, y, 0));
-        }
-
-        sink.Polylines.Add(new PolyG(points, true));
-    }
-
-    private static void AddArc(Collected sink, Affine matrix, double cx, double cy, double radius, double startDeg, double endDeg)
-    {
-        if (matrix.IsSimilarity)
-        {
-            var (x, y) = matrix.Apply(cx, cy);
-            var start = matrix.TransformAngle(startDeg);
-            var end = matrix.TransformAngle(endDeg);
-
-            if (matrix.Determinant < 0)
-            {
-                (start, end) = (end, start);
-            }
-
-            sink.Arcs.Add(new ArcG(x, y, radius * matrix.Scale, start, end));
-            return;
-        }
-
-        var sweep = endDeg - startDeg;
-        while (sweep <= 0)
-        {
-            sweep += 360.0;
-        }
-
-        var steps = Math.Max((int)Math.Ceiling(sweep / 5.0), 2);
-        var points = new List<PolyPoint>();
-        for (var i = 0; i <= steps; i++)
-        {
-            var t = (startDeg + sweep * i / steps) * Math.PI / 180.0;
-            var (x, y) = matrix.Apply(cx + radius * Math.Cos(t), cy + radius * Math.Sin(t));
-            points.Add(new PolyPoint(x, y, 0));
-        }
-
-        sink.Polylines.Add(new PolyG(points, false));
-    }
-
-    private static string UniqueFileName(string baseName, HashSet<string> used)
-    {
-        var name = baseName + ".dxf";
-        var counter = 2;
-
-        while (!used.Add(name))
-        {
-            name = baseName + "_" + counter.ToString(CultureInfo.InvariantCulture) + ".dxf";
-            counter++;
-        }
-
-        return name;
-    }
-
-    private static string SafeName(string? value)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            return "drawing";
-        }
-
-        var builder = new StringBuilder();
-        foreach (var ch in value.Trim())
-        {
-            builder.Append(char.IsLetterOrDigit(ch) || ch is '-' or '_' ? ch : '_');
-        }
-
-        return builder.ToString();
-    }
-
-    private sealed record SourceDrawing(DxfFile File, byte[] Original, string Title, List<string> Warnings);
-
-    private sealed record LineG(double X1, double Y1, double X2, double Y2);
-
-    private sealed record CircleG(double Cx, double Cy, double R);
-
-    private sealed record ArcG(double Cx, double Cy, double R, double StartAngle, double EndAngle);
-
-    private sealed record PolyPoint(double X, double Y, double Bulge);
-
-    private sealed record PolyG(List<PolyPoint> Points, bool Closed);
-
-    private readonly record struct Affine(double A, double B, double C, double D, double Tx, double Ty)
-    {
-        public static Affine Translation(double tx, double ty) => new(1, 0, 0, 1, tx, ty);
-
-        public double Determinant => A * D - B * C;
-
-        public double Scale => Math.Sqrt(Math.Abs(Determinant));
-
-        public bool IsSimilarity
-        {
-            get
-            {
-                var sx = Math.Sqrt(A * A + B * B);
-                var sy = Math.Sqrt(C * C + D * D);
-                if (sx < Epsilon || sy < Epsilon)
-                {
                     return false;
-                }
-
-                var dot = (A * C + B * D) / (sx * sy);
-                return Math.Abs(sx - sy) <= 1e-6 * Math.Max(sx, sy) && Math.Abs(dot) <= 1e-6;
             }
         }
 
-        public (double X, double Y) Apply(double x, double y) => (A * x + C * y + Tx, B * x + D * y + Ty);
-
-        public double TransformAngle(double degrees)
+        private static void AddNotes(
+            DxfFile dxf,
+            string partName,
+            string material,
+            decimal? thickness,
+            int quantity,
+            string projectCode,
+            double width,
+            double height,
+            double baseY,
+            double baseX)
         {
-            var radians = degrees * Math.PI / 180.0;
-            var cos = Math.Cos(radians);
-            var sin = Math.Sin(radians);
-            var x = A * cos + C * sin;
-            var y = B * cos + D * sin;
-            var result = Math.Atan2(y, x) * 180.0 / Math.PI;
-            return result < 0 ? result + 360.0 : result;
+            var textHeight = Math.Clamp(Math.Max(width, height) * 0.02, 2.5, 150.0);
+
+            var thicknessText = thickness is > 0
+                ? thickness.Value.ToString("0.##", CultureInfo.InvariantCulture) + " MM"
+                : "NOT SPECIFIED";
+
+            var lines = new[]
+            {
+                "PART NAME: " + Clean(partName),
+                "MATERIAL: " + Clean(material),
+                "THICKNESS: " + thicknessText,
+                "QUANTITY: " + quantity.ToString(CultureInfo.InvariantCulture),
+                "PROJECT ID: " + Clean(projectCode),
+                "SIZE: " + width.ToString("0.##", CultureInfo.InvariantCulture) + " X " + height.ToString("0.##", CultureInfo.InvariantCulture)
+            };
+
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var y = baseY - textHeight * 2.0 * (i + 1);
+                dxf.Entities.Add(new DxfText(new DxfPoint(baseX, y, 0), textHeight, lines[i]) { Layer = NotesLayer, TextStyleName = NotesStyle });
+            }
         }
 
-        public Affine Then(Affine local) => new(
-            A * local.A + C * local.B,
-            B * local.A + D * local.B,
-            A * local.C + C * local.D,
-            B * local.C + D * local.D,
-            A * local.Tx + C * local.Ty + Tx,
-            B * local.Tx + D * local.Ty + Ty);
-    }
-
-    private sealed class Collected
-    {
-        public List<LineG> Lines { get; } = new();
-        public List<CircleG> Circles { get; } = new();
-        public List<ArcG> Arcs { get; } = new();
-        public List<PolyG> Polylines { get; } = new();
-        public HashSet<string> SkippedTypes { get; } = new(StringComparer.OrdinalIgnoreCase);
-
-        public int Count => Lines.Count + Circles.Count + Arcs.Count + Polylines.Count;
-        public bool IsEmpty => Count == 0;
-
-        public bool TryGetBounds(out double minX, out double minY, out double maxX, out double maxY)
+        private static bool TryGetBounds(
+            IEnumerable<DrawingEntity> entities,
+            out double minX,
+            out double minY,
+            out double maxX,
+            out double maxY)
         {
             var lowX = double.MaxValue;
             var lowY = double.MaxValue;
@@ -689,41 +879,51 @@ public class PartDxfExportService : IPartDxfExportService
                 highY = Math.Max(highY, y);
             }
 
-            foreach (var line in Lines)
+            foreach (var entity in entities)
             {
-                Extend(line.X1, line.Y1);
-                Extend(line.X2, line.Y2);
-            }
-
-            foreach (var circle in Circles)
-            {
-                Extend(circle.Cx - circle.R, circle.Cy - circle.R);
-                Extend(circle.Cx + circle.R, circle.Cy + circle.R);
-            }
-
-            foreach (var arc in Arcs)
-            {
-                ExtendArc(arc, Extend);
-            }
-
-            foreach (var poly in Polylines)
-            {
-                for (var i = 0; i < poly.Points.Count; i++)
+                switch (entity.Kind)
                 {
-                    var p = poly.Points[i];
-                    Extend(p.X, p.Y);
+                    case DrawingEntityKind.Line:
+                        Extend(entity.Start.X, entity.Start.Y);
+                        Extend(entity.End.X, entity.End.Y);
+                        break;
 
-                    var hasNext = i + 1 < poly.Points.Count || poly.Closed;
-                    if (!hasNext || Math.Abs(p.Bulge) < Epsilon)
-                    {
-                        continue;
-                    }
+                    case DrawingEntityKind.Circle:
+                        Extend(entity.Center.X - entity.Radius, entity.Center.Y - entity.Radius);
+                        Extend(entity.Center.X + entity.Radius, entity.Center.Y + entity.Radius);
+                        break;
 
-                    var q = poly.Points[(i + 1) % poly.Points.Count];
-                    foreach (var (x, y) in BulgePoints(p.X, p.Y, q.X, q.Y, p.Bulge))
-                    {
-                        Extend(x, y);
-                    }
+                    case DrawingEntityKind.Arc:
+                        ExtendArc(entity.Center.X, entity.Center.Y, entity.Radius, entity.StartAngle, entity.SweepAngle, Extend);
+                        break;
+
+                    case DrawingEntityKind.Polyline:
+                        {
+                            var vertices = entity.Vertices;
+                            var last = entity.IsClosed ? vertices.Count : vertices.Count - 1;
+
+                            for (var i = 0; i < vertices.Count; i++)
+                            {
+                                Extend(vertices[i].X, vertices[i].Y);
+                            }
+
+                            for (var i = 0; i < last; i++)
+                            {
+                                var a = vertices[i];
+                                var b = vertices[(i + 1) % vertices.Count];
+                                if (Math.Abs(a.Bulge) < Epsilon)
+                                {
+                                    continue;
+                                }
+
+                                foreach (var (x, y) in BulgePoints(a.X, a.Y, b.X, b.Y, a.Bulge))
+                                {
+                                    Extend(x, y);
+                                }
+                            }
+
+                            break;
+                        }
                 }
             }
 
@@ -735,35 +935,34 @@ public class PartDxfExportService : IPartDxfExportService
             return lowX <= highX && lowY <= highY;
         }
 
-        private static void ExtendArc(ArcG arc, Action<double, double> extend)
+        private static void ExtendArc(
+            double cx,
+            double cy,
+            double radius,
+            double startRadians,
+            double sweepRadians,
+            Action<double, double> extend)
         {
-            var start = arc.StartAngle;
-            var sweep = arc.EndAngle - arc.StartAngle;
-            while (sweep <= 0)
-            {
-                sweep += 360.0;
-            }
+            void Point(double angle) => extend(cx + radius * Math.Cos(angle), cy + radius * Math.Sin(angle));
 
-            void Point(double degrees)
-            {
-                var t = degrees * Math.PI / 180.0;
-                extend(arc.Cx + arc.R * Math.Cos(t), arc.Cy + arc.R * Math.Sin(t));
-            }
+            var twoPi = Math.PI * 2.0;
+            var sweep = Math.Clamp(sweepRadians, 0.0, twoPi);
 
-            Point(start);
-            Point(start + sweep);
+            Point(startRadians);
+            Point(startRadians + sweep);
 
-            foreach (var quadrant in new[] { 0.0, 90.0, 180.0, 270.0 })
+            for (var quadrant = 0; quadrant < 4; quadrant++)
             {
-                var distance = (quadrant - start) % 360.0;
+                var angle = quadrant * Math.PI / 2.0;
+                var distance = (angle - startRadians) % twoPi;
                 if (distance < 0)
                 {
-                    distance += 360.0;
+                    distance += twoPi;
                 }
 
                 if (distance <= sweep)
                 {
-                    Point(quadrant);
+                    Point(angle);
                 }
             }
         }
@@ -792,6 +991,157 @@ public class PartDxfExportService : IPartDxfExportService
                 var t = startAngle + theta * i / steps;
                 yield return (cx + radius * Math.Cos(t), cy + radius * Math.Sin(t));
             }
+        }
+
+        private static DxfUnits MapUnits(DrawingUnit unit)
+        {
+            return unit switch
+            {
+                DrawingUnit.Centimeter => DxfUnits.Centimeters,
+                DrawingUnit.Meter => DxfUnits.Meters,
+                DrawingUnit.Inch => DxfUnits.Inches,
+                DrawingUnit.Foot => DxfUnits.Feet,
+                _ => DxfUnits.Millimeters
+            };
+        }
+
+        private static double NormalizeDegrees(double degrees)
+        {
+            var value = degrees % 360.0;
+            return value < 0 ? value + 360.0 : value;
+        }
+
+        private static string ResolvePartName(AssemblyNode node, PartManufacturingSpecDto? spec)
+        {
+            var name = FirstNonBlank(spec?.PartName)
+                ?? node.Labels.FirstOrDefault(l => !string.IsNullOrWhiteSpace(l) && l.Length <= 40)
+                ?? node.Label
+                ?? node.Name;
+
+            return string.IsNullOrWhiteSpace(name) ? node.Id : name.Trim();
+        }
+
+        private static string ResolveProjectCode(PartManufacturingRequestDto request)
+        {
+            return FirstNonBlank(request.ProjectCode)
+                ?? "PRJ-" + request.ProjectId.ToString("D5", CultureInfo.InvariantCulture);
+        }
+
+        private static string? FirstNonBlank(params string?[] values)
+        {
+            foreach (var value in values)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    return value.Trim();
+                }
+            }
+
+            return null;
+        }
+
+        private static Dictionary<string, PartManufacturingSpecDto> IndexSpecs(IEnumerable<PartManufacturingSpecDto>? specs)
+        {
+            var map = new Dictionary<string, PartManufacturingSpecDto>(StringComparer.OrdinalIgnoreCase);
+            if (specs is null)
+            {
+                return map;
+            }
+
+            foreach (var spec in specs)
+            {
+                if (!string.IsNullOrWhiteSpace(spec.NodeId))
+                {
+                    map[spec.NodeId.Trim()] = spec;
+                }
+            }
+
+            return map;
+        }
+
+        private static PartManufacturingSpecDto? FindSpec(Dictionary<string, PartManufacturingSpecDto> specs, PartGroup group)
+        {
+            foreach (var member in group.Members)
+            {
+                if (specs.TryGetValue(member.Id, out var spec)
+                    || specs.TryGetValue(SourceNodeId(member.Id), out spec))
+                {
+                    return spec;
+                }
+            }
+
+            return null;
+        }
+
+        private static string SourceNodeId(string id)
+        {
+            var dot = id.IndexOf('.');
+            return dot > 0 ? id[..dot] : id;
+        }
+
+        private static string UniqueFileName(string baseName, HashSet<string> used)
+        {
+            var name = baseName + ".dxf";
+            var counter = 2;
+
+            while (!used.Add(name))
+            {
+                name = baseName + "_" + counter.ToString(CultureInfo.InvariantCulture) + ".dxf";
+                counter++;
+            }
+
+            return name;
+        }
+
+        private static string SafeName(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return "part";
+            }
+
+            var builder = new StringBuilder();
+            foreach (var ch in value.Trim())
+            {
+                builder.Append(char.IsLetterOrDigit(ch) && ch < 128 || ch is '-' or '_' ? ch : '_');
+            }
+
+            var result = builder.ToString().Trim('_');
+            return result.Length == 0 ? "part" : result.Length > 60 ? result[..60] : result;
+        }
+
+        private static string Clean(string? value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return string.Empty;
+            }
+
+            var builder = new StringBuilder();
+            foreach (var ch in value.Trim().ToUpperInvariant())
+            {
+                builder.Append(ch is >= ' ' and <= '~' ? ch : '?');
+            }
+
+            return builder.ToString();
+        }
+
+        private sealed record SourceData(ExtractedGeometry Geometry, string Title);
+
+        private sealed record SubPart(List<DrawingEntity> Entities, double MinX, double MinY, double MaxX, double MaxY, bool Closed);
+
+        private sealed class PartGroup
+        {
+            public PartGroup(AssemblyNode first)
+            {
+                Members = new List<AssemblyNode> { first };
+            }
+
+            public List<AssemblyNode> Members { get; }
+
+            public IReadOnlyList<DrawingEntity>? Entities { get; set; }
+
+            public AssemblyNode Representative => Members[0];
         }
     }
 }

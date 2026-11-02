@@ -23,18 +23,18 @@ public class ManufacturingController : Controller
     private readonly IProjectProcessingService _processingService;
     private readonly IBlockBreakdownService _breakdownService;
     private readonly ILogger<ManufacturingController> _logger;
-    private readonly IPartDxfExportService _partDxfService;
+    private readonly IPartManufacturingDxfService _manufacturingDxfService;
 
     public ManufacturingController(
         IProjectProcessingService processingService,
         IBlockBreakdownService breakdownService,
         ILogger<ManufacturingController> logger,
-        IPartDxfExportService partDxfService)
+        IPartManufacturingDxfService manufacturingDxfService)
     {
         _processingService = processingService;
         _breakdownService = breakdownService;
         _logger = logger;
-        _partDxfService = partDxfService;
+        _manufacturingDxfService = manufacturingDxfService;
     }
 
     [HttpGet]
@@ -114,19 +114,40 @@ public class ManufacturingController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> DownloadPart(
+    public async Task<IActionResult> DownloadComponentDxf(
         int id,
-        string blockName,
+        string nodeId,
+        string? partName,
         string? material,
         decimal? thickness,
-        CancellationToken cancellationToken)
+        int? quantity,
+        string? projectCode,
+        PartOriginMode origin = PartOriginMode.BottomLeft,
+        CancellationToken cancellationToken = default)
     {
-        var spec = new PartDxfSpecDto { BlockName = blockName, Material = material, Thickness = thickness };
-        var file = await _partDxfService.BuildPartFileAsync(id, spec, cancellationToken);
+        var request = new PartManufacturingRequestDto
+        {
+            ProjectId = id,
+            ProjectCode = projectCode,
+            Origin = origin,
+            Specs = new List<PartManufacturingSpecDto>
+            {
+                new()
+                {
+                    NodeId = nodeId,
+                    PartName = partName,
+                    Material = material,
+                    Thickness = thickness,
+                    Quantity = quantity
+                }
+            }
+        };
+
+        var file = await _manufacturingDxfService.BuildPartAsync(request, nodeId, cancellationToken);
 
         if (file is null)
         {
-            TempData["Error"] = "The part drawing could not be generated.";
+            TempData["Error"] = "The component DXF could not be generated.";
             return RedirectToAction(nameof(Index), new { id });
         }
 
@@ -135,18 +156,28 @@ public class ManufacturingController : Controller
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public async Task<IActionResult> DownloadPackage(
+    public async Task<IActionResult> DownloadManufacturingDxfPackage(
         int id,
-        List<PartDxfSpecDto>? specs,
-        CancellationToken cancellationToken)
+        List<PartManufacturingSpecDto>? specs,
+        string? projectCode,
+        string? defaultMaterial,
+        decimal? defaultThickness,
+        bool includeReferenceGeometry = false,
+        PartOriginMode origin = PartOriginMode.BottomLeft,
+        CancellationToken cancellationToken = default)
     {
-        var request = new PartDxfRequestDto
+        var request = new PartManufacturingRequestDto
         {
             ProjectId = id,
-            Specs = specs ?? new List<PartDxfSpecDto>()
+            ProjectCode = projectCode,
+            Origin = origin,
+            IncludeReferenceGeometry = includeReferenceGeometry,
+            DefaultMaterial = defaultMaterial,
+            DefaultThickness = defaultThickness,
+            Specs = specs ?? new List<PartManufacturingSpecDto>()
         };
 
-        var zip = await _partDxfService.BuildPackageZipAsync(request, cancellationToken);
+        var zip = await _manufacturingDxfService.BuildZipAsync(request, cancellationToken);
 
         if (zip is null)
         {

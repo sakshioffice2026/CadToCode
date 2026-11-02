@@ -58,7 +58,7 @@ builder.Services.AddSingleton<IPartScriptBuilder, CentrifugalFanPartScriptBuilde
 builder.Services.AddSingleton<IPartScriptBuilder, AxialFanPartScriptBuilder>();
 builder.Services.AddSingleton<IPartScriptBuilder, TemplatePartScriptBuilder>();
 builder.Services.AddSingleton<IPartScriptBuilderRegistry, PartScriptBuilderRegistry>();
-builder.Services.AddScoped<IPartDxfExportService, PartDxfExportService>();
+builder.Services.AddScoped<IPartManufacturingDxfService, PartManufacturingDxfService>();
 
 // One design flow per equipment type, each with its own rule pack and prompts.
 builder.Services.AddScoped<IEquipmentDesignFlow, CentrifugalFanDesignFlow>();
