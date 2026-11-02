@@ -54,7 +54,7 @@ public sealed class PartSheetFrameBuilder
     private const string TitleLayer = "TITLE";
     private const string TableLayer = "TABLE";
 
-    public SheetFrameResult Build(DxfFile dxf, SheetRules rules, SheetFrameRequest request)
+    public SheetFrameResult Build(DxfFile dxf, SheetRules rules, ToleranceRules tolerance, SheetFrameRequest request)
     {
         ArgumentNullException.ThrowIfNull(dxf);
         ArgumentNullException.ThrowIfNull(rules);
@@ -87,9 +87,9 @@ public sealed class PartSheetFrameBuilder
         var blockTop = DrawTitleBlock(dxf, rules, request, blockX0, innerY0, innerX1);
         var revisionTop = DrawRevisionTable(dxf, blockX0, blockTop, innerX1);
 
-        if (request.IncludeToleranceTable && rules.Tolerance.Classes.Count > 0)
+        if (request.IncludeToleranceTable && tolerance.Classes.Count > 0)
         {
-            DrawToleranceTable(dxf, rules.Tolerance, innerX0, innerY0);
+            DrawToleranceTable(dxf, tolerance, innerX0, innerY0);
         }
 
         var areaMinY = Math.Max(revisionTop, innerY0 + 36.0) + 5.0;
