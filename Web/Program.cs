@@ -81,7 +81,7 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
 builder.Services.AddSingleton<IDxfCompatibilityService, DxfCompatibilityService>();
 builder.Services.AddSingleton<IGeometryExtractor, DxfGeometryExtractor>();
-
+builder.Services.AddSingleton<PartDrawingSheetService>();
 // Local OCR is a best-effort service. ImageGeometryExtractor falls back to visual-only
 // feature detection when Tesseract or its local eng.traineddata is unavailable.
 builder.Services.AddSingleton<IImageTextRecognizer, TesseractTextRecognizer>();

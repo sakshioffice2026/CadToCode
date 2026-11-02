@@ -7,10 +7,10 @@ using IxMilia.Dxf.Tables;
 
 namespace CadToCode.Business.Services;
 
-/// <summary>Inputs for one round bar part sheet (shaft, pin, rod). All sizes are in mm.</summary>
-public sealed class RoundBarRequest
+/// <summary>Inputs for one round bar part sheet. All sizes are in mm.</summary>
+public sealed class RoundBarPartRequest
 {
-    public string Name { get; init; } = "BAR";
+    public string Name { get; init; } = "ROUND BAR";
 
     public string Material { get; init; } = "MS";
 
@@ -22,16 +22,25 @@ public sealed class RoundBarRequest
 
     public double LengthMm { get; init; }
 
-    /// <summary>Added to the length to get the raw material length (assumed).</summary>
+    /// <summary>45 degree chamfer size at both ends. Zero means square ends.</summary>
+    public double ChamferMm { get; init; }
+
+    /// <summary>Diameter of one cross hole drilled through the bar. Zero means no cross hole.</summary>
+    public double CrossHoleDiameterMm { get; init; }
+
+    /// <summary>Distance from the left end to the cross hole centre.</summary>
+    public double CrossHolePositionMm { get; init; }
+
+    /// <summary>Added to diameter and length to get the raw bar size (assumed).</summary>
     public double RawMaterialAllowanceMm { get; init; } = 5.0;
 
     /// <summary>Title block values. The scale is filled in by the builder.</summary>
     public SheetFrameRequest Frame { get; init; } = new();
 }
 
-public sealed class RoundBarResult
+public sealed class RoundBarPartResult
 {
-    public RoundBarResult(DxfFile dxf, double finishWeightKg, double rawWeightKg, string scale)
+    public RoundBarPartResult(DxfFile dxf, double finishWeightKg, double rawWeightKg, string scale)
     {
         Dxf = dxf;
         FinishWeightKg = finishWeightKg;
@@ -49,46 +58,50 @@ public sealed class RoundBarResult
 }
 
 /// <summary>
-/// Builds a complete A3 sheet for a round bar: frame, elevation, end view, dimensions,
-/// part callout and BOM row.
+/// Builds a complete A3 sheet for a round bar: frame, side view with centre line, end view,
+/// dimensions, optional chamfers and cross hole, part callout and BOM row.
 /// </summary>
 public sealed class RoundBarPartDrawingBuilder
 {
     private const string OutlineLayer = "OUTLINE";
     private const string CenterLayer = "CENTER";
+    private const string HiddenLayer = "HIDDEN";
     private const string DimLayer = "DIM";
     private const string TextLayer = "TEXT";
     private const string TableLayer = "TABLE";
 
-    private const double ViewMargin = 36.0;
+    private const double SideMargin = 36.0;
+    private const double BottomMargin = 50.0;
+    private const double TopMargin = 36.0;
+    private const double AboveDimSpace = 30.0;
+    private const double ViewGap = 60.0;
+    private const double CalloutSpace = 80.0;
     private const double BomRowHeight = 8.0;
     private static readonly double[] StandardScales = { 1.0, 2.0, 2.5, 4.0, 5.0, 10.0, 20.0, 25.0, 50.0 };
 
-    public RoundBarResult Build(ManufacturingRules rules, RoundBarRequest request)
+    public RoundBarPartResult Build(ManufacturingRules rules, RoundBarPartRequest request)
     {
         ArgumentNullException.ThrowIfNull(rules);
         ArgumentNullException.ThrowIfNull(request);
 
-        if (request.DiameterMm <= 0.0 || request.LengthMm <= 0.0)
-        {
-            throw new ArgumentException("Diameter and length must be greater than zero.");
-        }
+        Validate(request);
 
         var dxf = new DxfFile();
-        foreach (var name in new[] { OutlineLayer, CenterLayer, DimLayer, TextLayer, TableLayer })
+        foreach (var name in new[] { OutlineLayer, CenterLayer, HiddenLayer, DimLayer, TextLayer, TableLayer })
         {
             EnsureLayer(dxf, name);
         }
 
-        var finishWeight = rules.DiscWeightKg(request.DiameterMm, request.LengthMm);
+        var finishWeight = CalculateFinishWeight(rules, request);
+        var rawDiameter = request.DiameterMm + request.RawMaterialAllowanceMm;
         var rawLength = request.LengthMm + request.RawMaterialAllowanceMm;
-        var rawWeight = rules.DiscWeightKg(request.DiameterMm, rawLength);
+        var rawWeight = rules.DiscWeightKg(rawDiameter, rawLength);
 
         var frameRequest = request.Frame;
         var frameBuilder = new PartSheetFrameBuilder();
         var probe = frameBuilder.Build(new DxfFile(), rules.Sheet, rules.Tolerance, frameRequest);
-        var divisor = ChooseScale(request, probe);
-        var scaleText = divisor <= 1.0 ? "1:1" : "1:" + Format(divisor);
+        var scaleDivisor = ChooseScale(request, probe);
+        var scaleText = scaleDivisor <= 1.0 ? "1:1" : "1:" + Format(scaleDivisor);
 
         var finalFrame = new SheetFrameRequest
         {
@@ -108,47 +121,88 @@ public sealed class RoundBarPartDrawingBuilder
 
         var area = frameBuilder.Build(dxf, rules.Sheet, rules.Tolerance, finalFrame);
 
-        var length = request.LengthMm / divisor;
-        var radius = request.DiameterMm / 2.0 / divisor;
+        var radius = request.DiameterMm / 2.0 / scaleDivisor;
+        var length = request.LengthMm / scaleDivisor;
 
-        var x0 = area.DrawingMinX + ViewMargin;
+        var x0 = area.DrawingMinX + SideMargin;
         var x1 = x0 + length;
-        var cy = area.DrawingMinY + ViewMargin + radius;
+        var cy = area.DrawingMinY + BottomMargin + radius;
 
-        Rectangle(dxf, x0, cy - radius, x1, cy + radius, OutlineLayer);
-        Line(dxf, x0 - 6.0, cy, x1 + 6.0, cy, CenterLayer);
+        DrawSideView(dxf, request, scaleDivisor, x0, x1, cy);
 
-        var cx = x1 + 60.0 + radius;
-        dxf.Entities.Add(new DxfCircle(new DxfPoint(cx, cy, 0), radius) { Layer = OutlineLayer });
-        Line(dxf, cx - radius - 6.0, cy, cx + radius + 6.0, cy, CenterLayer);
-        Line(dxf, cx, cy - radius - 6.0, cx, cy + radius + 6.0, CenterLayer);
+        var endCx = x1 + ViewGap + radius;
+        DrawEndView(dxf, request, scaleDivisor, endCx, cy);
 
-        HorizontalDimension(dxf, x0, x1, cy - radius - 12.0, cy - radius, Format(request.LengthMm));
-        VerticalDimension(dxf, cy - radius, cy + radius, x0 - 12.0, x0, "%%C" + Format(request.DiameterMm));
-        HorizontalDimension(dxf, cx - radius, cx + radius, cy - radius - 12.0, cy - radius, "%%C" + Format(request.DiameterMm));
+        DrawDimensions(dxf, request, scaleDivisor, x0, x1, cy, endCx);
 
-        var calloutY = cy + radius + 20.0;
-        foreach (var line in FormatCallout(rules.Sheet, request, finishWeight))
+        var calloutLines = FormatCallout(request, finishWeight);
+        var calloutY = cy + radius;
+        foreach (var line in calloutLines)
         {
-            Text(dxf, cx + radius + 20.0, calloutY, 3.5, line, TextLayer);
+            Text(dxf, endCx + radius + 20.0, calloutY, 3.5, line, TextLayer);
             calloutY -= 6.0;
         }
 
-        DrawBom(dxf, rules.Sheet, request, area, rawLength, rawWeight, finishWeight);
+        DrawBom(dxf, rules.Sheet, request, area, rawDiameter, rawLength, rawWeight, finishWeight);
 
-        return new RoundBarResult(dxf, finishWeight, rawWeight, scaleText);
+        return new RoundBarPartResult(dxf, finishWeight, rawWeight, scaleText);
     }
 
-    private static double ChooseScale(RoundBarRequest request, SheetFrameResult area)
+    private static void Validate(RoundBarPartRequest request)
     {
-        var availableHeight = area.DrawingMaxY - area.DrawingMinY - 2.0 * ViewMargin - 2.0 * BomRowHeight - 40.0;
-        var availableWidth = area.DrawingMaxX - area.DrawingMinX - 2.0 * ViewMargin - 60.0 - 80.0;
+        if (request.DiameterMm <= 0.0 || request.LengthMm <= 0.0)
+        {
+            throw new ArgumentException("Diameter and length must be greater than zero.");
+        }
+
+        if (request.ChamferMm < 0.0 || request.ChamferMm * 2.0 >= request.DiameterMm || request.ChamferMm * 2.0 >= request.LengthMm)
+        {
+            throw new ArgumentException("Chamfer is too large for the bar.");
+        }
+
+        if (request.CrossHoleDiameterMm > 0.0)
+        {
+            var radius = request.CrossHoleDiameterMm / 2.0;
+            if (request.CrossHoleDiameterMm >= request.DiameterMm
+                || request.CrossHolePositionMm < radius
+                || request.CrossHolePositionMm > request.LengthMm - radius)
+            {
+                throw new ArgumentException("Cross hole does not fit in the bar.");
+            }
+        }
+    }
+
+    private static double CalculateFinishWeight(ManufacturingRules rules, RoundBarPartRequest request)
+    {
+        var weight = rules.DiscWeightKg(request.DiameterMm, request.LengthMm);
+
+        if (request.ChamferMm > 0.0)
+        {
+            var c = request.ChamferMm;
+            var r = request.DiameterMm / 2.0;
+            var removedVolumePerEnd = 2.0 * Math.PI * (r - c / 3.0) * c * c / 2.0;
+            weight -= 2.0 * rules.PlateWeightKg(removedVolumePerEnd, 1.0);
+        }
+
+        if (request.CrossHoleDiameterMm > 0.0)
+        {
+            var holeArea = Math.PI / 4.0 * request.CrossHoleDiameterMm * request.CrossHoleDiameterMm;
+            weight -= rules.PlateWeightKg(holeArea, request.DiameterMm);
+        }
+
+        return Math.Max(weight, 0.0);
+    }
+
+    private static double ChooseScale(RoundBarPartRequest request, SheetFrameResult area)
+    {
+        var availableHeight = area.DrawingMaxY - area.DrawingMinY - BottomMargin - TopMargin - AboveDimSpace - 2.0 * BomRowHeight - 10.0;
+        var availableWidth = area.DrawingMaxX - area.DrawingMinX - 2.0 * SideMargin;
 
         foreach (var divisor in StandardScales)
         {
-            var fitsHeight = request.DiameterMm / divisor <= availableHeight;
-            var fitsWidth = (request.LengthMm + request.DiameterMm) / divisor <= availableWidth;
-            if (fitsHeight && fitsWidth)
+            var heightOk = request.DiameterMm / divisor <= availableHeight;
+            var width = (request.LengthMm + request.DiameterMm) / divisor + ViewGap + CalloutSpace;
+            if (heightOk && width <= availableWidth)
             {
                 return divisor;
             }
@@ -157,73 +211,121 @@ public sealed class RoundBarPartDrawingBuilder
         return StandardScales[^1];
     }
 
+    private static void DrawSideView(DxfFile dxf, RoundBarPartRequest request, double divisor, double x0, double x1, double cy)
+    {
+        var radius = request.DiameterMm / 2.0 / divisor;
+        var c = request.ChamferMm / divisor;
+
+        Line(dxf, x0, cy - radius + c, x0, cy + radius - c, OutlineLayer);
+        Line(dxf, x1, cy - radius + c, x1, cy + radius - c, OutlineLayer);
+        Line(dxf, x0 + c, cy + radius, x1 - c, cy + radius, OutlineLayer);
+        Line(dxf, x0 + c, cy - radius, x1 - c, cy - radius, OutlineLayer);
+
+        if (c > 0.0)
+        {
+            Line(dxf, x0, cy + radius - c, x0 + c, cy + radius, OutlineLayer);
+            Line(dxf, x0, cy - radius + c, x0 + c, cy - radius, OutlineLayer);
+            Line(dxf, x1, cy + radius - c, x1 - c, cy + radius, OutlineLayer);
+            Line(dxf, x1, cy - radius + c, x1 - c, cy - radius, OutlineLayer);
+            Line(dxf, x0 + c, cy - radius, x0 + c, cy + radius, OutlineLayer);
+            Line(dxf, x1 - c, cy - radius, x1 - c, cy + radius, OutlineLayer);
+        }
+
+        Line(dxf, x0 - 8.0, cy, x1 + 8.0, cy, CenterLayer);
+
+        if (request.CrossHoleDiameterMm > 0.0)
+        {
+            var hx = x0 + request.CrossHolePositionMm / divisor;
+            var hr = request.CrossHoleDiameterMm / 2.0 / divisor;
+            Line(dxf, hx - hr, cy - radius, hx - hr, cy + radius, HiddenLayer);
+            Line(dxf, hx + hr, cy - radius, hx + hr, cy + radius, HiddenLayer);
+            Line(dxf, hx, cy - radius - 6.0, hx, cy + radius + 6.0, CenterLayer);
+        }
+    }
+
+    private static void DrawEndView(DxfFile dxf, RoundBarPartRequest request, double divisor, double cx, double cy)
+    {
+        var radius = request.DiameterMm / 2.0 / divisor;
+        Circle(dxf, cx, cy, radius, OutlineLayer);
+
+        if (request.ChamferMm > 0.0)
+        {
+            Circle(dxf, cx, cy, radius - request.ChamferMm / divisor, OutlineLayer);
+        }
+
+        const double extend = 6.0;
+        Line(dxf, cx - radius - extend, cy, cx + radius + extend, cy, CenterLayer);
+        Line(dxf, cx, cy - radius - extend, cx, cy + radius + extend, CenterLayer);
+    }
+
+    private static void DrawDimensions(DxfFile dxf, RoundBarPartRequest request, double divisor, double x0, double x1, double cy, double endCx)
+    {
+        var radius = request.DiameterMm / 2.0 / divisor;
+
+        HorizontalDimension(dxf, x0, x1, cy - radius - 12.0, cy - radius, Format(request.LengthMm));
+        HorizontalDimension(dxf, endCx - radius, endCx + radius, cy - radius - 12.0, cy - radius, "%%C" + Format(request.DiameterMm));
+
+        if (request.CrossHoleDiameterMm > 0.0)
+        {
+            var hx = x0 + request.CrossHolePositionMm / divisor;
+            HorizontalDimension(dxf, x0, hx, cy + radius + 12.0, cy + radius, Format(request.CrossHolePositionMm));
+            Text(dxf, hx + 2.0, cy + radius + 20.0, 3.5, "%%C" + Format(request.CrossHoleDiameterMm) + " THRU", TextLayer);
+        }
+
+        if (request.ChamferMm > 0.0)
+        {
+            Text(dxf, x0, cy - radius - 28.0, 3.5, Format(request.ChamferMm) + " X 45%%D CHAMFER BOTH ENDS", TextLayer);
+        }
+    }
+
     private static void HorizontalDimension(DxfFile dxf, double xa, double xb, double yDim, double yFeature, string text)
     {
-        Line(dxf, xa, yFeature - 1.5, xa, yDim - 2.0, DimLayer);
-        Line(dxf, xb, yFeature - 1.5, xb, yDim - 2.0, DimLayer);
+        var direction = yDim >= yFeature ? 1.0 : -1.0;
+        Line(dxf, xa, yFeature + direction * 1.5, xa, yDim + direction * 2.0, DimLayer);
+        Line(dxf, xb, yFeature + direction * 1.5, xb, yDim + direction * 2.0, DimLayer);
         Line(dxf, xa, yDim, xb, yDim, DimLayer);
 
         const double arrowLength = 3.0;
         const double arrowHalfWidth = 0.8;
-        Line(dxf, xa, yDim, xa + arrowLength, yDim + arrowHalfWidth, DimLayer);
-        Line(dxf, xa, yDim, xa + arrowLength, yDim - arrowHalfWidth, DimLayer);
-        Line(dxf, xb, yDim, xb - arrowLength, yDim + arrowHalfWidth, DimLayer);
-        Line(dxf, xb, yDim, xb - arrowLength, yDim - arrowHalfWidth, DimLayer);
+        var arrow = Math.Min(arrowLength, Math.Abs(xb - xa) / 3.0);
+        Line(dxf, xa, yDim, xa + arrow, yDim + arrowHalfWidth, DimLayer);
+        Line(dxf, xa, yDim, xa + arrow, yDim - arrowHalfWidth, DimLayer);
+        Line(dxf, xb, yDim, xb - arrow, yDim + arrowHalfWidth, DimLayer);
+        Line(dxf, xb, yDim, xb - arrow, yDim - arrowHalfWidth, DimLayer);
 
         const double textHeight = 3.5;
         var textWidth = text.Length * textHeight * 0.6;
         Text(dxf, (xa + xb) / 2.0 - textWidth / 2.0, yDim + 1.5, textHeight, text, DimLayer);
     }
 
-    private static void VerticalDimension(DxfFile dxf, double ya, double yb, double xDim, double xFeature, string text)
-    {
-        var sign = xDim >= xFeature ? 1.0 : -1.0;
-        Line(dxf, xFeature + sign * 1.5, ya, xDim + sign * 2.0, ya, DimLayer);
-        Line(dxf, xFeature + sign * 1.5, yb, xDim + sign * 2.0, yb, DimLayer);
-        Line(dxf, xDim, ya, xDim, yb, DimLayer);
-
-        const double arrowLength = 3.0;
-        const double arrowHalfWidth = 0.8;
-        Line(dxf, xDim, ya, xDim + arrowHalfWidth, ya + arrowLength, DimLayer);
-        Line(dxf, xDim, ya, xDim - arrowHalfWidth, ya + arrowLength, DimLayer);
-        Line(dxf, xDim, yb, xDim + arrowHalfWidth, yb - arrowLength, DimLayer);
-        Line(dxf, xDim, yb, xDim - arrowHalfWidth, yb - arrowLength, DimLayer);
-
-        const double textHeight = 3.5;
-        var textWidth = text.Length * textHeight * 0.6;
-        dxf.Entities.Add(new DxfText(new DxfPoint(xDim - 1.5, (ya + yb) / 2.0 - textWidth / 2.0, 0), textHeight, text)
-        {
-            Layer = DimLayer,
-            Rotation = 90.0
-        });
-    }
-
-    private static void DrawBom(DxfFile dxf, SheetRules sheet, RoundBarRequest request, SheetFrameResult area, double rawLength, double rawWeight, double finishWeight)
+    private static void DrawBom(DxfFile dxf, SheetRules sheet, RoundBarPartRequest request, SheetFrameResult area, double rawDiameter, double rawLength, double rawWeight, double finishWeight)
     {
         var headers = sheet.BomColumns.Count == 4
             ? sheet.BomColumns
             : new List<string> { "ITEM", "RM SIZE", "RM WT.", "FINISH WT." };
 
         var widths = new[] { 20.0, 55.0, 25.0, 30.0 };
-        var x = area.DrawingMaxX - widths.Sum();
+        var tableWidth = widths.Sum();
+        var x = area.DrawingMaxX - tableWidth;
         var yTop = area.DrawingMaxY;
         var yMid = yTop - BomRowHeight;
         var yBottom = yMid - BomRowHeight;
 
+        var rmSize = "%%C" + Format(rawDiameter) + " X " + Format(rawLength) + " LG";
         var values = new[]
         {
             request.ItemNo.ToString(CultureInfo.InvariantCulture),
-            "%%C" + Format(request.DiameterMm) + " X " + Format(rawLength),
+            rmSize,
             Format(Math.Round(rawWeight, 2)),
             Format(Math.Round(finishWeight, 2))
         };
 
         for (var i = 0; i < 4; i++)
         {
-            var xNext = x + widths[i];
-            Cell(dxf, x, yMid, xNext, yTop, headers[i], 3.0);
-            Cell(dxf, x, yBottom, xNext, yMid, values[i], 3.0);
-            x = xNext;
+            var xRight = x + widths[i];
+            Cell(dxf, x, yMid, xRight, yTop, headers[i], 3.0);
+            Cell(dxf, x, yBottom, xRight, yMid, values[i], 3.0);
+            x = xRight;
         }
     }
 
@@ -236,22 +338,20 @@ public sealed class RoundBarPartDrawingBuilder
         }
     }
 
-    private static List<string> FormatCallout(SheetRules sheet, RoundBarRequest request, double weightKg)
+    private static List<string> FormatCallout(RoundBarPartRequest request, double weightKg)
     {
-        var format = string.IsNullOrWhiteSpace(sheet.PartCalloutFormat)
-            ? "{NAME}\\n{MATERIAL} {THICKNESS} MM THK\\nQTY. {QTY}\\nWT- {WEIGHT} KG."
-            : sheet.PartCalloutFormat;
+        return new List<string>
+        {
+            Clean(request.Name.ToUpperInvariant()),
+            Clean(request.Material + " %%C" + Format(request.DiameterMm) + " X " + Format(request.LengthMm) + " LG"),
+            "QTY. " + request.Qty.ToString(CultureInfo.InvariantCulture),
+            "WT- " + Format(Math.Round(weightKg, 2)) + " KG."
+        };
+    }
 
-        var text = format
-            .Replace("{NAME}", request.Name.ToUpperInvariant())
-            .Replace("{MATERIAL}", request.Material)
-            .Replace("{THICKNESS}", Format(request.DiameterMm))
-            .Replace("{QTY}", request.Qty.ToString(CultureInfo.InvariantCulture))
-            .Replace("{WEIGHT}", Format(Math.Round(weightKg, 2)))
-            .Replace("\\n", "\n")
-            .Replace("\r", string.Empty);
-
-        return text.Split('\n').Select(Clean).Where(line => line.Length > 0).ToList();
+    private static void Circle(DxfFile dxf, double cx, double cy, double radius, string layer)
+    {
+        dxf.Entities.Add(new DxfCircle(new DxfPoint(cx, cy, 0), radius) { Layer = layer });
     }
 
     private static void Rectangle(DxfFile dxf, double x0, double y0, double x1, double y1, string layer)
