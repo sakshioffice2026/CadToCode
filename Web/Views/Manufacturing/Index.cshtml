@@ -1,0 +1,191 @@
+@model Web.Controllers.ManufacturingIndexViewModel
+@using System.Globalization
+
+@{
+    ViewData["Title"] = "Manufacturing Breakdown";
+
+    var breakdown = Model.Breakdown;
+
+    string Num(double value) => value.ToString("0.###", CultureInfo.InvariantCulture);
+}
+
+<link rel="stylesheet" href="~/css/manufacturing.css" asp-append-version="true" />
+
+<div class="cc-topbar">
+    <div>
+        <h1 class="cc-page-title">Manufacturing Breakdown</h1>
+        <p class="cc-page-meta">Split a general arrangement drawing into individual parts by identifying its blocks.</p>
+    </div>
+
+    <div class="d-flex gap-2">
+        @if (breakdown is { Success: true } && Model.SelectedProjectId.HasValue)
+        {
+            <a class="cc-btn cc-btn-ghost" asp-controller="Manufacturing" asp-action="Export" asp-route-id="@Model.SelectedProjectId">Export CSV</a>
+        }
+    </div>
+</div>
+
+@if (TempData["Error"] is string errorMessage)
+{
+    <div class="cc-alert cc-alert-error" role="alert">@errorMessage</div>
+}
+
+<div class="row">
+    <div class="col-xl-8">
+        <form asp-controller="Manufacturing" asp-action="Upload" method="post" enctype="multipart/form-data" class="mb-4" data-cc-upload-form>
+            <div class="cc-dropzone" data-cc-dropzone>
+                <input type="file"
+                       id="mfg-file"
+                       name="file"
+                       class="cc-dropzone-input"
+                       accept=".dxf"
+                       aria-label="General arrangement DXF drawing"
+                       data-cc-dropzone-input
+                       required />
+
+                <span class="cc-dropzone-icon" aria-hidden="true">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 16V4" />
+                        <path d="M7 9l5-5 5 5" />
+                        <path d="M5 20h14" />
+                    </svg>
+                </span>
+
+                <p class="cc-dropzone-title">Drop a general arrangement DXF here, or click to browse</p>
+                <p class="cc-dropzone-hint">DXF only, up to 20 MB. Parts are identified from the drawing's blocks.</p>
+                <p class="cc-file-name" data-cc-file-name hidden></p>
+                <ul class="cc-file-list" data-cc-file-list hidden></ul>
+            </div>
+
+            <div class="d-flex align-items-center gap-3 mt-3">
+                <button type="submit" class="cc-btn cc-btn-primary" data-cc-submit>Upload and break down</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<form method="get" asp-controller="Manufacturing" asp-action="Index" class="cc-mfg-picker">
+    <label for="mfg-project" class="cc-mfg-label">Drawing</label>
+    <select id="mfg-project" name="id" class="cc-mfg-select" onchange="this.form.submit()">
+        <option value="">Select a DXF drawing</option>
+        @foreach (var project in Model.Projects)
+        {
+            <option value="@project.Id" selected="@(Model.SelectedProjectId == project.Id)">@project.Title</option>
+        }
+    </select>
+    <noscript><button type="submit" class="cc-btn cc-btn-primary">Open</button></noscript>
+</form>
+
+@if (Model.Projects.Count == 0)
+{
+    <div class="cc-mfg-empty">
+        <h2>No DXF drawings yet</h2>
+        <p>Block-based breakdown works on DXF drawings. Upload one above to begin.</p>
+    </div>
+}
+else if (breakdown is null)
+{
+    <div class="cc-mfg-empty">
+        <h2>Choose a drawing</h2>
+        <p>Pick a drawing above to see its parts, quantities and sizes.</p>
+    </div>
+}
+else if (!breakdown.Success)
+{
+    <div class="cc-alert cc-alert-error" role="alert">@(breakdown.ErrorMessage ?? "The breakdown could not be built.")</div>
+}
+else
+{
+    <div class="cc-mfg-summary">
+        <div class="cc-mfg-stat">
+            <span class="cc-mfg-stat-value">@breakdown.Parts.Count</span>
+            <span class="cc-mfg-stat-label">Unique parts</span>
+        </div>
+        <div class="cc-mfg-stat">
+            <span class="cc-mfg-stat-value">@breakdown.TotalInstances</span>
+            <span class="cc-mfg-stat-label">Total instances</span>
+        </div>
+        <div class="cc-mfg-stat">
+            <span class="cc-mfg-stat-value">@breakdown.TotalBlockDefinitions</span>
+            <span class="cc-mfg-stat-label">Block definitions</span>
+        </div>
+    </div>
+
+    @foreach (var warning in breakdown.Warnings)
+    {
+        <div class="cc-alert cc-alert-note" role="status">@warning</div>
+    }
+
+    @if (breakdown.Parts.Count > 0)
+    {
+        <div class="cc-table-wrap">
+            <table class="cc-mfg-table">
+                <thead>
+                    <tr>
+                        <th scope="col">Item</th>
+                        <th scope="col">Part (block)</th>
+                        <th scope="col">Qty</th>
+                        <th scope="col">Width</th>
+                        <th scope="col">Height</th>
+                        <th scope="col">Layer</th>
+                        <th scope="col">Entities</th>
+                        <th scope="col">Labels</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @{ var item = 0; }
+                    @foreach (var part in breakdown.Parts)
+                    {
+                        item++;
+                        <tr>
+                            <td>@item</td>
+                            <td class="cc-mfg-name">@part.BlockName</td>
+                            <td><strong>@part.Quantity</strong></td>
+                            <td>@Num(part.Width)</td>
+                            <td>@Num(part.Height)</td>
+                            <td>@(string.IsNullOrWhiteSpace(part.Layer) ? "-" : part.Layer)</td>
+                            <td>
+                                @part.LineCount L, @part.ArcCount A, @part.CircleCount C, @part.PolylineCount P
+                            </td>
+                            <td>@(part.Labels.Count == 0 ? "-" : string.Join(", ", part.Labels))</td>
+                        </tr>
+
+                        @if (part.Placements.Count > 0 || part.Attributes.Count > 0)
+                        {
+                            <tr class="cc-mfg-detail-row">
+                                <td></td>
+                                <td colspan="7">
+                                    <details>
+                                        <summary>Details for @part.BlockName</summary>
+
+                                        @if (part.Attributes.Count > 0)
+                                        {
+                                            <p class="cc-mfg-detail-heading">Attributes</p>
+                                            <ul class="cc-mfg-list">
+                                                @foreach (var attr in part.Attributes)
+                                                {
+                                                    <li><strong>@attr.Key:</strong> @attr.Value</li>
+                                                }
+                                            </ul>
+                                        }
+
+                                        @if (part.Placements.Count > 0)
+                                        {
+                                            <p class="cc-mfg-detail-heading">Placements (@part.Placements.Count)</p>
+                                            <ul class="cc-mfg-list">
+                                                @foreach (var placement in part.Placements)
+                                                {
+                                                    <li>X @Num(placement.X), Y @Num(placement.Y), rotation @Num(placement.Rotation)&deg;, scale @Num(placement.ScaleX) x @Num(placement.ScaleY)</li>
+                                                }
+                                            </ul>
+                                        }
+                                    </details>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}

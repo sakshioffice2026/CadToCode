@@ -46,7 +46,7 @@ builder.Services.Configure<GeminiEmbeddingOptions>(builder.Configuration.GetSect
 
 builder.Services.Configure<TavilyOptions>(builder.Configuration.GetSection(TavilyOptions.SectionName));
 builder.Services.Configure<DuckDuckGoOptions>(builder.Configuration.GetSection(DuckDuckGoOptions.SectionName));
-
+builder.Services.AddScoped<IBlockBreakdownService, BlockBreakdownService>();
 builder.Services.AddCadToCodeCore();
 builder.Services.AddScoped<IDesignSessionStore, DesignSessionStore>();
 
@@ -58,6 +58,7 @@ builder.Services.AddSingleton<IPartScriptBuilder, CentrifugalFanPartScriptBuilde
 builder.Services.AddSingleton<IPartScriptBuilder, AxialFanPartScriptBuilder>();
 builder.Services.AddSingleton<IPartScriptBuilder, TemplatePartScriptBuilder>();
 builder.Services.AddSingleton<IPartScriptBuilderRegistry, PartScriptBuilderRegistry>();
+builder.Services.AddScoped<IPartDxfExportService, PartDxfExportService>();
 
 // One design flow per equipment type, each with its own rule pack and prompts.
 builder.Services.AddScoped<IEquipmentDesignFlow, CentrifugalFanDesignFlow>();

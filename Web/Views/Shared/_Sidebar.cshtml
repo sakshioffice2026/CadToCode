@@ -8,6 +8,7 @@
     var isDetails = isProject && string.Equals(action, "Details", StringComparison.OrdinalIgnoreCase);
     var isLibrary = string.Equals(controller, "Library", StringComparison.OrdinalIgnoreCase);
     var isZoo = string.Equals(controller, "Zoo", StringComparison.OrdinalIgnoreCase);
+    var isManufacturing = string.Equals(controller, "Manufacturing", StringComparison.OrdinalIgnoreCase);
 
     var projectId = isDetails ? ViewContext.RouteData.Values["id"]?.ToString() : null;
 }
@@ -52,6 +53,14 @@
                     Text to CAD
                 </a>
             </li>
+            <li>
+                <a class="cc-nav-link @(isManufacturing ? "active" : string.Empty)"
+                   asp-controller="Manufacturing"
+                   asp-action="Index"
+                   aria-current="@(isManufacturing ? "page" : null)">
+                    Manufacturing Breakdown
+                </a>
+            </li>
         </ul>
     </nav>
 
@@ -67,6 +76,14 @@
                        asp-route-id="@projectId"
                        aria-current="page">
                         Design and code
+                    </a>
+                </li>
+                <li>
+                    <a class="cc-nav-link"
+                       asp-controller="Manufacturing"
+                       asp-action="Index"
+                       asp-route-id="@projectId">
+                        Manufacturing breakdown
                     </a>
                 </li>
                 <li>
