@@ -256,7 +256,7 @@ namespace CadToCode.Business.Services
                         continue;
                     }
 
-                    if (TryAnalyseProfile(node, mm, out var profilePart))
+                    if ((ReadThickness(text).HasValue || ReadQuantity(text).HasValue) && TryAnalyseProfile(node, mm, out var profilePart))
                     {
                         Add(profilePart, text, ResolveName(node, profilePart), "outline of node " + node.Id);
                         continue;
@@ -265,23 +265,22 @@ namespace CadToCode.Business.Services
                     unrecognised.Add(node.Id);
                 }
             }
-            if (scroll?.ThicknessMm is > 0.0)
-            {
-                foreach (var part in items.Where(p => !p.ThicknessMm.HasValue))
-                {
-                    part.ThicknessMm = scroll.ThicknessMm;
-                    report.Warn(
-                        "THICKNESS_FROM_PLATES",
-                        part.DisplayName,
-                        "Thickness " + Format(scroll.ThicknessMm) + " mm was taken from the casing plate strips in the GA. Please verify.");
-                }
-            }
+            
             var number = 0;
             foreach (var item in items)
             {
                 number++;
                 item.ItemNo = number;
                 report.Info("GA_RECOGNISED", item.DisplayName, DescribeItem(item));
+
+
+                if (!textQuantity.Contains(item))
+                {
+                    report.Warn(
+                        "QUANTITY_NOT_IN_DRAWING",
+                        item.DisplayName,
+                        "No quantity label was found. " + item.Qty.ToString(CultureInfo.InvariantCulture) + " was counted from geometry. Please verify.");
+                }
             }
 
             if (unrecognised.Count > 0)
@@ -400,9 +399,9 @@ namespace CadToCode.Business.Services
             var result = new List<PartBomItem>();
 
             var circles = geometry.Circles
-                .Where(c => c.Radius > 0 && !IgnoredLayers.Contains(c.Layer ?? string.Empty))
-                .Select(c => (X: c.Center.X * mm, Y: c.Center.Y * mm, D: c.Radius * 2.0 * mm))
-                .ToList();
+            .Where(c => c.Radius > 0 && !IgnoredLayers.Contains(c.Layer ?? string.Empty))
+            .Select(c => (X: c.Center.X * mm, Y: c.Center.Y * mm, D: c.Radius * 2.0 * mm, IsCentreLine: IsCentreLineType(c.LineType)))
+            .ToList();
 
             var used = new bool[circles.Count];
 
@@ -416,6 +415,7 @@ namespace CadToCode.Business.Services
                 var cx = circles[i].X;
                 var cy = circles[i].Y;
                 var diameters = new List<double>();
+                var centreDiameters = new List<double>();
 
                 for (var j = i; j < circles.Count; j++)
                 {
@@ -427,34 +427,37 @@ namespace CadToCode.Business.Services
                     if (Distance(circles[j].X, circles[j].Y, cx, cy) <= Math.Max(0.5, circles[j].D * 0.002))
                     {
                         used[j] = true;
-                        diameters.Add(circles[j].D);
+                        if (circles[j].IsCentreLine)
+                        {
+                            centreDiameters.Add(circles[j].D);
+                        }
+                        else
+                        {
+                            diameters.Add(circles[j].D);
+                        }
                     }
                 }
 
-                var distinct = new List<double>();
-                foreach (var d in diameters.OrderByDescending(d => d))
-                {
-                    if (distinct.Count == 0 || Math.Abs(distinct[^1] - d) > 0.05)
-                    {
-                        distinct.Add(d);
-                    }
-                }
+                var distinct = DistinctDescending(diameters);
+                var distinctCentre = DistinctDescending(centreDiameters);
 
                 if (distinct.Count < 2 || distinct[0] < MinCircularMm)
                 {
                     continue;
                 }
 
-                result.AddRange(PeelRings(distinct));
+                result.AddRange(PeelRings(distinct, distinctCentre));
             }
 
             return result;
         }
 
-        private static List<PartBomItem> PeelRings(List<double> diameters)
+        private static List<PartBomItem> PeelRings(List<double> diameters, List<double> centreDiameters)
         {
             var rings = new List<PartBomItem>();
             var rest = new List<double>(diameters);
+
+            var centreRest = new List<double>(centreDiameters);
 
             while (rest.Count >= 2)
             {
@@ -497,6 +500,27 @@ namespace CadToCode.Business.Services
             }
 
             return rings;
+        }
+
+        private static List<double> DistinctDescending(IEnumerable<double> values)
+        {
+            var distinct = new List<double>();
+            foreach (var d in values.OrderByDescending(d => d))
+            {
+                if (distinct.Count == 0 || Math.Abs(distinct[^1] - d) > 0.05)
+                {
+                    distinct.Add(d);
+                }
+            }
+
+            return distinct;
+        }
+
+        private static bool IsCentreLineType(string? lineType)
+        {
+            return !string.IsNullOrEmpty(lineType)
+                && (lineType.Contains("CENTER", StringComparison.OrdinalIgnoreCase)
+                    || lineType.Contains("CENTRE", StringComparison.OrdinalIgnoreCase));
         }
 
         private static bool TryAnalysePlate(AssemblyNode node, double mm, string text, out PartBomItem item)

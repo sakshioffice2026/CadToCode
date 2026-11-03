@@ -53,8 +53,7 @@ public sealed class ParametricPartRulesEngine
 
         if (thickness is not > 0.0 && NeedsThickness(item.Kind) && defaultThicknessMm is > 0.0)
         {
-            thickness = defaultThicknessMm;
-            report.Warn("THICKNESS_DEFAULT", name, "Thickness is not in the BOM. The default " + Format(defaultThicknessMm.Value) + " mm was used.");
+            report.Warn("THICKNESS_DEFAULT_NOT_USED", name, "Thickness is not in the BOM or drawing text. The default " + Format(defaultThicknessMm.Value) + " mm was not applied.");
         }
 
         try
@@ -350,6 +349,12 @@ public sealed class ParametricPartRulesEngine
         if (holeCount > 0 && (holeDiameter is not > 0.0 || holePcd is not > 0.0))
         {
             report.Warn("HOLE_DATA_INCOMPLETE", name, holeCount.ToString(CultureInfo.InvariantCulture) + " holes are listed but hole diameter or PCD is missing. The hole pattern may be left out.");
+        }
+
+        if (holeCount <= 0 && holePcd is > 0.0)
+        {
+            var missing = holeDiameter is > 0.0 ? "hole count" : "hole count and hole diameter";
+            report.Warn("HOLE_COUNT_MISSING", name, "A bolt circle (PCD " + Format(holePcd.Value) + " mm) is present but " + missing + " are not in the BOM. The sheet was made without holes.");
         }
     }
 

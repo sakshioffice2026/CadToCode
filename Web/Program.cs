@@ -94,6 +94,7 @@ builder.Services.AddSingleton<IAssemblyTopologyMapper, AssemblyTopologyMapper>()
 builder.Services.AddSingleton<GaPartRecognizer>();
 builder.Services.AddSingleton<IGaPartRecognizer, DefaultBomGaPartRecognizer>();
 builder.Services.AddSingleton<GaCalloutReader>();
+builder.Services.AddSingleton<ReferenceCalloutCatalog>();
 builder.Services.AddSingleton<GaCalloutGeometryLinker>();
 builder.Services.AddSingleton<GaViewSelector>();
 builder.Services.AddSingleton<GaPartClassifier>();

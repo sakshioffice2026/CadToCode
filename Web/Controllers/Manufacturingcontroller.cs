@@ -1,10 +1,11 @@
 ﻿using CadToCode.Business.Interfaces;
 using CadToCode.Business.Services;
-using CadToCode.Repositories.Interfaces;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
+using CadToCode.Repositories.Interfaces;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
+using SixLabors.ImageSharp;
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
@@ -32,19 +33,23 @@ public class ManufacturingController : Controller
     private readonly IUnitOfWork _unitOfWork;
     private readonly IFileStorageService _storage;
     private readonly IEnumerable<IGeometryExtractor> _extractors;
-    private readonly IComponentDecomposer _decomposer;
+        private readonly ReferenceCalloutCatalog _referenceCatalog;
+         private readonly IConfiguration _configuration;
+        private readonly IComponentDecomposer _decomposer;
 
-    public ManufacturingController(
-    IProjectProcessingService processingService,
-    IBlockBreakdownService breakdownService,
-    ILogger<ManufacturingController> logger,
-    IPartManufacturingDxfService manufacturingDxfService,
-    ParametricPartSheetService parametricSheets,
-    GaManufacturingPipeline gaPipeline,
-    IUnitOfWork unitOfWork,
-    IFileStorageService storage,
-    IEnumerable<IGeometryExtractor> extractors,
-    IComponentDecomposer decomposer)
+            public ManufacturingController(
+         IProjectProcessingService processingService,
+         IBlockBreakdownService breakdownService,
+         ILogger<ManufacturingController> logger,
+         IPartManufacturingDxfService manufacturingDxfService,
+         ParametricPartSheetService parametricSheets,
+         GaManufacturingPipeline gaPipeline,
+         IUnitOfWork unitOfWork,
+         IFileStorageService storage,
+         IEnumerable<IGeometryExtractor> extractors,
+         IComponentDecomposer decomposer,
+         ReferenceCalloutCatalog referenceCatalog,
+         IConfiguration configuration)
     {
         _processingService = processingService;
         _breakdownService = breakdownService;
@@ -56,6 +61,8 @@ public class ManufacturingController : Controller
         _storage = storage;
         _extractors = extractors;
         _decomposer = decomposer;
+        _referenceCatalog = referenceCatalog;
+        _configuration = configuration;
     }
 
     [HttpGet]
@@ -223,8 +230,9 @@ public class ManufacturingController : Controller
 
                 if (!useLegacyFallback)
                 {
+                    var gaErrors = ga.Result.Messages.Where(m => m.StartsWith("[ERROR]", StringComparison.Ordinal)).ToList();
                     var detail = ga.Result.Messages.Count > 0
-                        ? " " + string.Join(" | ", ga.Result.Messages.Take(5))
+                        ? " " + string.Join(" | ", (gaErrors.Count > 0 ? gaErrors : ga.Result.Messages).Take(20))
                         : string.Empty;
 
                     TempData["Error"] = "No manufacturing drawing could be generated from the GA callouts." + detail;
@@ -361,8 +369,9 @@ public class ManufacturingController : Controller
 
         if (zip is null)
         {
+            var gaErrors = run.Result!.Messages.Where(m => m.StartsWith("[ERROR]", StringComparison.Ordinal)).ToList();
             TempData["Error"] = "No manufacturing drawing could be generated from the callouts. "
-                + string.Join(" | ", run.Result!.Messages.Take(5));
+                + string.Join(" | ", (gaErrors.Count > 0 ? gaErrors : run.Result.Messages).Take(20));
             return RedirectToAction(nameof(Index), new { id });
         }
 
@@ -398,13 +407,24 @@ public class ManufacturingController : Controller
             var geometry = await extractor.ExtractAsync(stream, cancellationToken);
             var nodes = _decomposer.Decompose(geometry);
 
+            var referenceFiles = new List<string>();
+            var referenceFolder = _configuration["Manufacturing:ReferenceDxfFolder"];
+            if (!string.IsNullOrWhiteSpace(referenceFolder) && Directory.Exists(referenceFolder))
+            {
+                referenceFiles.AddRange(Directory.GetFiles(referenceFolder, "*.dxf").OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+            }
+
+            var referenceReport = new GenerationReport();
+            var referenceCallouts = await _referenceCatalog.LoadAsync(referenceFiles, referenceReport, cancellationToken);
+
             var result = _gaPipeline.Run(new GaPipelineRequest
             {
                 Geometry = geometry,
                 Nodes = nodes,
                 ProjectCode = projectCode,
                 DefaultMaterial = defaultMaterial,
-                DefaultThicknessMm = defaultThickness
+                DefaultThicknessMm = defaultThickness,
+                ReferenceCallouts = referenceCallouts
             });
 
             return (result, null);

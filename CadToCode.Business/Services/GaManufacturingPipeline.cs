@@ -22,6 +22,9 @@ namespace CadToCode.Business.Services
         public double? DefaultThicknessMm { get; init; }
 
         public ManufacturingRules? Rules { get; init; }
+
+
+        public IReadOnlyList<ReferenceCalloutEntry> ReferenceCallouts { get; init; } = Array.Empty<ReferenceCalloutEntry>();
     }
 
     public sealed class GaPipelineFile
@@ -133,6 +136,21 @@ namespace CadToCode.Business.Services
             if (callouts.Parts.Count == 0)
             {
                 report.Error("PIPELINE_NO_CALLOUTS", "GA", "No part callout was found in the drawing text.");
+
+                foreach (var entry in request.ReferenceCallouts)
+                {
+                    var p = entry.Part;
+                    report.Warn(
+                        "REFERENCE_PART_BLOCKED",
+                        p.Name,
+                        "From " + entry.SourceFile + ": "
+                        + (p.Material ?? "material not stated") + ", "
+                        + (p.ThicknessMm.HasValue ? p.ThicknessMm.Value.ToString("0.##", CultureInfo.InvariantCulture) + " mm" : "thickness not stated")
+                        + ", qty " + (p.QtyText ?? p.Qty.ToString(CultureInfo.InvariantCulture))
+                        + (p.WeightKg.HasValue ? ", labelled weight " + p.WeightKg.Value.ToString("0.##", CultureInfo.InvariantCulture) + " kg" : string.Empty)
+                        + ". Not generated: dimensions not taken from the GA.");
+                }
+
                 result.Messages.AddRange(report.ToMessages());
                 return result;
             }

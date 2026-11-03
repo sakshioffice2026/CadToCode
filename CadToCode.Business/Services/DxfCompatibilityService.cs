@@ -71,6 +71,21 @@ public class DxfCompatibilityService : IDxfCompatibilityService
         var crlf = text.Contains("\r\n", StringComparison.Ordinal);
         var lines = text.Split('\n').ToList();
 
+
+        if (NeutraliseHeaderDurations(lines, crlf))
+        {
+            var payload = ByteSafe.GetBytes(string.Join("\n", lines));
+            var rebuilt = new byte[bomLength + payload.Length];
+
+            if (bomLength > 0)
+            {
+                Buffer.BlockCopy(bytes, 0, rebuilt, 0, bomLength);
+            }
+
+            Buffer.BlockCopy(payload, 0, rebuilt, bomLength, payload.Length);
+            bytes = rebuilt;
+        }
+
         var scan = ScanHeader(lines);
 
         if (scan.VersionLineIndex >= 0)
@@ -193,6 +208,41 @@ public class DxfCompatibilityService : IDxfCompatibilityService
         }
 
         return scan;
+    }
+
+    private static bool NeutraliseHeaderDurations(List<string> lines, bool crlf)
+    {
+        var changed = false;
+
+        for (var i = 1; i + 2 < lines.Count; i++)
+        {
+            var name = lines[i].Trim();
+
+            if (name == "ENDSEC")
+            {
+                break;
+            }
+
+            if (!string.Equals(name, "$TDINDWG", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(name, "$TDUSRTIMER", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (lines[i - 1].Trim() != "9" || lines[i + 1].Trim() != "40")
+            {
+                continue;
+            }
+
+            if (double.TryParse(lines[i + 2].Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var days)
+                && days > 1_000_000.0)
+            {
+                lines[i + 2] = Line("0.0", crlf);
+                changed = true;
+            }
+        }
+
+        return changed;
     }
 
     private static bool IsValue(string line, string expected)
