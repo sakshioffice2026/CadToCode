@@ -30,6 +30,10 @@ namespace CadToCode.Business.Services
 
         public int Duplicates { get; set; }
 
+        public bool FromTable { get; set; }
+
+        public List<double> ThicknessValues { get; set; } = new();
+
         public PartBomItem ToBomItem()
         {
             var remarks = new List<string> { "Read from drawing callout." };
@@ -110,7 +114,7 @@ namespace CadToCode.Business.Services
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private static readonly Regex MaterialRx = new(
-            @"\b(?:m\.?\s?s\.?(?:\s?cr)?|s\.?s\.?\s?\d{3}[a-z]?|allu(?:m(?:inium)?)?\.?|en-?\d+|is\s?:?\s?2062|e250|grade\s?250)(?=\s*(?:[-:,;(.]|\d|$|flat\b|bar\b|ismc\b|dia\b|thk\b))",
+            @"\b(?:m\.?\s?s\.?(?:\s?cr)?|s\.?s\.?[\s\-]?\d{3}[a-z]?|allu(?:m(?:inium)?)?\.?|en-?\d+|is\s?:?\s?2062|e250|grade\s?250)(?=\s*(?:[-:,;(.]|\d|$|flat\b|bar\b|ismc\b|dia\b|thk\b))",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         private static readonly Regex SectionRx = new(
@@ -139,7 +143,9 @@ namespace CadToCode.Business.Services
             var result = new CalloutReadResult();
             var byKey = new Dictionary<string, CalloutPart>(StringComparer.Ordinal);
 
-            foreach (var text in geometry.Texts)
+            var entries = BuildEntries(geometry.Texts, report);
+
+            foreach (var text in entries)
             {
                 if (string.IsNullOrWhiteSpace(text.Text))
                 {
@@ -209,6 +215,18 @@ namespace CadToCode.Business.Services
                     continue;
                 }
 
+                var fromTable = string.Equals(text.EntityType, "TABLEROW", StringComparison.Ordinal);
+                string? tableSpec = null;
+
+                if (fromTable && !thickness.HasValue)
+                {
+                    var spec = TableSpecInTextRx.Match(joined);
+                    if (spec.Success)
+                    {
+                        tableSpec = Regex.Replace(spec.Groups["s"].Value, @"\s+", string.Empty).ToUpperInvariant();
+                    }
+                }
+
                 var part = new CalloutPart
                 {
                     Name = name,
@@ -217,11 +235,13 @@ namespace CadToCode.Business.Services
                     Qty = qty,
                     QtyText = qtyText,
                     WeightKg = weight,
-                    Section = section.Success ? Regex.Replace(section.Value.Trim(), @"\s+", " ").ToUpperInvariant() : null,
+                    Section = section.Success ? Regex.Replace(section.Value.Trim(), @"\s+", " ").ToUpperInvariant() : tableSpec,
                     X = text.Position.X,
                     Y = text.Position.Y,
                     Layer = text.Layer,
-                    Raw = joined
+                    Raw = joined,
+                    FromTable = string.Equals(text.EntityType, "TABLEROW", StringComparison.Ordinal),
+                    ThicknessValues = ReadThicknessValues(joined)
                 };
 
                 var key = string.Join("|",
@@ -241,6 +261,8 @@ namespace CadToCode.Business.Services
                 byKey[key] = part;
                 result.Parts.Add(part);
             }
+
+            ExpandCombinedParts(result.Parts, report);
 
             foreach (var part in result.Parts)
             {
@@ -265,6 +287,183 @@ namespace CadToCode.Business.Services
             return result;
         }
 
+        private sealed class RowCandidate
+        {
+            public List<GeometryText> Cells { get; init; } = new();
+
+            public double SerialX { get; init; }
+        }
+
+        private static readonly Regex SerialCellRx = new(@"^\d{1,3}$", RegexOptions.Compiled);
+
+        private static readonly Regex TableSpecRx = new(
+            @"^(?:std|\d{1,3}\s*nb)$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex TableSpecInTextRx = new(
+            @"\b(?<s>std|\d{1,3}\s*nb)\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex QtyCellRx = new(@"^\d{1,3}(?:\s*\+\s*\d{1,3})?$", RegexOptions.Compiled);
+
+        private static readonly Regex MultiThicknessRx = new(
+            @"(?<a>\d+(?:\.\d+)?)(?:\s*[,/]\s*\d+(?:\.\d+)?)+\s*(?:mm|m\.m\.)?\s*th(?:ic)?'?k\b\.?",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex HeaderCellRx = new(
+            @"^(?:sr\.?\s*no\.?|s\.?\s*no\.?|item|description|material|qty\.?|quantity|remarks?|size|part\s*name)$",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static IReadOnlyList<GeometryText> BuildEntries(IReadOnlyList<GeometryText> texts, GenerationReport report)
+        {
+            var used = new HashSet<GeometryText>();
+            var synthetic = new List<GeometryText>();
+
+            var cells = texts
+                .Where(t => !string.IsNullOrWhiteSpace(t.Text) && !t.IsMultiLine)
+                .Select(t => (Text: t, Clean: string.Join(" ", Clean(t.Text))))
+                .Where(t => t.Clean.Length > 0 && t.Clean.Length <= 60)
+                .OrderByDescending(t => t.Text.Position.Y)
+                .ThenBy(t => t.Text.Position.X)
+                .ToList();
+
+            var rows = new List<List<(GeometryText Text, string Clean)>>();
+
+            foreach (var cell in cells)
+            {
+                var tolerance = Math.Max(3.0, 0.35 * Math.Max(cell.Text.Height, 1.0));
+                var current = rows.Count > 0 ? rows[^1] : null;
+
+                if (current is not null && Math.Abs(current[0].Text.Position.Y - cell.Text.Position.Y) <= tolerance)
+                {
+                    current.Add(cell);
+                }
+                else
+                {
+                    rows.Add(new List<(GeometryText Text, string Clean)> { cell });
+                }
+            }
+
+            var candidates = new List<(RowCandidate Row, List<(GeometryText Text, string Clean)> Cells)>();
+
+            var segments = new List<List<(GeometryText Text, string Clean)>>();
+
+            foreach (var row in rows)
+            {
+                var sorted = row.OrderBy(c => c.Text.Position.X).ToList();
+                List<(GeometryText Text, string Clean)>? segment = null;
+
+                foreach (var cell in sorted)
+                {
+                    if (segment is null || cell.Text.Position.X - segment[^1].Text.Position.X > 1200.0)
+                    {
+                        segment = new List<(GeometryText Text, string Clean)>();
+                        segments.Add(segment);
+                    }
+
+                    segment.Add(cell);
+                }
+            }
+
+            foreach (var row in segments)
+            {
+                if (row.Count < 4)
+                {
+                    continue;
+                }
+
+                var ordered = row.OrderBy(c => c.Text.Position.X).ToList();
+                var first = ordered[0];
+                var last = ordered[^1];
+
+                if (!SerialCellRx.IsMatch(first.Clean) || !QtyCellRx.IsMatch(last.Clean))
+                {
+                    continue;
+                }
+
+                if (ordered[^1].Text.Position.X - ordered[0].Text.Position.X > 4000.0)
+                {
+                    continue;
+                }
+
+                var middle = ordered.Skip(1).Take(ordered.Count - 2).ToList();
+
+                if (!middle.Any(c => c.Clean.Count(char.IsLetter) >= 3 && !HeaderCellRx.IsMatch(c.Clean)))
+                {
+                    continue;
+                }
+
+                candidates.Add((new RowCandidate { Cells = ordered.Select(c => c.Text).ToList(), SerialX = first.Text.Position.X }, ordered));
+            }
+
+            var tableRows = candidates
+                .GroupBy(c => Math.Round(c.Row.SerialX / 10.0))
+                .Where(g => g.Count() >= 3)
+                .SelectMany(g => g)
+                .ToList();
+
+            foreach (var (row, ordered) in tableRows)
+            {
+                var lines = new List<string>();
+                var middle = ordered.Skip(1).Take(ordered.Count - 2).ToList();
+
+                foreach (var cell in middle)
+                {
+                    var text = cell.Clean;
+
+                    if (HeaderCellRx.IsMatch(text))
+                    {
+                        continue;
+                    }
+
+                    if (TableSpecRx.IsMatch(text))
+                    {
+                        lines.Add(text);
+                        continue;
+                    }
+
+                    if (ThicknessRx.IsMatch(text) || MultiThicknessRx.IsMatch(text))
+                    {
+                        lines.Add(text);
+                        continue;
+                    }
+
+                    if (SectionRx.IsMatch(text) || MaterialRx.IsMatch(text) || text.Count(char.IsLetter) >= 3)
+                    {
+                        lines.Add(text);
+                    }
+                }
+
+                lines.Add("QTY " + ordered[^1].Clean);
+
+                var anchor = ordered[1].Text;
+
+                synthetic.Add(new GeometryText
+                {
+                    Text = string.Join("\n", lines),
+                    Position = anchor.Position,
+                    Height = anchor.Height,
+                    Layer = anchor.Layer,
+                    EntityType = "TABLEROW",
+                    IsMultiLine = true
+                });
+
+                foreach (var cell in ordered)
+                {
+                    used.Add(cell.Text);
+                }
+            }
+
+            if (synthetic.Count > 0)
+            {
+                report.Info("CALLOUT_TABLE", "BOM", synthetic.Count.ToString(CultureInfo.InvariantCulture) + " BOM table row(s) were read from separate text cells.");
+            }
+
+            var entries = new List<GeometryText>(synthetic);
+            entries.AddRange(texts.Where(t => !used.Contains(t)));
+            return entries;
+        }
+
         private static string ReadName(List<string> lines)
         {
             var names = new List<string>();
@@ -285,9 +484,111 @@ namespace CadToCode.Business.Services
             return string.Join(" ", names).Trim();
         }
 
+        private static readonly Regex ImpellerSetRx = new(
+            @"impeller.*\bbp\s*/\s*bl\s*/\s*sh\b|\bbp\s*/\s*bl\s*/\s*sh\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static readonly Regex InletOutletRx = new(
+            @"\bi\s*/\s*l\s*&\s*o\s*/\s*l\b|inlet\s*&\s*outlet",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+        private static void ExpandCombinedParts(List<CalloutPart> parts, GenerationReport report)
+        {
+            for (var i = parts.Count - 1; i >= 0; i--)
+            {
+                var part = parts[i];
+                List<CalloutPart>? expanded = null;
+
+                if (ImpellerSetRx.IsMatch(part.Raw))
+                {
+                    var names = new[] { "BACK PLATE", "BLADE", "SHROUD" };
+                    expanded = new List<CalloutPart>();
+
+                    for (var n = 0; n < names.Length; n++)
+                    {
+                        double? thickness = part.ThicknessValues.Count == names.Length
+                            ? part.ThicknessValues[n]
+                            : part.ThicknessMm;
+
+                        expanded.Add(CloneFor(part, names[n], thickness, 1));
+                    }
+                }
+                else if (InletOutletRx.IsMatch(part.Raw) && Regex.IsMatch(part.Raw, "flange", RegexOptions.IgnoreCase))
+                {
+                    var each = Math.Max(1, part.Qty / 2);
+
+                    expanded = new List<CalloutPart>
+                    {
+                        CloneFor(part, "INLET FLANGE", part.ThicknessMm, each),
+                        CloneFor(part, "OUTLET FLANGE", part.ThicknessMm, each)
+                    };
+                }
+
+                if (expanded is null)
+                {
+                    continue;
+                }
+
+                parts.RemoveAt(i);
+                parts.InsertRange(i, expanded);
+
+                report.Info(
+                    "CALLOUT_EXPANDED",
+                    part.Name,
+                    "One BOM row was split into " + string.Join(", ", expanded.Select(e => e.Name)) + ".");
+            }
+        }
+
+        private static CalloutPart CloneFor(CalloutPart source, string name, double? thickness, int qty)
+        {
+            return new CalloutPart
+            {
+                Name = name,
+                Material = source.Material,
+                ThicknessMm = thickness,
+                Qty = qty,
+                QtyText = qty.ToString(CultureInfo.InvariantCulture),
+                WeightKg = null,
+                Section = source.Section,
+                X = source.X,
+                Y = source.Y,
+                Layer = source.Layer,
+                Raw = name + " | " + source.Raw,
+                Duplicates = source.Duplicates,
+                FromTable = source.FromTable,
+                ThicknessValues = new List<double>()
+            };
+        }
+
+        private static List<double> ReadThicknessValues(string text)
+        {
+            var values = new List<double>();
+            var match = Regex.Match(
+                text,
+                @"(?<list>\d+(?:\.\d+)?(?:\s*[,/]\s*\d+(?:\.\d+)?)+)\s*(?:mm|m\.m\.)?\s*th(?:ic)?'?k\b",
+                RegexOptions.IgnoreCase);
+
+            if (!match.Success)
+            {
+                return values;
+            }
+
+            foreach (var piece in Regex.Split(match.Groups["list"].Value, @"\s*[,/]\s*"))
+            {
+                if (ParseDouble(piece) is { } v && v > 0.0)
+                {
+                    values.Add(v);
+                }
+            }
+
+            return values;
+        }
+
         private static string StripFields(string line)
         {
-            var s = ThicknessRx.Replace(line, " ");
+            var s = MultiThicknessRx.Replace(line, " ");
+            s = TableSpecInTextRx.Replace(s, " ");
+            s = ThicknessRx.Replace(s, " ");
             s = QtyRx.Replace(s, " ");
             s = QtyTrailingRx.Replace(s, " ");
             s = WeightRx.Replace(s, " ");
@@ -299,6 +600,13 @@ namespace CadToCode.Business.Services
 
         private static double? ReadThickness(string text)
         {
+            var multi = MultiThicknessRx.Match(text);
+            if (multi.Success)
+            {
+                var first = ParseDouble(multi.Groups["a"].Value);
+                return first is > 0 ? first : null;
+            }
+
             var match = ThicknessRx.Match(text);
             if (!match.Success)
             {

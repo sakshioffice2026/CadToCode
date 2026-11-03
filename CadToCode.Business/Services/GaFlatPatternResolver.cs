@@ -277,10 +277,18 @@ namespace CadToCode.Business.Services
 
             if (width is null && view is not null)
             {
-                width = OtherViewDimension(view.Node, nodes, mm);
+                width = NearestLayerDimension(view.Node, nodes, "casingwidth", mm);
                 if (width.HasValue)
                 {
-                    result.Assumptions.Add("Casing width " + Fmt(width) + " mm measured from another view on the same layer. Please verify.");
+                    result.Assumptions.Add("Casing width " + Fmt(width) + " mm measured from the casing width view. Please verify.");
+                }
+                else
+                {
+                    width = OtherViewDimension(view.Node, nodes, mm);
+                    if (width.HasValue)
+                    {
+                        result.Assumptions.Add("Casing width " + Fmt(width) + " mm measured from another view on the same layer. Please verify.");
+                    }
                 }
             }
             else if (width.HasValue)
@@ -562,6 +570,33 @@ namespace CadToCode.Business.Services
         private static bool PointInside(BoundingBox2D box, double x, double y)
         {
             return x >= box.MinX && x <= box.MaxX && y >= box.MinY && y <= box.MaxY;
+        }
+
+        private static double? NearestLayerDimension(AssemblyNode self, IReadOnlyList<AssemblyNode> nodes, string layerMarker, double mm)
+        {
+            var cx = self.Bounds.CenterX;
+            var cy = self.Bounds.CenterY;
+
+            var near = nodes
+                .Where(n => !string.Equals(n.Id, self.Id, StringComparison.Ordinal)
+                    && !string.IsNullOrWhiteSpace(n.Layer)
+                    && n.Layer!.Contains(layerMarker, StringComparison.OrdinalIgnoreCase)
+                    && n.Bounds.Area > 0.0)
+                .OrderBy(n =>
+                {
+                    var dx = n.Bounds.CenterX - cx;
+                    var dy = n.Bounds.CenterY - cy;
+                    return dx * dx + dy * dy;
+                })
+                .FirstOrDefault();
+
+            if (near is null)
+            {
+                return null;
+            }
+
+            var value = Math.Min(near.Bounds.Width, near.Bounds.Height) * mm;
+            return value > 0.0 ? Math.Round(value, 2) : null;
         }
 
         private static double? OtherViewDimension(AssemblyNode self, IReadOnlyList<AssemblyNode> nodes, double mm)

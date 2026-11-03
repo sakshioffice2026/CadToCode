@@ -187,6 +187,7 @@ public class ManufacturingController : Controller
         bool includeAllParts = false,
         string? cutLayers = null,
         PartOriginMode origin = PartOriginMode.BottomLeft,
+        bool useLegacyFallback = false,
         CancellationToken cancellationToken = default)
     {
         if (specs is null || specs.Count == 0)
@@ -196,6 +197,12 @@ public class ManufacturingController : Controller
             if (ga.Error is not null)
             {
                 _logger.LogWarning("GA pipeline error for project {ProjectId}: {Error}", id, ga.Error);
+
+                if (!useLegacyFallback)
+                {
+                    TempData["Error"] = ga.Error;
+                    return RedirectToAction(nameof(Index), new { id });
+                }
             }
             else if (ga.Result is not null)
             {
@@ -212,6 +219,16 @@ public class ManufacturingController : Controller
                     {
                         return File(gaZip, "application/zip", "manufacturing-dxf-package-" + id + ".zip");
                     }
+                }
+
+                if (!useLegacyFallback)
+                {
+                    var detail = ga.Result.Messages.Count > 0
+                        ? " " + string.Join(" | ", ga.Result.Messages.Take(5))
+                        : string.Empty;
+
+                    TempData["Error"] = "No manufacturing drawing could be generated from the GA callouts." + detail;
+                    return RedirectToAction(nameof(Index), new { id });
                 }
             }
         }

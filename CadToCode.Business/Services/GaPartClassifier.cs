@@ -189,7 +189,7 @@ namespace CadToCode.Business.Services
             var name = part.Name ?? string.Empty;
             var text = name + " " + (part.Section ?? string.Empty);
 
-            if (!string.IsNullOrWhiteSpace(part.Section) || IsmcRx.IsMatch(text) || FlatBarRx.IsMatch(text) || RoundBarRx.IsMatch(text) || FrameRx.IsMatch(name))
+            if (!string.IsNullOrWhiteSpace(part.Section) || IsmcRx.IsMatch(text) || FlatBarRx.IsMatch(text) || RoundBarRx.IsMatch(text) || FrameRx.IsMatch(name) || BoughtOutRx.IsMatch(name))
             {
                 return Build(part, view, GaPartType.BoughtOut, GaPartFamily.BoughtOut, BomPartKind.Unknown, "Bought-out item.");
             }

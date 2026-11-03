@@ -67,7 +67,24 @@ namespace CadToCode.Business.Services
             (new Regex(@"pedestal", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "ped" }),
             (new Regex(@"base\s?(frame|plate)", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "base" }),
             (new Regex(@"casing|scroll", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "casing" }),
+            (new Regex(@"inlet\s*flange", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "inletflange" }),
+            (new Regex(@"outlet", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "flangedet", "outlet" }),
             (new Regex(@"inlet", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "inlet" })
+        };
+
+        private static readonly (Regex Name, string[] Layers)[] TableLayerRules =
+        {
+            (new Regex(@"inlet\s*flange", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "inletflange" }),
+            (new Regex(@"outlet\s*flange", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "flangedet", "outletflange" }),
+            (new Regex(@"back\s?plate", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "backplate" }),
+            (new Regex(@"shroud", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "shroud" }),
+            (new Regex(@"blade", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "blade", "bladeprofile" }),
+            (new Regex(@"\bhub\b", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "hub" }),
+            (new Regex(@"spark", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "ris" }),
+            (new Regex(@"drain", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "drain" }),
+            (new Regex(@"pedestal", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "pedend", "pedev", "pedsv" }),
+            (new Regex(@"base\s?(frame|plate)", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "baseplan", "baseside", "baseend" }),
+            (new Regex(@"casing|scroll", RegexOptions.IgnoreCase | RegexOptions.Compiled), new[] { "casingside", "casingwidth" })
         };
 
         public CalloutLinkResult Link(
@@ -101,7 +118,8 @@ namespace CadToCode.Business.Services
 
             foreach (var part in callouts.Parts)
             {
-                var link = LinkOne(part, valid, leaderLines, diag);
+                var link = part.FromTable ? LinkFromTable(part, valid) : null;
+                link ??= LinkOne(part, valid, leaderLines, diag);
 
                 if (link is null)
                 {
@@ -134,6 +152,79 @@ namespace CadToCode.Business.Services
             }
 
             return result;
+        }
+
+        private static CalloutLink? LinkFromTable(CalloutPart part, List<AssemblyNode> nodes)
+        {
+            string[]? markers = null;
+
+            foreach (var (name, layers) in TableLayerRules)
+            {
+                if (name.IsMatch(part.Name))
+                {
+                    markers = layers;
+                    break;
+                }
+            }
+
+            if (markers is null)
+            {
+                return null;
+            }
+
+            var anchor = new GeometryPoint(part.X, part.Y);
+            AssemblyNode? best = null;
+            var bestDistance = double.MaxValue;
+            var bestRank = int.MaxValue;
+
+            foreach (var node in nodes)
+            {
+                var layer = node.Layer ?? string.Empty;
+                if (layer.Length == 0)
+                {
+                    continue;
+                }
+
+                var rank = -1;
+                for (var i = 0; i < markers.Length; i++)
+                {
+                    if (layer.Contains(markers[i], StringComparison.OrdinalIgnoreCase))
+                    {
+                        rank = i;
+                        break;
+                    }
+                }
+
+                if (rank < 0)
+                {
+                    continue;
+                }
+
+                var d = DistanceToBounds(anchor, node.Bounds);
+
+                if (rank < bestRank || (rank == bestRank && d < bestDistance))
+                {
+                    best = node;
+                    bestRank = rank;
+                    bestDistance = d;
+                }
+            }
+
+            if (best is null)
+            {
+                return null;
+            }
+
+            return new CalloutLink
+            {
+                Part = part,
+                Node = best,
+                Method = CalloutLinkMethod.TextNearest,
+                Distance = bestDistance,
+                Confidence = 0.6,
+                Tip = new GeometryPoint(best.Bounds.CenterX, best.Bounds.CenterY),
+                LayerHint = true
+            };
         }
 
         private CalloutLink? LinkOne(CalloutPart part, List<AssemblyNode> nodes, List<GeometryLine> leaderLines, double diag)
