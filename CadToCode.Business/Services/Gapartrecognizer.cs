@@ -25,6 +25,7 @@ namespace CadToCode.Business.Services
     {
         private const double MinPartMm = 50.0;
         private const double MinPlateMm = 20.0;
+        private const double MinCircularMm = 100.0;
         private const double MinRingWallMm = 5.0;
         private const int MaxIdsInMessage = 20;
 
@@ -180,7 +181,7 @@ namespace CadToCode.Business.Services
 
             var items = new List<PartBomItem>();
             var nodes = _decomposer.Decompose(geometry);
-            var mm = MmPerUnit(geometry.DetectedUnit);
+            var mm = ResolveMmPerUnit(geometry);
             var bySignature = new Dictionary<string, PartBomItem>(StringComparer.Ordinal);
             var textQuantity = new HashSet<PartBomItem>();
             var unrecognised = new List<string>();
@@ -264,7 +265,17 @@ namespace CadToCode.Business.Services
                     unrecognised.Add(node.Id);
                 }
             }
-
+            if (scroll?.ThicknessMm is > 0.0)
+            {
+                foreach (var part in items.Where(p => !p.ThicknessMm.HasValue))
+                {
+                    part.ThicknessMm = scroll.ThicknessMm;
+                    report.Warn(
+                        "THICKNESS_FROM_PLATES",
+                        part.DisplayName,
+                        "Thickness " + Format(scroll.ThicknessMm) + " mm was taken from the casing plate strips in the GA. Please verify.");
+                }
+            }
             var number = 0;
             foreach (var item in items)
             {
@@ -314,6 +325,15 @@ namespace CadToCode.Business.Services
 
             if (spiral.Count < 3)
             {
+                var casingArcs = geometry.Arcs.Count(a => string.Equals(a.Layer, "CASINGSIDE", StringComparison.OrdinalIgnoreCase));
+                report.Warn(
+                    "GA_SCROLL_NOT_FOUND",
+                    "SCROLL",
+                    "CASINGSIDE arcs: " + casingArcs.ToString(CultureInfo.InvariantCulture)
+                    + ", arcs of R 300 mm or more: " + radii.Count.ToString(CultureInfo.InvariantCulture)
+                    + ", all arcs: " + geometry.Arcs.Count.ToString(CultureInfo.InvariantCulture)
+                    + ", mm per unit: " + mm.ToString("0.###", CultureInfo.InvariantCulture)
+                    + ", layers: " + string.Join(",", geometry.Layers.Take(40)));
                 return null;
             }
 
@@ -321,8 +341,14 @@ namespace CadToCode.Business.Services
             var meanStep = steps.Average();
             if (steps.Any(s => Math.Abs(s - meanStep) > meanStep * 0.05))
             {
+                report.Warn(
+                    "GA_SCROLL_NOT_FOUND",
+                    "SCROLL",
+                    "Arc radii are not evenly stepped: " + string.Join(", ", spiral.Select(r => Format(r))));
                 return null;
             }
+
+          
 
             var minLength = spiral[^1] * 2.0 * 0.9;
             var xs = geometry.Lines
@@ -414,7 +440,7 @@ namespace CadToCode.Business.Services
                     }
                 }
 
-                if (distinct.Count < 2 || distinct[0] < MinPartMm)
+                if (distinct.Count < 2 || distinct[0] < MinCircularMm)
                 {
                     continue;
                 }

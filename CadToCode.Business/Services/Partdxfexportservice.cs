@@ -166,6 +166,11 @@ namespace CadToCode.Business.Services
 
                     package.Warnings.AddRange(sheets.Messages);
 
+                    foreach (var message in package.Warnings)
+                    {
+                        _logger.LogWarning("Manufacturing package: {Message}", message);
+                    }
+
                     if (sheets.Zip is null)
                     {
                         package.ErrorMessage = "No manufacturing sheet could be generated from the recognised parts.";
