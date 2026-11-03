@@ -14,7 +14,7 @@
 <div class="cc-topbar">
     <div>
         <h1 class="cc-page-title">Manufacturing Breakdown</h1>
-        <p class="cc-page-meta">Split a general arrangement drawing into individual parts by identifying its blocks.</p>
+        <p class="cc-page-meta">Recognise parts from a general arrangement drawing and generate a dimensioned manufacturing sheet for each one.</p>
     </div>
 
     <div class="d-flex gap-2">
@@ -23,10 +23,6 @@
             <a class="cc-btn cc-btn-ghost" asp-controller="Manufacturing" asp-action="Export" asp-route-id="@Model.SelectedProjectId">Export CSV</a>
         }
 
-        @if (Model.SelectedProjectId.HasValue)
-        {
-            <button type="submit" form="mfg-dxf-package-form" class="cc-btn cc-btn-primary">Generate Manufacturing DXF Package</button>
-        }
     </div>
 </div>
 
@@ -57,7 +53,7 @@
                 </span>
 
                 <p class="cc-dropzone-title">Drop a general arrangement DXF here, or click to browse</p>
-                <p class="cc-dropzone-hint">DXF only, up to 20 MB. Parts are identified from the drawing's blocks.</p>
+                <p class="cc-dropzone-hint">DXF only, up to 20 MB. Parts are recognised from the drawing geometry.</p>
                 <p class="cc-file-name" data-cc-file-name hidden></p>
                 <ul class="cc-file-list" data-cc-file-list hidden></ul>
             </div>
@@ -127,7 +123,7 @@
 {
     <section class="cc-mfg-dxf-panel" aria-labelledby="mfg-dxf-heading">
         <h2 id="mfg-dxf-heading" class="cc-page-title">Manufacturing DXF files</h2>
-        <p class="cc-page-meta">Each isolated component is exported as its own DXF, moved to the local origin, with fabrication notes on a NOTES layer.</p>
+        <p class="cc-page-meta">Each recognised part is exported as its own manufacturing sheet with true circles, dimensions, material, thickness, quantity and weight. Values not found in the drawing are never invented. Enter them below.</p>
 
         <form id="mfg-dxf-package-form" asp-controller="Manufacturing" asp-action="DownloadManufacturingDxfPackage" method="post" class="cc-mfg-picker">
             <input type="hidden" name="id" value="@Model.SelectedProjectId" />
@@ -167,7 +163,7 @@
             <input type="hidden" name="id" value="@Model.SelectedProjectId" />
 
             <label for="mfg-node-id" class="cc-mfg-label">Component ID</label>
-            <input id="mfg-node-id" name="nodeId" type="text" maxlength="20" class="cc-mfg-select" placeholder="N1" required />
+            <input id="mfg-node-id" name="nodeId" type="text" maxlength="20" class="cc-mfg-select" placeholder="ITEM-01" required />
 
             <label for="mfg-part-name" class="cc-mfg-label">Part name</label>
             <input id="mfg-part-name" name="partName" type="text" maxlength="60" class="cc-mfg-select" />

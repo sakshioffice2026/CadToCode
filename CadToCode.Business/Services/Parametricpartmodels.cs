@@ -13,8 +13,30 @@ public enum BomPartKind
     Hub = 5,
     ConeFlatPattern = 6,
     ScrollFlatPattern = 7,
-    TransitionFlatPattern = 8
+    TransitionFlatPattern = 8,
+    ProfilePlate = 9
 }
+
+public enum ProfileEntityKind
+{
+    Line = 0,
+    Arc = 1,
+    Circle = 2
+}
+
+/// <summary>One real outline entity taken from the GA drawing. All values are in mm.</summary>
+public sealed record ProfileEntity(
+    ProfileEntityKind Kind,
+    double X1,
+    double Y1,
+    double X2,
+    double Y2,
+    double Cx,
+    double Cy,
+    double Radius,
+    double StartAngle,
+    double EndAngle);
+
 
 /// <summary>
 /// One Bill of Materials row. All sizes are in mm. Values that the BOM does not state stay null so the
@@ -58,6 +80,8 @@ public sealed class PartBomItem
 
     public double? BendRadiusMm { get; set; }
 
+    /// <summary>Real outline geometry for ProfilePlate parts, in mm. Null for parametric parts.</summary>
+    public IReadOnlyList<ProfileEntity>? Profile { get; set; }
     public string? Remarks { get; set; }
 
     public string DisplayName => string.IsNullOrWhiteSpace(Name) ? "ITEM " + ItemNo.ToString(CultureInfo.InvariantCulture) : Name.Trim();

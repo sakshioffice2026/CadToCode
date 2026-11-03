@@ -1,11 +1,12 @@
 ﻿using CadToCode.Business.Interfaces;
 using CadToCode.Business.Services;
-using CadToCode.Models.Dtos;
 using CadToCode.Business.Services;
+using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
 using System.Globalization;
+using System.IO.Compression;
 using System.Text;
 
 namespace Web.Controllers;
@@ -188,12 +189,33 @@ public class ManufacturingController : Controller
             Specs = specs ?? new List<PartManufacturingSpecDto>()
         };
 
-        var zip = await _manufacturingDxfService.BuildZipAsync(request, cancellationToken);
+        var package = await _manufacturingDxfService.BuildPackageAsync(request, cancellationToken);
 
-        if (zip is null)
+        if (!package.Success || package.Files.Count == 0)
         {
-            TempData["Error"] = "The manufacturing DXF package could not be generated.";
+            var reason = package.ErrorMessage ?? "The manufacturing DXF package could not be generated.";
+            var detail = package.Warnings.Count > 0
+                ? " " + string.Join(" | ", package.Warnings.Take(5))
+                : string.Empty;
+
+            TempData["Error"] = reason + detail;
             return RedirectToAction(nameof(Index), new { id });
+        }
+
+        byte[] zip;
+        using (var output = new MemoryStream())
+        {
+            using (var archive = new ZipArchive(output, ZipArchiveMode.Create, true))
+            {
+                foreach (var file in package.Files)
+                {
+                    var entry = archive.CreateEntry(file.FileName, CompressionLevel.Optimal);
+                    await using var entryStream = entry.Open();
+                    await entryStream.WriteAsync(file.Content, cancellationToken);
+                }
+            }
+
+            zip = output.ToArray();
         }
 
         return File(zip, "application/zip", "manufacturing-dxf-package-" + id + ".zip");

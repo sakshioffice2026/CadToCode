@@ -91,6 +91,7 @@ builder.Services.AddSingleton<IGeometryExtractor, ImageGeometryExtractor>();
 builder.Services.AddScoped<IGeometryNormalizer, GeometryNormalizer>();
 builder.Services.AddSingleton<IComponentDecomposer, ComponentDecomposer>();
 builder.Services.AddSingleton<IAssemblyTopologyMapper, AssemblyTopologyMapper>();
+builder.Services.AddSingleton<IGaPartRecognizer, GaPartRecognizer>();
 builder.Services.AddSingleton<GeometryEmbedder>();
 builder.Services.AddSingleton<IPatternMemoryService, PatternMemoryService>();
 builder.Services.AddSingleton<ILLMGenerationService, LLamaGenerationService>();

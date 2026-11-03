@@ -23,6 +23,7 @@ public sealed class ParametricPartRulesEngine
     private readonly ConeFlatPatternDrawingBuilder _cone = new();
     private readonly ScrollFlatPatternDrawingBuilder _scroll = new();
     private readonly TransitionFlatPatternDrawingBuilder _transition = new();
+    private readonly ProfilePartDrawingBuilder _profile = new();
 
     public GeneratedPartSheet? Generate(
         ManufacturingRules rules,
@@ -68,11 +69,13 @@ public sealed class ParametricPartRulesEngine
                 BomPartKind.ConeFlatPattern => BuildCone(rules, item, frame, material, thickness, report, name),
                 BomPartKind.ScrollFlatPattern => BuildScroll(rules, item, frame, material, thickness, report, name),
                 BomPartKind.TransitionFlatPattern => BuildTransition(rules, item, frame, material, thickness, report, name),
+                BomPartKind.ProfilePlate => BuildProfile(rules, item, frame, material, thickness, report, name),
                 _ => null
             };
 
             if (dxf is null)
             {
+
                 if (item.Kind == BomPartKind.Unknown)
                 {
                     report.Error("KIND_UNSUPPORTED", name, "The part type is not supported.");
@@ -293,7 +296,32 @@ public sealed class ParametricPartRulesEngine
             Frame = frame
         }).Dxf;
     }
+    private DxfFile? BuildProfile(ManufacturingRules rules, PartBomItem item, SheetFrameRequest frame, string material, double? thickness, GenerationReport report, string name)
+    {
+        if (item.Profile is not { Count: > 0 })
+        {
+            report.Error("PROFILE_MISSING", name, "The part has no outline geometry.");
+            return null;
+        }
 
+        if (!Require(report, name, ("thickness", thickness)))
+        {
+            return null;
+        }
+
+        report.Info("PROFILE_WEIGHT_NOT_CALCULATED", name, "The finish weight of a shaped outline is not calculated. Only the raw material weight is shown.");
+
+        return _profile.Build(rules, new ProfilePlateRequest
+        {
+            Name = name,
+            Material = material,
+            ItemNo = item.ItemNo,
+            Qty = item.Qty,
+            ThicknessMm = thickness!.Value,
+            Profile = item.Profile,
+            Frame = frame
+        }).Dxf;
+    }
     private static string ResolveMaterial(PartBomItem item, string? defaultMaterial, GenerationReport report, string name)
     {
         if (!string.IsNullOrWhiteSpace(item.Material))
@@ -309,7 +337,8 @@ public sealed class ParametricPartRulesEngine
     private static bool NeedsThickness(BomPartKind kind)
     {
         return kind is BomPartKind.Flange or BomPartKind.RectangularPlate or BomPartKind.RolledRing
-            or BomPartKind.Hub or BomPartKind.ConeFlatPattern or BomPartKind.ScrollFlatPattern or BomPartKind.TransitionFlatPattern;
+                        or BomPartKind.Hub or BomPartKind.ConeFlatPattern or BomPartKind.ScrollFlatPattern or BomPartKind.TransitionFlatPattern
+            or BomPartKind.ProfilePlate;
     }
 
     private static void CheckHoles(GenerationReport report, string name, int holeCount, double? holeDiameter, double? holePcd)

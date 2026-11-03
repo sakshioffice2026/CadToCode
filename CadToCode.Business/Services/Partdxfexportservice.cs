@@ -100,12 +100,13 @@ namespace CadToCode.Business.Services
         private const string NotesLayer = "NOTES";
         private const string NotesStyle = "NOTES";
         private const double Epsilon = 1e-9;
-
         private readonly IUnitOfWork _unitOfWork;
         private readonly IFileStorageService _storage;
         private readonly IEnumerable<IGeometryExtractor> _extractors;
         private readonly IComponentDecomposer _decomposer;
         private readonly IAssemblyTopologyMapper _topologyMapper;
+        private readonly IGaPartRecognizer _recognizer;
+        private readonly ParametricPartSheetService _parametricSheets;
         private readonly ILogger<PartManufacturingDxfService> _logger;
 
         public PartManufacturingDxfService(
@@ -114,6 +115,8 @@ namespace CadToCode.Business.Services
             IEnumerable<IGeometryExtractor> extractors,
             IComponentDecomposer decomposer,
             IAssemblyTopologyMapper topologyMapper,
+            IGaPartRecognizer recognizer,
+            ParametricPartSheetService parametricSheets,
             ILogger<PartManufacturingDxfService> logger)
         {
             _unitOfWork = unitOfWork;
@@ -121,6 +124,8 @@ namespace CadToCode.Business.Services
             _extractors = extractors;
             _decomposer = decomposer;
             _topologyMapper = topologyMapper;
+            _recognizer = recognizer;
+            _parametricSheets = parametricSheets;
             _logger = logger;
         }
 
@@ -139,6 +144,81 @@ namespace CadToCode.Business.Services
                 var source = await LoadSourceAsync(request.ProjectId, cancellationToken);
                 package.ProjectTitle = source.Title;
                 package.Warnings.AddRange(source.Geometry.Warnings);
+
+                var report = new GenerationReport();
+                var recognised = _recognizer.Recognize(source.Geometry, report);
+
+                if (recognised.Count > 0 || !request.IncludeAllParts)
+                {
+                    if (recognised.Count == 0)
+                    {
+                        package.Warnings.AddRange(report.ToMessages());
+                        package.ErrorMessage = "No manufacturable part could be recognised from this GA drawing.";
+                        return package;
+                    }
+
+                    var sheets = _parametricSheets.Build(
+                        recognised,
+                        package.ProjectCode,
+                        request.DefaultMaterial,
+                        request.DefaultThickness.HasValue ? (double?)request.DefaultThickness.Value : null,
+                        report);
+
+                    package.Warnings.AddRange(sheets.Messages);
+
+                    if (sheets.Zip is null)
+                    {
+                        package.ErrorMessage = "No manufacturing sheet could be generated from the recognised parts.";
+                        return package;
+                    }
+
+                    var wantedIds = new HashSet<string>(request.NodeIds ?? new List<string>(), StringComparer.OrdinalIgnoreCase);
+
+                    using (var input = new MemoryStream(sheets.Zip, writable: false))
+                    using (var archive = new ZipArchive(input, ZipArchiveMode.Read))
+                    {
+                        foreach (var entry in archive.Entries)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+
+                            var item = recognised.FirstOrDefault(i => entry.Name.StartsWith(
+                                i.ItemNo.ToString("00", CultureInfo.InvariantCulture) + "-", StringComparison.Ordinal));
+                            var nodeId = "ITEM-" + (item?.ItemNo ?? 0).ToString("00", CultureInfo.InvariantCulture);
+
+                            if (wantedIds.Count > 0 && !wantedIds.Contains(nodeId))
+                            {
+                                continue;
+                            }
+
+                            using var entryStream = entry.Open();
+                            using var buffer = new MemoryStream();
+                            entryStream.CopyTo(buffer);
+
+                            var thk = item?.ThicknessMm;
+                            package.Files.Add(new PartManufacturingFileDto
+                            {
+                                NodeId = nodeId,
+                                MemberNodeIds = new List<string> { nodeId },
+                                PartName = item?.DisplayName ?? Path.GetFileNameWithoutExtension(entry.Name),
+                                FileName = entry.Name,
+                                Material = item?.Material ?? "NOT SPECIFIED",
+                                Thickness = thk is > 0 ? (decimal)thk.Value : null,
+                                Quantity = item?.Qty ?? 1,
+                                Width = item?.OuterDiameterMm ?? item?.LengthMm ?? 0.0,
+                                Height = item?.OuterDiameterMm ?? item?.WidthMm ?? 0.0,
+                                Content = buffer.ToArray()
+                            });
+                        }
+                    }
+
+                    package.Success = package.Files.Count > 0;
+                    if (!package.Success)
+                    {
+                        package.ErrorMessage = "The requested part was not found among the recognised parts.";
+                    }
+
+                    return package;
+                }
 
                 var nodes = _decomposer.Decompose(source.Geometry);
                 if (nodes.Count == 0)
