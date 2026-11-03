@@ -146,6 +146,8 @@ public class DxfGeometryExtractor : IGeometryExtractor
 
         ProcessEntities(source, Matrix2D.Identity, context, 0, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
+        ReadUnplacedBlockText(source, blocks, context);
+
         result.Layers = context.Layers.OrderBy(l => l, StringComparer.OrdinalIgnoreCase).ToList();
         result.Bounds = ComputeBounds(result);
 
@@ -223,6 +225,65 @@ public class DxfGeometryExtractor : IGeometryExtractor
         }
 
         return any ? new GeometryBounds(minX, minY, maxX, maxY) : null;
+    }
+
+    private static void ReadUnplacedBlockText(
+        IEnumerable<DxfEntity> placedSource,
+        Dictionary<string, DxfBlock> blocks,
+        ExtractionContext context)
+    {
+        var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        CollectPlacedBlocks(placedSource, blocks, placed);
+
+        foreach (var block in blocks.Values)
+        {
+            context.Token.ThrowIfCancellationRequested();
+
+            if (string.IsNullOrEmpty(block.Name)
+                || block.Name.StartsWith("*", StringComparison.Ordinal)
+                || placed.Contains(block.Name))
+            {
+                continue;
+            }
+
+            foreach (var entity in block.Entities)
+            {
+                if (!entity.IsVisible)
+                {
+                    continue;
+                }
+
+                switch (entity)
+                {
+                    case DxfText text:
+                        AddText(context, Matrix2D.Identity, text.Value, text.Location.X, text.Location.Y,
+                            text.TextHeight, text.Rotation, "TEXT", entity);
+                        break;
+
+                    case DxfMText mText:
+                        AddText(context, Matrix2D.Identity, GetMTextValue(mText), mText.InsertionPoint.X,
+                            mText.InsertionPoint.Y, mText.InitialTextHeight, mText.RotationAngle, "MTEXT", entity);
+                        break;
+                }
+            }
+        }
+    }
+
+    private static void CollectPlacedBlocks(
+        IEnumerable<DxfEntity> entities,
+        Dictionary<string, DxfBlock> blocks,
+        HashSet<string> placed)
+    {
+        foreach (var entity in entities)
+        {
+            if (entity is DxfInsert insert
+                && !string.IsNullOrEmpty(insert.Name)
+                && placed.Add(insert.Name)
+                && blocks.TryGetValue(insert.Name, out var block))
+            {
+                CollectPlacedBlocks(block.Entities, blocks, placed);
+            }
+        }
     }
 
     private static string? HandleOf(DxfEntity entity)

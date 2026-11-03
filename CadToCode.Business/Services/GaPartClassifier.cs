@@ -194,7 +194,10 @@ namespace CadToCode.Business.Services
                 return Build(part, view, GaPartType.BoughtOut, GaPartFamily.BoughtOut, BomPartKind.Unknown, "Bought-out item.");
             }
 
-            if (!string.IsNullOrWhiteSpace(part.Section) || IsmcRx.IsMatch(text) || FlatBarRx.IsMatch(text) || RoundBarRx.IsMatch(text) || FrameRx.IsMatch(name))
+            var hasSection = !string.IsNullOrWhiteSpace(part.Section)
+                && !string.Equals(part.Section.Trim(), "STD", StringComparison.OrdinalIgnoreCase);
+
+            if (hasSection || IsmcRx.IsMatch(text) || FlatBarRx.IsMatch(text) || RoundBarRx.IsMatch(text) || FrameRx.IsMatch(name))
             {
                 var sectionType = ResolveSectionType(text);
                 var bomKind = sectionType == GaPartType.RoundBar ? BomPartKind.RoundBar : BomPartKind.Unknown;

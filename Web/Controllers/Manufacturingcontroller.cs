@@ -33,23 +33,23 @@ public class ManufacturingController : Controller
     private readonly IUnitOfWork _unitOfWork;
     private readonly IFileStorageService _storage;
     private readonly IEnumerable<IGeometryExtractor> _extractors;
-        private readonly ReferenceCalloutCatalog _referenceCatalog;
-         private readonly IConfiguration _configuration;
-        private readonly IComponentDecomposer _decomposer;
+    private readonly ReferenceCalloutCatalog _referenceCatalog;
+    private readonly IConfiguration _configuration;
+    private readonly IComponentDecomposer _decomposer;
 
-            public ManufacturingController(
-         IProjectProcessingService processingService,
-         IBlockBreakdownService breakdownService,
-         ILogger<ManufacturingController> logger,
-         IPartManufacturingDxfService manufacturingDxfService,
-         ParametricPartSheetService parametricSheets,
-         GaManufacturingPipeline gaPipeline,
-         IUnitOfWork unitOfWork,
-         IFileStorageService storage,
-         IEnumerable<IGeometryExtractor> extractors,
-         IComponentDecomposer decomposer,
-         ReferenceCalloutCatalog referenceCatalog,
-         IConfiguration configuration)
+    public ManufacturingController(
+ IProjectProcessingService processingService,
+ IBlockBreakdownService breakdownService,
+ ILogger<ManufacturingController> logger,
+ IPartManufacturingDxfService manufacturingDxfService,
+ ParametricPartSheetService parametricSheets,
+ GaManufacturingPipeline gaPipeline,
+ IUnitOfWork unitOfWork,
+ IFileStorageService storage,
+ IEnumerable<IGeometryExtractor> extractors,
+ IComponentDecomposer decomposer,
+ ReferenceCalloutCatalog referenceCatalog,
+ IConfiguration configuration)
     {
         _processingService = processingService;
         _breakdownService = breakdownService;
@@ -194,7 +194,7 @@ public class ManufacturingController : Controller
         bool includeAllParts = false,
         string? cutLayers = null,
         PartOriginMode origin = PartOriginMode.BottomLeft,
-        bool useLegacyFallback = false,
+        bool useLegacyFallback = true,
         CancellationToken cancellationToken = default)
     {
         if (specs is null || specs.Count == 0)
