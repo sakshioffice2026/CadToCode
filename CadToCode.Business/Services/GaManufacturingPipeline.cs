@@ -155,6 +155,10 @@ namespace CadToCode.Business.Services
 
             foreach (var data in sheets)
             {
+                if (data.FinishWeightKg.HasValue && data.Item.Kind == BomPartKind.ProfilePlate)
+                {
+                    data.Item.FinishWeightKg = data.FinishWeightKg;
+                }
                 var sheet = _engine.Generate(rules, data.Item, data.Frame, request.DefaultMaterial, request.DefaultThicknessMm, report);
 
                 if (sheet is null)

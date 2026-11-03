@@ -25,6 +25,10 @@ public sealed class ProfilePlateRequest
     /// <summary>Added to the outline width and height to get the raw material size (assumed).</summary>
     public double RawMaterialAllowanceMm { get; init; } = 5.0;
 
+    
+    /// <summary>Finish weight in kg for one piece. When null the FINISH WT cell shows "-".</summary>
+    public double? FinishWeightKg { get; init; }
+
     public SheetFrameRequest Frame { get; init; } = new();
 }
 
@@ -312,11 +316,11 @@ public sealed class ProfilePartDrawingBuilder
         var yBottom = yMid - BomRowHeight;
 
         var values = new[]
-        {
+{
             request.ItemNo.ToString(CultureInfo.InvariantCulture),
             Format(Math.Round(rawWidth, 0)) + " X " + Format(Math.Round(rawHeight, 0)) + " X " + Format(request.ThicknessMm),
             Format(Math.Round(rawWeight, 2)),
-            "-"
+            request.FinishWeightKg.HasValue ? Format(Math.Round(request.FinishWeightKg.Value, 2)) : "-"
         };
 
         for (var i = 0; i < 4; i++)

@@ -145,6 +145,15 @@ namespace CadToCode.Business.Services
                 return result;
             }
 
+            if (classification.View.EdgeOnOnly && classification.Family != GaPartFamily.Developed)
+            {
+                result.Message = "Only an edge-on view ("
+                    + classification.View.WidthMm.ToString("0.#", CultureInfo.InvariantCulture) + " x "
+                    + classification.View.HeightMm.ToString("0.#", CultureInfo.InvariantCulture)
+                    + " mm) exists for this part; the true face shape is not in the drawing.";
+                report.Error("PROFILE_EDGE_ON", part.Name, result.Message);
+                return result;
+            }
             var node = classification.View.Node;
             var mm = mmPerUnit > 0.0 ? mmPerUnit : 1.0;
 

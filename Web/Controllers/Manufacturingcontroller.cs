@@ -1,6 +1,6 @@
 ﻿using CadToCode.Business.Interfaces;
 using CadToCode.Business.Services;
-using CadToCode.Business.Services;
+using CadToCode.Repositories.Interfaces;
 using CadToCode.Models.Dtos;
 using CadToCode.Models.Enums;
 using Microsoft.AspNetCore.Mvc;
@@ -28,19 +28,34 @@ public class ManufacturingController : Controller
     private readonly IBlockBreakdownService _breakdownService;
     private readonly ILogger<ManufacturingController> _logger;
     private readonly IPartManufacturingDxfService _manufacturingDxfService;
+    private readonly GaManufacturingPipeline _gaPipeline;
+    private readonly IUnitOfWork _unitOfWork;
+    private readonly IFileStorageService _storage;
+    private readonly IEnumerable<IGeometryExtractor> _extractors;
+    private readonly IComponentDecomposer _decomposer;
 
     public ManufacturingController(
     IProjectProcessingService processingService,
     IBlockBreakdownService breakdownService,
     ILogger<ManufacturingController> logger,
     IPartManufacturingDxfService manufacturingDxfService,
-    ParametricPartSheetService parametricSheets)
+    ParametricPartSheetService parametricSheets,
+    GaManufacturingPipeline gaPipeline,
+    IUnitOfWork unitOfWork,
+    IFileStorageService storage,
+    IEnumerable<IGeometryExtractor> extractors,
+    IComponentDecomposer decomposer)
     {
         _processingService = processingService;
         _breakdownService = breakdownService;
         _logger = logger;
         _manufacturingDxfService = manufacturingDxfService;
         _parametricSheets = parametricSheets;
+        _gaPipeline = gaPipeline;
+        _unitOfWork = unitOfWork;
+        _storage = storage;
+        _extractors = extractors;
+        _decomposer = decomposer;
     }
 
     [HttpGet]
@@ -174,6 +189,33 @@ public class ManufacturingController : Controller
         PartOriginMode origin = PartOriginMode.BottomLeft,
         CancellationToken cancellationToken = default)
     {
+        if (specs is null || specs.Count == 0)
+        {
+            var ga = await RunGaPipelineAsync(id, projectCode, defaultMaterial, (double?)defaultThickness, cancellationToken);
+
+            if (ga.Error is not null)
+            {
+                _logger.LogWarning("GA pipeline error for project {ProjectId}: {Error}", id, ga.Error);
+            }
+            else if (ga.Result is not null)
+            {
+                foreach (var message in ga.Result.Messages)
+                {
+                    _logger.LogWarning("GA pipeline project {ProjectId}: {Message}", id, message);
+                }
+
+                if (ga.Result.HasFiles)
+                {
+                    var gaZip = _gaPipeline.BuildZip(ga.Result);
+
+                    if (gaZip is not null)
+                    {
+                        return File(gaZip, "application/zip", "manufacturing-dxf-package-" + id + ".zip");
+                    }
+                }
+            }
+        }
+
         var request = new PartManufacturingRequestDto
         {
             ProjectId = id,
@@ -220,6 +262,145 @@ public class ManufacturingController : Controller
 
         return File(zip, "application/zip", "manufacturing-dxf-package-" + id + ".zip");
 
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> GaReport(
+        int id,
+        string? projectCode,
+        string? defaultMaterial,
+        double? defaultThickness,
+        CancellationToken cancellationToken = default)
+    {
+        var run = await RunGaPipelineAsync(id, projectCode, defaultMaterial, defaultThickness, cancellationToken);
+
+        if (run.Error is not null)
+        {
+            return BadRequest(new { error = run.Error });
+        }
+
+        var result = run.Result!;
+        var completeness = result.Completeness;
+
+        return Json(new
+        {
+            calloutCount = result.Callouts.Parts.Count,
+            dxfCount = result.Files.Count,
+            generated = completeness.Generated,
+            cutList = completeness.CutList,
+            boughtOut = completeness.BoughtOut,
+            unmatched = completeness.Unmatched,
+            isComplete = completeness.IsComplete,
+            hasErrors = result.HasErrors,
+            calculatedFinishTotalKg = result.CalculatedFinishTotalKg,
+            rows = completeness.Rows.Select(r => new
+            {
+                part = r.Part.Name,
+                disposition = r.Disposition.ToString(),
+                file = r.FileName,
+                qty = r.Part.Qty,
+                thickness = r.Part.ThicknessMm,
+                weightKg = r.Part.WeightKg,
+                reason = r.Reason
+            }),
+            unusedFiles = completeness.UnusedFiles,
+            weightChecks = completeness.WeightChecks.Select(w => new
+            {
+                label = w.Label,
+                drawingTotalKg = w.DrawingTotalKg,
+                calloutSumKg = w.CalloutSumKg,
+                differencePercent = w.DifferencePercent,
+                matches = w.Matches
+            }),
+            issues = result.Report.Issues.Select(i => new
+            {
+                severity = i.Severity.ToString(),
+                code = i.Code,
+                part = i.PartName,
+                message = i.Message
+            })
+        });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> GaPackage(
+        int id,
+        string? projectCode,
+        string? defaultMaterial,
+        double? defaultThickness,
+        CancellationToken cancellationToken = default)
+    {
+        var run = await RunGaPipelineAsync(id, projectCode, defaultMaterial, defaultThickness, cancellationToken);
+
+        if (run.Error is not null)
+        {
+            TempData["Error"] = run.Error;
+            return RedirectToAction(nameof(Index), new { id });
+        }
+
+        var zip = _gaPipeline.BuildZip(run.Result!);
+
+        if (zip is null)
+        {
+            TempData["Error"] = "No manufacturing drawing could be generated from the callouts. "
+                + string.Join(" | ", run.Result!.Messages.Take(5));
+            return RedirectToAction(nameof(Index), new { id });
+        }
+
+        return File(zip, "application/zip", "ga-manufacturing-package-" + id + ".zip");
+    }
+
+    private async Task<(GaPipelineResult? Result, string? Error)> RunGaPipelineAsync(
+        int id,
+        string? projectCode,
+        string? defaultMaterial,
+        double? defaultThickness,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var path = await _unitOfWork.Projects.GetStoredFilePathAsync(id, cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return (null, "The stored drawing file is missing.");
+            }
+
+            var extractor = _extractors.FirstOrDefault(e => e.CanHandle(SourceFileType.Dxf));
+
+            if (extractor is null)
+            {
+                return (null, "No DXF geometry extractor is registered.");
+            }
+
+            await using var stream = await _storage.OpenReadAsync(path, cancellationToken)
+                ?? throw new InvalidOperationException("The stored drawing file could not be opened.");
+
+            var geometry = await extractor.ExtractAsync(stream, cancellationToken);
+            var nodes = _decomposer.Decompose(geometry);
+
+            var result = _gaPipeline.Run(new GaPipelineRequest
+            {
+                Geometry = geometry,
+                Nodes = nodes,
+                ProjectCode = projectCode,
+                DefaultMaterial = defaultMaterial,
+                DefaultThicknessMm = defaultThickness
+            });
+
+            return (result, null);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "GA manufacturing run failed for project {ProjectId}.", id);
+            return (null, "The GA manufacturing run could not be completed.");
+        }
     }
 
     [HttpPost]

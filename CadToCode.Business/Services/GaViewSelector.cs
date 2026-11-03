@@ -18,6 +18,10 @@ namespace CadToCode.Business.Services
 
         public bool EdgeOnOnly { get; init; }
 
+        public bool IsEdgeOn { get; init; }
+
+        public bool IsWholeView { get; init; }
+
         public double WidthMm { get; init; }
 
         public double HeightMm { get; init; }
@@ -89,22 +93,33 @@ namespace CadToCode.Business.Services
                     continue;
                 }
 
-                ViewSelection? best = null;
+                var scoredAll = new List<ViewSelection>();
                 var allEdgeOn = true;
 
                 foreach (var node in candidates)
                 {
                     var scored = Score(part, link, node, mm, drawingArea, candidates.Count, out var edgeOn);
+                    scoredAll.Add(scored);
+
                     if (!edgeOn)
                     {
                         allEdgeOn = false;
                     }
-
-                    if (best is null || scored.Score > best.Score)
-                    {
-                        best = scored;
-                    }
                 }
+
+                var preferred = scoredAll.Where(s => !s.IsEdgeOn && !s.IsWholeView).ToList();
+
+                if (preferred.Count == 0)
+                {
+                    preferred = scoredAll.Where(s => !s.IsEdgeOn).ToList();
+                }
+
+                if (preferred.Count == 0)
+                {
+                    preferred = scoredAll;
+                }
+
+                var best = preferred.OrderByDescending(s => s.Score).FirstOrDefault();
 
                 if (best is null)
                 {
@@ -122,7 +137,9 @@ namespace CadToCode.Business.Services
                     CandidateCount = candidates.Count,
                     EdgeOnOnly = allEdgeOn,
                     WidthMm = best.WidthMm,
-                    HeightMm = best.HeightMm
+                    HeightMm = best.HeightMm,
+                    IsEdgeOn = best.IsEdgeOn,
+                    IsWholeView = best.IsWholeView
                 };
 
                 if (allEdgeOn)
@@ -132,6 +149,15 @@ namespace CadToCode.Business.Services
                         part.Name,
                         "Only edge-on views were found (best " + final.WidthMm.ToString("0.#", CultureInfo.InvariantCulture)
                         + " x " + final.HeightMm.ToString("0.#", CultureInfo.InvariantCulture) + " mm). The true shape must come from the BOM or a flat pattern.");
+                }
+
+                if (final.IsWholeView)
+                {
+                    report.Warn(
+                        "VIEW_WHOLE_VIEW_ONLY",
+                        part.Name,
+                        "Only a whole-view capture was found (" + final.WidthMm.ToString("0.#", CultureInfo.InvariantCulture)
+                        + " x " + final.HeightMm.ToString("0.#", CultureInfo.InvariantCulture) + " mm). Lines of other parts may be included.");
                 }
 
                 if (final.Score < 0.0)
@@ -313,7 +339,9 @@ namespace CadToCode.Business.Services
                 Reason = string.Join(", ", reasons) + ".",
                 CandidateCount = candidateCount,
                 WidthMm = Math.Round(w, 2),
-                HeightMm = Math.Round(h, 2)
+                HeightMm = Math.Round(h, 2),
+                IsEdgeOn = edgeOn,
+                IsWholeView = wholeView
             };
         }
     }

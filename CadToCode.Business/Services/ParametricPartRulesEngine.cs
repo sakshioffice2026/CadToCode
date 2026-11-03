@@ -309,7 +309,10 @@ public sealed class ParametricPartRulesEngine
             return null;
         }
 
-        report.Info("PROFILE_WEIGHT_NOT_CALCULATED", name, "The finish weight of a shaped outline is not calculated. Only the raw material weight is shown.");
+        if (!item.FinishWeightKg.HasValue)
+        {
+            report.Info("PROFILE_WEIGHT_NOT_CALCULATED", name, "The finish weight of a shaped outline is not calculated. Only the raw material weight is shown.");
+        }
 
         return _profile.Build(rules, new ProfilePlateRequest
         {
@@ -319,6 +322,7 @@ public sealed class ParametricPartRulesEngine
             Qty = item.Qty,
             ThicknessMm = thickness!.Value,
             Profile = item.Profile,
+            FinishWeightKg = item.FinishWeightKg,
             Frame = frame
         }).Dxf;
     }

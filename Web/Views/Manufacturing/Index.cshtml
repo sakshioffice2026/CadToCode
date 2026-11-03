@@ -159,6 +159,22 @@
             <button type="submit" class="cc-btn cc-btn-primary">Generate Manufacturing DXF Package</button>
         </form>
 
+        <form id="mfg-ga-form" asp-controller="Manufacturing" asp-action="GaPackage" method="post" class="cc-mfg-picker">
+            <input type="hidden" name="id" value="@Model.SelectedProjectId" />
+
+            <label for="mfg-ga-project-code" class="cc-mfg-label">Project ID</label>
+            <input id="mfg-ga-project-code" name="projectCode" type="text" maxlength="60" class="cc-mfg-select" placeholder="PRJ-@Model.SelectedProjectId.Value.ToString("D5")" />
+
+            <label for="mfg-ga-material" class="cc-mfg-label">Material</label>
+            <input id="mfg-ga-material" name="defaultMaterial" type="text" maxlength="60" class="cc-mfg-select" placeholder="e.g. MS IS 2062" />
+
+            <label for="mfg-ga-thickness" class="cc-mfg-label">Thickness (mm)</label>
+            <input id="mfg-ga-thickness" name="defaultThickness" type="number" step="0.1" min="0" class="cc-mfg-select" />
+
+            <button type="submit" class="cc-btn cc-btn-primary">Generate GA Manufacturing Package (DXF + Cut List + Completeness Report)</button>
+            <button type="submit" formaction="@Url.Action("GaReport", "Manufacturing")" formtarget="_blank" class="cc-btn cc-btn-ghost">View Completeness Report</button>
+        </form>
+
         <form asp-controller="Manufacturing" asp-action="DownloadComponentDxf" method="post" class="cc-mfg-picker">
             <input type="hidden" name="id" value="@Model.SelectedProjectId" />
 

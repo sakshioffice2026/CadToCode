@@ -80,6 +80,10 @@ public sealed class PartBomItem
 
     public double? BendRadiusMm { get; set; }
 
+
+    /// <summary>Finish weight in kg for one piece, calculated from the true outline. Null when not calculated.</summary>
+    public double? FinishWeightKg { get; set; }
+
     /// <summary>Real outline geometry for ProfilePlate parts, in mm. Null for parametric parts.</summary>
     public IReadOnlyList<ProfileEntity>? Profile { get; set; }
     public string? Remarks { get; set; }

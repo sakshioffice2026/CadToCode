@@ -137,6 +137,11 @@ namespace CadToCode.Business.Services
             @"base\s?plate|\bbase\b|\bfoot\s?plate",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+
+        private static readonly Regex FrameRx = new(
+            @"\bframe\b|\bskid\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private static readonly Regex PlateRx = new(
             @"plate|\bdoor\b|bracket|strip|cutoff|cut\s?off|spacer|hook|extractor|\bguard\b|\bsill\b|\bsil\b|\bpanel\b|\bcover\b|\bsheet\b|\bpedestal\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -184,7 +189,7 @@ namespace CadToCode.Business.Services
             var name = part.Name ?? string.Empty;
             var text = name + " " + (part.Section ?? string.Empty);
 
-            if (BoughtOutRx.IsMatch(name))
+            if (!string.IsNullOrWhiteSpace(part.Section) || IsmcRx.IsMatch(text) || FlatBarRx.IsMatch(text) || RoundBarRx.IsMatch(text) || FrameRx.IsMatch(name))
             {
                 return Build(part, view, GaPartType.BoughtOut, GaPartFamily.BoughtOut, BomPartKind.Unknown, "Bought-out item.");
             }
@@ -325,6 +330,12 @@ namespace CadToCode.Business.Services
             if (FlatBarRx.IsMatch(text))
             {
                 return GaPartType.FlatBar;
+
+            }
+
+            if (FrameRx.IsMatch(text))
+            {
+                return GaPartType.Ismc;
             }
 
             if (RoundBarRx.IsMatch(text))
