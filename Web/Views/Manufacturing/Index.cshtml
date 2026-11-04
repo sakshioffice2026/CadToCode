@@ -59,9 +59,36 @@
             </div>
 
             <div class="d-flex align-items-center gap-3 mt-3">
-                <button type="submit" class="cc-btn cc-btn-primary" data-cc-submit>Upload and break down</button>
+                <button type="submit" class="cc-btn cc-btn-primary" data-cc-submit>Upload GA DXF</button>
+                <span id="mfg-upload-spinner" class="spinner-border spinner-border-sm" role="status" aria-hidden="true" hidden></span>
             </div>
         </form>
+
+        <div id="mfg-alerts" aria-live="polite"></div>
+
+        <div id="mfg-upload-status" class="alert alert-success" role="status" hidden></div>
+
+        <section id="mfg-generate-section" class="card card-body mb-4" @(Model.SelectedProjectId.HasValue ? "" : "hidden")>
+            @Html.AntiForgeryToken()
+            <input type="hidden" id="mfg-generate-project-id" value="@(Model.SelectedProjectId?.ToString(CultureInfo.InvariantCulture) ?? string.Empty)" />
+
+            <h2 class="h5 mb-2">Manufacturing drawings</h2>
+            <p class="text-body-secondary mb-3">Split the general arrangement into one DXF per component layer.</p>
+
+            <div class="d-flex flex-wrap align-items-center gap-2">
+                <button type="button" id="mfg-generate-btn" class="btn btn-primary"
+                        data-generate-url="@Url.Action("GenerateManufacturingDrawings", "Manufacturing")">
+                    <span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true" hidden></span>
+                    <span class="mfg-generate-label">Generate Manufacturing Drawings</span>
+                </button>
+                <a id="mfg-open-breakdown" class="btn btn-outline-secondary" href="#" hidden>Open breakdown</a>
+            </div>
+
+            <div id="mfg-results" class="mt-4" hidden>
+                <h3 class="h6">Generated drawings (<span id="mfg-results-count">0</span>)</h3>
+                <ul id="mfg-results-list" class="list-group"></ul>
+            </div>
+        </section>
     </div>
 </div>
 
@@ -405,5 +432,179 @@ else
                 }
             });
         })();
+    </script>
+
+    <script>
+        $(function () {
+            var $uploadForm = $('form[data-cc-upload-form]');
+            var $alerts = $('#mfg-alerts');
+            var $status = $('#mfg-upload-status');
+            var $section = $('#mfg-generate-section');
+            var $projectId = $('#mfg-generate-project-id');
+            var $btn = $('#mfg-generate-btn');
+            var $results = $('#mfg-results');
+            var $list = $('#mfg-results-list');
+            var $count = $('#mfg-results-count');
+            var $openLink = $('#mfg-open-breakdown');
+            var indexUrl = '@Url.Action("Index", "Manufacturing")';
+
+            function showError(message) {
+                var $alert = $('<div class="alert alert-danger alert-dismissible fade show" role="alert"></div>');
+                $alert.append($('<span></span>').text(message || 'Something went wrong. Please try again.'));
+                $alert.append('<button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>');
+                $alerts.empty().append($alert);
+            }
+
+            function clearError() {
+                $alerts.empty();
+            }
+
+            function setOpenLink(id) {
+                $openLink.attr('href', indexUrl + '?id=' + encodeURIComponent(id)).prop('hidden', false);
+            }
+
+            if ($projectId.val()) {
+                setOpenLink($projectId.val());
+            }
+
+            function projectIdFromUrl(url) {
+                if (!url) { return null; }
+                var match = /\/Manufacturing\/Index\/(\d+)/i.exec(url) || /[?&]id=(\d+)/i.exec(url);
+                return match ? match[1] : null;
+            }
+
+            $uploadForm.on('submit', function (event) {
+                event.preventDefault();
+                event.stopImmediatePropagation();
+
+                var fileInput = $uploadForm.find('input[type="file"]')[0];
+
+                if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+                    showError('Please choose a DXF file to upload.');
+                    return;
+                }
+
+                var $submit = $uploadForm.find('[data-cc-submit]');
+                var $spinner = $('#mfg-upload-spinner');
+
+                clearError();
+                $status.prop('hidden', true);
+                $submit.prop('disabled', true);
+                $spinner.prop('hidden', false);
+
+                var formData = new FormData();
+                formData.append('file', fileInput.files[0]);
+                formData.append('__RequestVerificationToken', $uploadForm.find('input[name="__RequestVerificationToken"]').val());
+
+                $.ajax({
+                    url: $uploadForm.attr('action'),
+                    type: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    dataType: 'html'
+                }).done(function (html, textStatus, xhr) {
+                    var id = projectIdFromUrl(xhr.responseURL);
+                    var $dom = $('<div></div>').append($.parseHTML(html, false));
+
+                    if (!id) {
+                        var message = $.trim($dom.find('.cc-alert-error').first().text());
+                        showError(message || 'The drawing could not be processed.');
+                        return;
+                    }
+
+                    var parts = $.trim($dom.find('.cc-mfg-stat-value').eq(0).text());
+
+                    $projectId.val(id);
+                    setOpenLink(id);
+                    $status.text('Extraction complete' + (parts ? ': ' + parts + ' unique part(s) recognised.' : '.')).prop('hidden', false);
+                    $results.prop('hidden', true);
+                    $list.empty();
+                    $section.prop('hidden', false);
+                }).fail(function (xhr) {
+                    var message = (xhr.responseJSON && xhr.responseJSON.error) || 'The upload could not be processed.';
+                    showError(message);
+                }).always(function () {
+                    $submit.prop('disabled', false);
+                    $spinner.prop('hidden', true);
+                });
+            });
+
+            $btn.on('click', function () {
+                var id = $projectId.val();
+
+                if (!id) {
+                    showError('Upload a GA DXF first.');
+                    return;
+                }
+
+                var $spin = $btn.find('.spinner-border');
+                var $label = $btn.find('.mfg-generate-label');
+                var originalLabel = $label.text();
+
+                clearError();
+                $btn.prop('disabled', true);
+                $spin.prop('hidden', false);
+                $label.text('Generating...');
+
+                $.ajax({
+                    url: $btn.data('generate-url'),
+                    type: 'POST',
+                    dataType: 'json',
+                    data: {
+                        id: id,
+                        __RequestVerificationToken: $section.find('input[name="__RequestVerificationToken"]').val()
+                    }
+                }).done(function (data) {
+                    var files = (data && data.files) || [];
+
+                    $list.empty();
+
+                    if (files.length === 0) {
+                        $results.prop('hidden', true);
+                        showError('No manufacturing drawings were generated.');
+                        return;
+                    }
+
+                    $.each(files, function (_, file) {
+                        var $item = $('<li class="list-group-item d-flex justify-content-between align-items-center gap-3"></li>');
+                        var $info = $('<div></div>');
+
+                        $info.append($('<div class="fw-semibold"></div>').text(file.part));
+                        $info.append($('<small class="text-body-secondary"></small>').text('Layer ' + file.layer + ' - ' + file.entityCount + ' entities - ' + file.dxfFileName));
+
+                        var $actions = $('<div class="d-flex flex-wrap gap-2"></div>');
+
+                        $actions.append($('<a class="btn btn-sm btn-outline-primary"></a>')
+                            .attr('href', file.dxfDownloadUrl)
+                            .attr('download', file.dxfFileName)
+                            .text('Download DXF'));
+
+                        if (file.pdfDownloadUrl) {
+                            $actions.append($('<a class="btn btn-sm btn-outline-danger"></a>')
+                                .attr('href', file.pdfDownloadUrl)
+                                .attr('download', file.pdfFileName)
+                                .text('Download PDF'));
+                        } else {
+                            $actions.append($('<button type="button" class="btn btn-sm btn-outline-secondary" disabled></button>')
+                                .attr('title', 'The PDF sheet could not be generated for this part.')
+                                .text('PDF unavailable'));
+                        }
+
+                        $item.append($info).append($actions);
+                        $list.append($item);
+                    });
+
+                    $count.text(files.length);
+                    $results.prop('hidden', false);
+                }).fail(function (xhr) {
+                    showError((xhr.responseJSON && xhr.responseJSON.error) || 'The manufacturing drawings could not be generated.');
+                }).always(function () {
+                    $btn.prop('disabled', false);
+                    $spin.prop('hidden', true);
+                    $label.text(originalLabel);
+                });
+            });
+        });
     </script>
 }

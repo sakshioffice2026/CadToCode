@@ -36,35 +36,39 @@ public class ManufacturingController : Controller
     private readonly ReferenceCalloutCatalog _referenceCatalog;
     private readonly IConfiguration _configuration;
     private readonly IComponentDecomposer _decomposer;
-
+    private readonly IDxfGeometryParser _dxfParser;
+    private readonly IWebHostEnvironment _environment;
     public ManufacturingController(
- IProjectProcessingService processingService,
- IBlockBreakdownService breakdownService,
- ILogger<ManufacturingController> logger,
- IPartManufacturingDxfService manufacturingDxfService,
- ParametricPartSheetService parametricSheets,
- GaManufacturingPipeline gaPipeline,
- IUnitOfWork unitOfWork,
- IFileStorageService storage,
- IEnumerable<IGeometryExtractor> extractors,
- IComponentDecomposer decomposer,
- ReferenceCalloutCatalog referenceCatalog,
- IConfiguration configuration)
-    {
-        _processingService = processingService;
-        _breakdownService = breakdownService;
-        _logger = logger;
-        _manufacturingDxfService = manufacturingDxfService;
-        _parametricSheets = parametricSheets;
-        _gaPipeline = gaPipeline;
-        _unitOfWork = unitOfWork;
-        _storage = storage;
-        _extractors = extractors;
-        _decomposer = decomposer;
-        _referenceCatalog = referenceCatalog;
-        _configuration = configuration;
-    }
-
+            IProjectProcessingService processingService,
+            IBlockBreakdownService breakdownService,
+            ILogger<ManufacturingController> logger,
+            IPartManufacturingDxfService manufacturingDxfService,
+            ParametricPartSheetService parametricSheets,
+            GaManufacturingPipeline gaPipeline,
+            IUnitOfWork unitOfWork,
+            IFileStorageService storage,
+            IEnumerable<IGeometryExtractor> extractors,
+            IComponentDecomposer decomposer,
+            ReferenceCalloutCatalog referenceCatalog,
+            IConfiguration configuration,
+            IDxfGeometryParser dxfParser,
+            IWebHostEnvironment environment)
+                {
+                    _processingService = processingService;
+                    _breakdownService = breakdownService;
+                    _logger = logger;
+                    _manufacturingDxfService = manufacturingDxfService;
+                    _parametricSheets = parametricSheets;
+                    _gaPipeline = gaPipeline;
+                    _unitOfWork = unitOfWork;
+                    _storage = storage;
+                    _extractors = extractors;
+                    _decomposer = decomposer;
+                    _referenceCatalog = referenceCatalog;
+                    _configuration = configuration;
+                    _dxfParser = dxfParser;
+                    _environment = environment;
+                }
     [HttpGet]
     public async Task<IActionResult> Index(int? id, CancellationToken cancellationToken)
     {
@@ -289,6 +293,163 @@ public class ManufacturingController : Controller
 
     }
 
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> GenerateManufacturingDrawings(
+    int id,
+    string? projectCode = null,
+    string? material = null,
+    CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var storedPath = await _unitOfWork.Projects.GetStoredFilePathAsync(id, cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(storedPath))
+            {
+                return NotFound(new { error = "The stored drawing file is missing." });
+            }
+
+            var breakdown = await _breakdownService.BuildBreakdownAsync(id, cancellationToken);
+
+            if (breakdown is null || !breakdown.Success)
+            {
+                return BadRequest(new { error = breakdown?.ErrorMessage ?? "The drawing could not be analysed." });
+            }
+
+            var requests = (breakdown.Parts ?? new List<BlockPartDto>())
+                .Where(p => p is not null && !string.IsNullOrWhiteSpace(p.Layer))
+                .GroupBy(p => p.Layer!, StringComparer.OrdinalIgnoreCase)
+                .Select(g => new DxfPartRequest(
+                    string.IsNullOrWhiteSpace(g.First().BlockName) ? g.Key : g.First().BlockName,
+                    g.Key))
+                .ToList();
+
+            if (requests.Count == 0)
+            {
+                return UnprocessableEntity(new { error = "No component layers were found in the drawing." });
+            }
+
+            await using var stream = await _storage.OpenReadAsync(storedPath, cancellationToken);
+
+            if (stream is null)
+            {
+                return NotFound(new { error = "The stored drawing file could not be opened." });
+            }
+
+            var buffer = new MemoryStream();
+            await stream.CopyToAsync(buffer, cancellationToken);
+            buffer.Position = 0;
+
+            var outputFolder = Path.Combine(
+                _environment.ContentRootPath,
+                "App_Data",
+                "manufacturing",
+                id.ToString(CultureInfo.InvariantCulture));
+
+            if (Directory.Exists(outputFolder))
+            {
+                foreach (var oldFile in Directory.GetFiles(outputFolder, "*.dxf")
+                    .Concat(Directory.GetFiles(outputFolder, "*.pdf")))
+                {
+                    System.IO.File.Delete(oldFile);
+                }
+            }
+
+            var sheetOptions = new DxfSheetOptions(
+                breakdown.ProjectTitle,
+                material,
+                string.IsNullOrWhiteSpace(projectCode)
+                    ? "PRJ-" + id.ToString("D5", CultureInfo.InvariantCulture)
+                    : projectCode.Trim());
+
+            var generated = await Task.Run(
+                () => _dxfParser.SplitByLayers(buffer, requests, outputFolder, cancellationToken, sheetOptions),
+                cancellationToken);
+
+            if (generated.Count == 0)
+            {
+                return UnprocessableEntity(new { error = "No component drawing could be generated from the layers." });
+            }
+
+            await _unitOfWork.Projects.TouchLastOpenedAsync(id, cancellationToken);
+            await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+            var files = generated.Select(g =>
+            {
+                var dxfName = Path.GetFileName(g.FilePath);
+                var pdfName = string.IsNullOrWhiteSpace(g.PdfFilePath) ? null : Path.GetFileName(g.PdfFilePath);
+
+                return new
+                {
+                    part = g.PartName,
+                    layer = g.Layer,
+                    entityCount = g.EntityCount,
+                    dxfFileName = dxfName,
+                    dxfDownloadUrl = Url.Action(
+                        nameof(DownloadGeneratedFile),
+                        "Manufacturing",
+                        new { id, fileName = dxfName }),
+                    pdfFileName = pdfName,
+                    pdfDownloadUrl = pdfName is null
+                        ? null
+                        : Url.Action(
+                            nameof(DownloadGeneratedFile),
+                            "Manufacturing",
+                            new { id, fileName = pdfName })
+                };
+            }).ToList();
+
+            return Json(new
+            {
+                projectId = id,
+                count = files.Count,
+                pdfCount = files.Count(f => f.pdfFileName is not null),
+                files
+            });
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Manufacturing drawing generation failed for project {ProjectId}.", id);
+            return StatusCode(500, new { error = "The manufacturing drawings could not be generated." });
+        }
+    }
+
+    [HttpGet]
+    public IActionResult DownloadGeneratedFile(int id, string fileName)
+    {
+        var safeName = Path.GetFileName(fileName ?? string.Empty);
+        var extension = Path.GetExtension(safeName);
+
+        var isDxf = string.Equals(extension, ".dxf", StringComparison.OrdinalIgnoreCase);
+        var isPdf = string.Equals(extension, ".pdf", StringComparison.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(safeName) || (!isDxf && !isPdf))
+        {
+            return BadRequest();
+        }
+
+        var folder = Path.GetFullPath(Path.Combine(
+            _environment.ContentRootPath,
+            "App_Data",
+            "manufacturing",
+            id.ToString(CultureInfo.InvariantCulture)));
+
+        var fullPath = Path.GetFullPath(Path.Combine(folder, safeName));
+
+        if (!fullPath.StartsWith(folder + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+            || !System.IO.File.Exists(fullPath))
+        {
+            return NotFound();
+        }
+
+        return PhysicalFile(fullPath, isPdf ? "application/pdf" : "application/dxf", safeName);
+    }
     [HttpPost]
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> GaReport(

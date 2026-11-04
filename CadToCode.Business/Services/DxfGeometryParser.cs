@@ -180,16 +180,40 @@ public sealed class DxfParseResult
     }
 }
 
+public sealed record DxfPartRequest(string PartName, string Layer);
+
+public sealed record DxfPartFileResult(string PartName, string Layer, string FilePath, int EntityCount, string? PdfFilePath = null);
+
+public sealed record DxfSheetOptions(
+    string? ProjectName,
+    string? Material,
+    string? DrawingNumberPrefix,
+    PdfPaperSize PaperSize = PdfPaperSize.A3Landscape);
+
 public interface IDxfGeometryParser
 {
     Task<DxfParseResult> ParseAsync(Stream dxfStream, CancellationToken cancellationToken = default);
 
     DxfParseResult Parse(Stream dxfStream, CancellationToken cancellationToken = default);
+
+    IReadOnlyList<DxfPartFileResult> SplitByLayers(
+        Stream dxfStream,
+        IEnumerable<DxfPartRequest> parts,
+        string outputFolder,
+        CancellationToken cancellationToken = default,
+        DxfSheetOptions? sheetOptions = null);
 }
 
 public sealed class DxfGeometryParser : IDxfGeometryParser
 {
     private const double Epsilon = 1e-9;
+
+    private readonly IPdfDrawingSheetService? _pdfSheetService;
+
+    public DxfGeometryParser(IPdfDrawingSheetService? pdfSheetService = null)
+    {
+        _pdfSheetService = pdfSheetService;
+    }
 
     public async Task<DxfParseResult> ParseAsync(Stream dxfStream, CancellationToken cancellationToken = default)
     {
@@ -390,6 +414,245 @@ public sealed class DxfGeometryParser : IDxfGeometryParser
             MaxX = maxX,
             MaxY = maxY
         };
+    }
+
+    public IReadOnlyList<DxfPartFileResult> SplitByLayers(
+        Stream dxfStream,
+        IEnumerable<DxfPartRequest> parts,
+        string outputFolder,
+        CancellationToken cancellationToken = default,
+        DxfSheetOptions? sheetOptions = null)
+    {
+        if (dxfStream is null)
+        {
+            throw new ArgumentNullException(nameof(dxfStream));
+        }
+
+        if (parts is null)
+        {
+            throw new ArgumentNullException(nameof(parts));
+        }
+
+        if (string.IsNullOrWhiteSpace(outputFolder))
+        {
+            throw new ArgumentException("Output folder is required.", nameof(outputFolder));
+        }
+
+        var document = LoadDocument(dxfStream);
+
+        Directory.CreateDirectory(outputFolder);
+
+        var results = new List<DxfPartFileResult>();
+        var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var part in parts)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (part is null || string.IsNullOrWhiteSpace(part.Layer))
+            {
+                continue;
+            }
+
+            var entities = CollectLayerEntities(document, part.Layer);
+
+            if (entities.Count == 0)
+            {
+                continue;
+            }
+
+            var partDocument = new DxfDocument();
+            partDocument.DrawingVariables.InsUnits = document.DrawingVariables.InsUnits;
+
+            var added = 0;
+
+            foreach (var entity in entities)
+            {
+                if (entity.Clone() is EntityObject copy)
+                {
+                    partDocument.Entities.Add(copy);
+                    added++;
+                }
+            }
+
+            if (added == 0)
+            {
+                continue;
+            }
+
+            var baseName = SanitizeFileName(part.PartName);
+            var uniqueName = baseName;
+            var counter = 2;
+
+            while (!usedNames.Add(uniqueName))
+            {
+                uniqueName = baseName + "_" + counter.ToString(CultureInfo.InvariantCulture);
+                counter++;
+            }
+
+            var filePath = Path.Combine(outputFolder, uniqueName + ".dxf");
+
+            if (!partDocument.Save(filePath))
+            {
+                continue;
+            }
+
+            string? pdfPath = null;
+
+            if (_pdfSheetService is not null)
+            {
+                pdfPath = TryRenderPdf(filePath, uniqueName, part, sheetOptions, cancellationToken);
+            }
+
+            results.Add(new DxfPartFileResult(part.PartName, part.Layer, filePath, added, pdfPath));
+        }
+
+        return results;
+    }
+
+    private string? TryRenderPdf(
+        string dxfPath,
+        string uniqueName,
+        DxfPartRequest part,
+        DxfSheetOptions? options,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            DxfParseResult geometry;
+
+            using (var dxfStream = new FileStream(dxfPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+            {
+                geometry = Parse(dxfStream, cancellationToken);
+            }
+
+            var metadata = new PdfSheetMetadata(
+                part.PartName,
+                options?.ProjectName,
+                BuildDrawingNumber(options?.DrawingNumberPrefix, uniqueName),
+                options?.Material,
+                DateTime.Today,
+                part.Layer);
+
+            var pdfPath = Path.ChangeExtension(dxfPath, ".pdf");
+
+            _pdfSheetService!.RenderToFile(
+                geometry,
+                metadata,
+                pdfPath,
+                options?.PaperSize ?? PdfPaperSize.A3Landscape);
+
+            return pdfPath;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string BuildDrawingNumber(string? prefix, string name)
+    {
+        return string.IsNullOrWhiteSpace(prefix)
+            ? name
+            : prefix.Trim() + "-" + name;
+    }
+
+    public static string SanitizeFileName(string? name)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var sb = new StringBuilder();
+
+        foreach (var ch in name ?? string.Empty)
+        {
+            sb.Append(char.IsControl(ch) || Array.IndexOf(invalid, ch) >= 0 ? '_' : ch);
+        }
+
+        var cleaned = sb.ToString().Trim().TrimEnd('.', ' ');
+
+        if (cleaned.Length > 100)
+        {
+            cleaned = cleaned.Substring(0, 100).TrimEnd('.', ' ');
+        }
+
+        if (cleaned.Length == 0)
+        {
+            return "part";
+        }
+
+        var reserved = new[]
+        {
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        };
+
+        if (Array.IndexOf(reserved, cleaned.ToUpperInvariant()) >= 0)
+        {
+            cleaned = "_" + cleaned;
+        }
+
+        return cleaned;
+    }
+
+    private static DxfDocument LoadDocument(Stream dxfStream)
+    {
+        DxfDocument? document;
+
+        try
+        {
+            document = DxfDocument.Load(dxfStream);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException("The DXF file could not be read: " + ex.Message, ex);
+        }
+
+        if (document is null)
+        {
+            throw new InvalidOperationException("The DXF file could not be read. Export it again as ASCII or binary DXF (AutoCAD R12 or newer).");
+        }
+
+        return document;
+    }
+
+    private static List<EntityObject> CollectLayerEntities(DxfDocument document, string layer)
+    {
+        var result = new List<EntityObject>();
+        var entities = document.Entities;
+
+        if (entities is null)
+        {
+            return result;
+        }
+
+        AddLayerMatches(result, entities.Lines, layer);
+        AddLayerMatches(result, entities.Polylines2D, layer);
+        AddLayerMatches(result, entities.Circles, layer);
+        AddLayerMatches(result, entities.Arcs, layer);
+
+        return result;
+    }
+
+    private static void AddLayerMatches<T>(List<EntityObject> target, IEnumerable<T>? source, string layer)
+        where T : EntityObject
+    {
+        if (source is null)
+        {
+            return;
+        }
+
+        foreach (var entity in source)
+        {
+            if (entity is not null
+                && string.Equals(LayerName(entity), layer, StringComparison.OrdinalIgnoreCase))
+            {
+                target.Add(entity);
+            }
+        }
     }
 
     private static string LayerName(EntityObject entity)

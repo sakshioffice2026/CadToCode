@@ -123,7 +123,7 @@ builder.Services.AddScoped<IDefinitionLearningService, DefinitionLearningService
 builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();
 builder.Services.AddScoped<IDesignStateService, DesignStateService>();
 builder.Services.AddSingleton<IStepScriptRunner, StepScriptRunner>();
-
+builder.Services.AddSingleton<IPdfDrawingSheetService, PdfDrawingSheetService>();
 builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>();
 builder.Services.AddSingleton<IVectorStoreService, QdrantVectorStoreService>();
 builder.Services.AddSingleton<IProjectHistoryIndex, QdrantProjectHistoryIndex>();
