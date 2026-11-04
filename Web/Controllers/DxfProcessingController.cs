@@ -334,17 +334,21 @@ public class DxfProcessingController : Controller
     }
 
     private static bool IsSupported(EntityObject e) =>
-        e is Line || e is Polyline2D || e is Polyline3D || e is Circle || e is Arc ||
-        e is Ellipse || e is Spline || e is Text || e is MText || e is netDxf.Entities.Point;
-
+    e is Line || e is Polyline2D || e is Polyline3D || e is Circle || e is Arc ||
+    e is Ellipse || e is Spline || e is Text || e is MText || e is netDxf.Entities.Point ||
+    e is Hatch || e is Solid;
     private static void Flatten(EntityObject e, List<EntityObject> output, int depth)
     {
         if (e is Insert ins)
         {
-            if (depth > 5) return;
+            if (depth > 10) return;
             List<EntityObject> sub;
             try { sub = ins.Explode(); } catch { return; }
-            foreach (var s in sub) Flatten(s, output, depth + 1);
+            foreach (var s in sub)
+            {
+                if (s.Layer.Name == "0") s.Layer = ins.Layer;
+                Flatten(s, output, depth + 1);
+            }
         }
         else output.Add(e);
     }
@@ -599,6 +603,9 @@ public class DxfProcessingController : Controller
                 var r = Math.Max(el.MajorAxis, el.MinorAxis);
                 b.Add(el.Center.X - r, el.Center.Y - r); b.Add(el.Center.X + r, el.Center.Y + r); break;
             case Polyline2D p2: foreach (var v in p2.Vertexes) b.Add(v.Position.X, v.Position.Y); break;
+            case Solid so:
+                b.Add(so.FirstVertex.X, so.FirstVertex.Y); b.Add(so.SecondVertex.X, so.SecondVertex.Y);
+                b.Add(so.ThirdVertex.X, so.ThirdVertex.Y); b.Add(so.FourthVertex.X, so.FourthVertex.Y); break;
             case Polyline3D p3: foreach (var v in p3.Vertexes) b.Add(v.X, v.Y); break;
             case Text t: b.Add(t.Position.X, t.Position.Y); break;
             case MText m: b.Add(m.Position.X, m.Position.Y); break;
@@ -688,14 +695,46 @@ public class DxfProcessingController : Controller
         if (e.Clone() is EntityObject copy) list.Add(copy);
     }
 
+    private static List<EntityObject> DropOutliers(List<EntityObject> items)
+    {
+        var cx = new List<double>();
+        var cy = new List<double>();
+        foreach (var e in items)
+        {
+            var b = BoxOf(e);
+            if (!b.Valid) continue;
+            cx.Add((b.MinX + b.MaxX) / 2);
+            cy.Add((b.MinY + b.MaxY) / 2);
+        }
+        if (cx.Count < 10) return items;
+        cx.Sort();
+        cy.Sort();
+        double P(List<double> v, double q) => v[(int)Math.Round((v.Count - 1) * q)];
+        double x0 = P(cx, 0.1), x1 = P(cx, 0.9), y0 = P(cy, 0.1), y1 = P(cy, 0.9);
+        double sx = Math.Max(x1 - x0, 1), sy = Math.Max(y1 - y0, 1);
+        var res = new List<EntityObject>();
+        foreach (var e in items)
+        {
+            var b = BoxOf(e);
+            if (!b.Valid) { res.Add(e); continue; }
+            var mx = (b.MinX + b.MaxX) / 2;
+            var my = (b.MinY + b.MaxY) / 2;
+            if (mx < x0 - sx || mx > x1 + sx || my < y0 - sy || my > y1 + sy) continue;
+            res.Add(e);
+        }
+        return res.Count > 0 ? res : items;
+    }
+
     // ----------------------------------------------------------------- sheet
 
     private static int BuildSheet(DxfDocument doc, List<EntityObject> items, string partName, string drgNo, string gaFile)
     {
+        items = DropOutliers(items);
         var bounds = new Box();
-        foreach (var e in items) bounds.Add(BoxOf(e));
+        foreach (var e in items)
+            if (e is not netDxf.Entities.Point) bounds.Add(BoxOf(e));
+        if (!bounds.Valid) foreach (var e in items) bounds.Add(BoxOf(e));
         if (!bounds.Valid) { bounds.Add(0, 0); bounds.Add(100, 100); }
-
         var w = bounds.MaxX - bounds.MinX;
         var h = bounds.MaxY - bounds.MinY;
         var sc = Math.Max(Math.Max(w, h), 1.0);

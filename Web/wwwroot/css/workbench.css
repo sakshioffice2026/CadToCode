@@ -922,4 +922,57 @@ dialog.cc-modal[open].is-closing::backdrop {
     .cc-tool-btn {
         transition: none;
     }
+
+    /* ---------- Manufacturing Drawings page ---------- */
+
+    #reviewSection .table {
+        --bs-table-bg: transparent;
+        --bs-table-color: var(--cc-ink);
+        --bs-table-border-color: var(--cc-line);
+        color: var(--cc-ink);
+    }
+
+    #reviewBody td {
+        color: var(--cc-ink);
+    }
+
+        #reviewBody td:nth-child(2) {
+            color: var(--cc-ink-soft);
+            font-size: 0.8rem;
+            letter-spacing: 0.04em;
+        }
+
+    #reviewBody .text-muted {
+        color: var(--cc-cyan) !important;
+        font-family: var(--cc-font-mono);
+        font-size: 0.75rem;
+    }
+
+    #reviewSection .form-control,
+    #reviewSection .form-select {
+        background: var(--cc-surface-sunken);
+        border: 1px solid var(--cc-line-strong);
+        color: var(--cc-ink);
+    }
+
+        #reviewSection .form-control:focus,
+        #reviewSection .form-select:focus {
+            border-color: var(--cc-accent);
+            box-shadow: 0 0 0 0.2rem var(--cc-accent-soft);
+        }
+
+    #resultsSection .list-group {
+        border-radius: var(--cc-radius-sm);
+        overflow: hidden;
+    }
+
+    #resultsSection .list-group-item {
+        background: var(--cc-surface-raised);
+        border-color: var(--cc-line);
+        color: var(--cc-ink);
+    }
+
+        #resultsSection .list-group-item:hover {
+            background: rgba(255, 122, 89, 0.06);
+        }
 }
