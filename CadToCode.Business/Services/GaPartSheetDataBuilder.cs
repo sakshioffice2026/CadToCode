@@ -6,7 +6,7 @@ namespace CadToCode.Business.Services
 {
     public sealed class GaSheetData
     {
-        public int ItemNo { get; init; }
+        public int ItemNo { get; set; }
 
         public GaManufacturingCategory Category { get; init; }
 
@@ -20,9 +20,28 @@ namespace CadToCode.Business.Services
 
         public PartBomItem Item { get; init; } = new();
 
-        public SheetFrameRequest Frame { get; init; } = new();
+        public SheetFrameRequest Frame { get; set; } = new();
 
-        public string DrawingNo { get; init; } = string.Empty;
+        public string DrawingNo { get; set; } = string.Empty;
+
+        /// <summary>Gives the sheet its final sequential number. Called only for sheets that are about to be generated.</summary>
+        public void AssignNumber(int number, string? projectCode)
+        {
+            var job = string.IsNullOrWhiteSpace(projectCode) ? string.Empty : projectCode.Trim();
+            var text = number.ToString("00", CultureInfo.InvariantCulture);
+            var drawingNo = job.Length > 0 ? job + "-" + text : text;
+
+            ItemNo = number;
+            DrawingNo = drawingNo;
+            Item.ItemNo = number;
+            Frame = new SheetFrameRequest
+            {
+                JobNo = job,
+                DrawingNo = drawingNo,
+                Title = Name,
+                Date = Frame.Date
+            };
+        }
 
         public string Material { get; init; } = string.Empty;
 
@@ -76,11 +95,24 @@ namespace CadToCode.Business.Services
 
             foreach (var profile in profiles)
             {
-                if (profile.Skipped
-                    || profile.Classification.Family == GaPartFamily.BoughtOut
-                    || profile.Classification.Family == GaPartFamily.RolledSection
-                    || profile.Classification.Family == GaPartFamily.Unknown)
+                var partName = profile.Classification.Part.Name;
+
+                if (profile.Classification.Family == GaPartFamily.Unknown)
                 {
+                    report.Error("SHEET_UNKNOWN_PART", partName, "The part type could not be identified. No drawing was generated.");
+                    continue;
+                }
+
+                if (profile.Classification.Family == GaPartFamily.BoughtOut
+                    || profile.Classification.Family == GaPartFamily.RolledSection)
+                {
+                    report.Info("SHEET_CUTLIST_ONLY", partName, "Listed in the cut list. No drawing sheet is made for this part.");
+                    continue;
+                }
+
+                if (profile.Skipped)
+                {
+                    report.Error("SHEET_PROFILE_SKIPPED", partName, "The profile was skipped: " + profile.Message);
                     continue;
                 }
 
@@ -99,6 +131,11 @@ namespace CadToCode.Business.Services
 
                 if (item is null)
                 {
+                    var reason = profile.Classification.Family == GaPartFamily.Developed
+                        ? (flat is null ? "No flat pattern was resolved." : flat.Message)
+                        : profile.Message;
+
+                    report.Error("SHEET_NO_GEOMETRY", partName, "No drawing was generated. " + reason);
                     continue;
                 }
 
@@ -398,6 +435,30 @@ namespace CadToCode.Business.Services
             if (!trueArea)
             {
                 data.Notes.Add("Finish weight uses the bounding rectangle " + Fmt(length) + " x " + Fmt(width) + " mm, not the true area.");
+            }
+
+            var outerDiameter = item.OuterDiameterMm ?? 0.0;
+            var roundTolerance = Math.Max(1.0, outerDiameter * 0.01);
+
+            if (!layoutReplaced
+                && outerDiameter > 0.0
+                && Math.Abs(length - outerDiameter) <= roundTolerance
+                && Math.Abs(width - outerDiameter) <= roundTolerance)
+            {
+                var rawDiameter = outerDiameter + DiscAllowanceMm;
+                var innerDiameter = item.InnerDiameterMm ?? 0.0;
+
+                if (!trueArea)
+                {
+                    area = innerDiameter > 0.0
+                        ? Math.PI / 4.0 * (outerDiameter * outerDiameter - innerDiameter * innerDiameter)
+                        : Math.PI / 4.0 * outerDiameter * outerDiameter;
+                }
+
+                data.FinishWeightKg = rules.PlateWeightKg(area, thk);
+                data.RmWeightKg = rules.DiscWeightKg(rawDiameter, thk);
+                data.RmSize = "%%C" + Fmt(rawDiameter) + " X " + Fmt(thk);
+                return;
             }
 
             var rawWidth = length + PlateAllowanceMm;

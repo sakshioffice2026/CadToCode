@@ -54,6 +54,7 @@ namespace CadToCode.Business.Services
         private const double RadialSpreadMm = 0.5;
         private const double RadialSpreadFraction = 0.002;
         private const double ArcStepDegrees = 5.0;
+        private const double StripAspectRatio = 6.0;
 
         private static readonly string[] ExcludedLayerMarkers =
         {
@@ -464,6 +465,36 @@ namespace CadToCode.Business.Services
 
                 report.Info("PROFILE_RECTANGLE", part.Name, Fmt(result.WidthMm) + " x " + Fmt(result.HeightMm) + " mm plain rectangle.");
                 return;
+            }
+
+            if (classification.Family == GaPartFamily.Ring && rectangle && holes.Count == 0 && inner.Count == 0)
+            {
+                var longSide = Math.Max(result.WidthMm, result.HeightMm);
+                var shortSide = Math.Min(result.WidthMm, result.HeightMm);
+
+                if (shortSide > 0.0 && longSide / shortSide >= StripAspectRatio)
+                {
+                    var diameter = Math.Round(longSide, 2);
+
+                    item.Kind = classification.BomKind == BomPartKind.Hub ? BomPartKind.Hub : BomPartKind.Flange;
+                    item.OuterDiameterMm = diameter;
+                    item.InnerDiameterMm = null;
+                    item.LengthMm = diameter;
+                    item.WidthMm = diameter;
+                    item.Profile = null;
+
+                    result.WidthMm = diameter;
+                    result.HeightMm = diameter;
+                    result.AreaMm2 = Math.Round(Math.PI / 4.0 * diameter * diameter, 1);
+                    result.Item = item;
+
+                    report.Warn(
+                        "PROFILE_STRIP_AS_DISC",
+                        part.Name,
+                        "Only a side view of this round part exists in the GA. Diameter " + Fmt(diameter)
+                        + " mm was taken from its length. Bore and holes are not available.");
+                    return;
+                }
             }
 
             item.Kind = BomPartKind.ProfilePlate;

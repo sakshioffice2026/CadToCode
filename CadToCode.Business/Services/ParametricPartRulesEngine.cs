@@ -64,7 +64,9 @@ public sealed class ParametricPartRulesEngine
                 BomPartKind.RectangularPlate => BuildPlate(rules, item, frame, material, thickness, report, name),
                 BomPartKind.RoundBar => BuildBar(rules, item, frame, material, report, name),
                 BomPartKind.RolledRing => BuildRing(rules, item, frame, material, thickness, report, name),
-                BomPartKind.Hub => BuildHub(rules, item, frame, material, thickness, report, name),
+                BomPartKind.Hub when item.SmallDiameterMm is > 0.0 && item.LengthMm is > 0.0
+                    => BuildHub(rules, item, frame, material, thickness, report, name),
+                BomPartKind.Hub => BuildHubAsDisc(rules, item, frame, material, thickness, report, name),
                 BomPartKind.ConeFlatPattern => BuildCone(rules, item, frame, material, thickness, report, name),
                 BomPartKind.ScrollFlatPattern => BuildScroll(rules, item, frame, material, thickness, report, name),
                 BomPartKind.TransitionFlatPattern => BuildTransition(rules, item, frame, material, thickness, report, name),
@@ -189,6 +191,12 @@ public sealed class ParametricPartRulesEngine
             BarThicknessMm = thickness!.Value,
             Frame = frame
         }).Dxf;
+    }
+
+    private DxfFile? BuildHubAsDisc(ManufacturingRules rules, PartBomItem item, SheetFrameRequest frame, string material, double? thickness, GenerationReport report, string name)
+    {
+        report.Warn("HUB_AS_DISC", name, "Boss diameter or boss length is not in the GA. The hub plate was drawn as a plain disc without the boss.");
+        return BuildFlange(rules, item, frame, material, thickness, report, name);
     }
 
     private DxfFile? BuildHub(ManufacturingRules rules, PartBomItem item, SheetFrameRequest frame, string material, double? thickness, GenerationReport report, string name)
@@ -322,6 +330,7 @@ public sealed class ParametricPartRulesEngine
             ThicknessMm = thickness!.Value,
             Profile = item.Profile,
             FinishWeightKg = item.FinishWeightKg,
+            OuterDiameterMm = item.OuterDiameterMm,
             Frame = frame
         }).Dxf;
     }

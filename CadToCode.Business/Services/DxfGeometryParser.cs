@@ -72,6 +72,9 @@ public sealed class DxfParseResult
 
     public IReadOnlyList<string> Warnings { get; init; } = Array.Empty<string>();
 
+    /// <summary>Loose lines and arcs joined end to end into continuous contours (polylines with bulges).</summary>
+    public IReadOnlyList<DxfContour> Contours { get; init; } = Array.Empty<DxfContour>();
+
     public double MinX { get; init; }
 
     public double MinY { get; init; }
@@ -145,6 +148,21 @@ public sealed class DxfParseResult
         }
 
         AppendOmitted(sb, Arcs.Count, cap);
+
+        if (Contours.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("CONTOURS (" + Contours.Count + ") joined from lines and arcs, closed: " + Contours.Count(k => k.IsClosed));
+
+            for (var i = 0; i < Math.Min(cap, Contours.Count); i++)
+            {
+                var c = Contours[i];
+                sb.AppendLine("P" + (i + 1) + ": " + (c.IsClosed ? "closed" : "open") + ", " + c.SegmentCount
+                    + " segments, " + c.Points.Count + " vertices, layer " + c.Layer);
+            }
+
+            AppendOmitted(sb, Contours.Count, cap);
+        }
 
         if (Warnings.Count > 0)
         {
@@ -261,7 +279,39 @@ public sealed class DxfGeometryParser : IDxfGeometryParser
         var skippedNormals = 0;
         var skippedDegenerate = 0;
 
-        foreach (var line in document.Entities.Lines)
+        var sourceLines = new List<Line>(document.Entities.Lines);
+        var sourceArcs = new List<Arc>(document.Entities.Arcs);
+
+        foreach (var poly in document.Entities.Polylines2D)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            List<EntityObject> pieces;
+
+            try
+            {
+                pieces = poly.Explode();
+            }
+            catch (Exception)
+            {
+                skippedDegenerate++;
+                continue;
+            }
+
+            foreach (var piece in pieces)
+            {
+                if (piece is Line pieceLine)
+                {
+                    sourceLines.Add(pieceLine);
+                }
+                else if (piece is Arc pieceArc)
+                {
+                    sourceArcs.Add(pieceArc);
+                }
+            }
+        }
+
+        foreach (var line in sourceLines)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -302,7 +352,7 @@ public sealed class DxfGeometryParser : IDxfGeometryParser
             _ = flipped;
         }
 
-        foreach (var arc in document.Entities.Arcs)
+        foreach (var arc in sourceArcs)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -410,6 +460,7 @@ public sealed class DxfGeometryParser : IDxfGeometryParser
             Circles = circles,
             Arcs = arcs,
             Warnings = warnings,
+            Contours = DxfContourJoiner.Join(lines, arcs, Math.Max(maxX - minX, maxY - minY)),
             MinX = minX,
             MinY = minY,
             MaxX = maxX,

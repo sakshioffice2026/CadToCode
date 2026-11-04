@@ -211,6 +211,11 @@ namespace CadToCode.Business.Services
             var reviewItems = _inference.Infer(components, request.DefaultMaterial, request.DefaultThicknessMm, report);
             result.ReviewItems.AddRange(reviewItems);
 
+            if (!request.ReviewOnly && !request.RequireApproval)
+            {
+                ApplyInferredThickness(reviewItems, profiles, flats, request.ReferenceCallouts, report);
+            }
+
             var pendingRequired = reviewItems.Where(i => i.Required).ToList();
 
             if (request.ReviewOnly || (request.RequireApproval && pendingRequired.Count > 0))
@@ -237,16 +242,30 @@ namespace CadToCode.Business.Services
 
             var fileDtos = new List<PartManufacturingFileDto>();
 
+            var nextNumber = 1;
+
             foreach (var data in sheets)
             {
-                if (data.FinishWeightKg.HasValue && data.Item.Kind == BomPartKind.ProfilePlate)
+                data.AssignNumber(nextNumber, request.ProjectCode);
+
+                if (data.FinishWeightKg.HasValue)
                 {
                     data.Item.FinishWeightKg = data.FinishWeightKg;
                 }
+
                 var sheet = _engine.Generate(rules, data.Item, data.Frame, request.DefaultMaterial, request.DefaultThicknessMm, report);
 
                 if (sheet is null)
                 {
+                    var alreadyReported = report.Issues.Any(i =>
+                        i.Severity == GenerationSeverity.Error
+                        && string.Equals(i.PartName, data.Name, StringComparison.OrdinalIgnoreCase));
+
+                    if (!alreadyReported)
+                    {
+                        report.Error("SHEET_NOT_GENERATED", data.Name, "No drawing sheet was produced for this part.");
+                    }
+
                     continue;
                 }
 
@@ -302,6 +321,8 @@ namespace CadToCode.Business.Services
                     Data = data
                 });
 
+                nextNumber++;
+
                 fileDtos.Add(new PartManufacturingFileDto
                 {
                     PartName = sheet.Name,
@@ -328,6 +349,73 @@ namespace CadToCode.Business.Services
             }
 
             return result;
+        }
+
+        private static void ApplyInferredThickness(
+            IReadOnlyList<GaReviewItem> items,
+            IReadOnlyList<GaProfileResult> profiles,
+            IReadOnlyList<GaFlatPatternResult> flats,
+            IReadOnlyList<ReferenceCalloutEntry> references,
+            GenerationReport report)
+        {
+            foreach (var item in items)
+            {
+                if (!string.Equals(item.Field, GaEngineeringInferenceService.FieldThickness, StringComparison.OrdinalIgnoreCase)
+                    || item.Status == GaReviewStatus.Approved)
+                {
+                    continue;
+                }
+
+                var profile = profiles.FirstOrDefault(p =>
+                    string.Equals(p.Classification.Part.Name, item.PartName, StringComparison.OrdinalIgnoreCase));
+
+                if (profile is null || profile.Classification.Part.ThicknessMm is > 0.0)
+                {
+                    continue;
+                }
+
+                double value;
+                string source;
+
+                if (double.TryParse(item.SuggestedValue, NumberStyles.Float, CultureInfo.InvariantCulture, out value) && value > 0.0)
+                {
+                    source = item.Source.ToString();
+                }
+                else
+                {
+                    var reference = references.FirstOrDefault(r =>
+                        string.Equals(r.Part.Name, item.PartName, StringComparison.OrdinalIgnoreCase)
+                        && r.Part.ThicknessMm is > 0.0);
+
+                    if (reference is null)
+                    {
+                        continue;
+                    }
+
+                    value = reference.Part.ThicknessMm!.Value;
+                    source = "reference drawing " + reference.SourceFile;
+                }
+
+                profile.Classification.Part.ThicknessMm = value;
+
+                if (profile.Item is not null && !profile.Item.ThicknessMm.HasValue)
+                {
+                    profile.Item.ThicknessMm = value;
+                }
+
+                var flat = flats.FirstOrDefault(f => ReferenceEquals(f.Profile, profile));
+
+                if (flat?.Item is not null && !flat.Item.ThicknessMm.HasValue)
+                {
+                    flat.Item.ThicknessMm = value;
+                }
+
+                report.Warn(
+                    "THICKNESS_ASSUMED",
+                    item.PartName,
+                    "Thickness " + value.ToString("0.##", CultureInfo.InvariantCulture)
+                    + " mm is not in the GA callout. Used " + source + ". Check before release.");
+            }
         }
 
         private static string? FindApproved(IReadOnlyList<GaReviewItem> items, string partName, string field)

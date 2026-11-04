@@ -29,6 +29,9 @@ public sealed class ProfilePlateRequest
     /// <summary>Finish weight in kg for one piece. When null the FINISH WT cell shows "-".</summary>
     public double? FinishWeightKg { get; init; }
 
+    /// <summary>Outer diameter of a round outline. When the outline measures this size the raw blank is a disc, not a rectangle.</summary>
+    public double? OuterDiameterMm { get; init; }
+
     public SheetFrameRequest Frame { get; init; } = new();
 }
 
@@ -105,6 +108,20 @@ public sealed class ProfilePartDrawingBuilder
         var rawHeight = heightMm + request.RawMaterialAllowanceMm;
         var rawWeight = rules.PlateWeightKg(rawWidth * rawHeight, request.ThicknessMm);
 
+        double? rawDiameter = null;
+
+        if (request.OuterDiameterMm is > 0.0)
+        {
+            var od = request.OuterDiameterMm.Value;
+            var roundTolerance = Math.Max(1.0, od * 0.01);
+
+            if (Math.Abs(widthMm - od) <= roundTolerance && Math.Abs(heightMm - od) <= roundTolerance)
+            {
+                rawDiameter = od + request.RawMaterialAllowanceMm;
+                rawWeight = rules.DiscWeightKg(rawDiameter.Value, request.ThicknessMm);
+            }
+        }
+
         var frameRequest = request.Frame;
         var frameBuilder = new PartSheetFrameBuilder();
         var probe = frameBuilder.Build(new DxfFile(), rules.Sheet, rules.Tolerance, frameRequest);
@@ -154,7 +171,7 @@ public sealed class ProfilePartDrawingBuilder
             calloutY -= 6.0;
         }
 
-        DrawBom(dxf, rules.Sheet, request, area, rawWidth, rawHeight, rawWeight);
+        DrawBom(dxf, rules.Sheet, request, area, rawWidth, rawHeight, rawWeight, rawDiameter);
 
         return new ProfilePlateResult(dxf, rawWeight, scaleText, widthMm, heightMm);
     }
@@ -303,7 +320,7 @@ public sealed class ProfilePartDrawingBuilder
         };
     }
 
-    private static void DrawBom(DxfFile dxf, SheetRules sheet, ProfilePlateRequest request, SheetFrameResult area, double rawWidth, double rawHeight, double rawWeight)
+    private static void DrawBom(DxfFile dxf, SheetRules sheet, ProfilePlateRequest request, SheetFrameResult area, double rawWidth, double rawHeight, double rawWeight, double? rawDiameter = null)
     {
         var headers = sheet.BomColumns.Count == 4
             ? sheet.BomColumns
@@ -318,7 +335,9 @@ public sealed class ProfilePartDrawingBuilder
         var values = new[]
 {
             request.ItemNo.ToString(CultureInfo.InvariantCulture),
-            Format(Math.Round(rawWidth, 0)) + " X " + Format(Math.Round(rawHeight, 0)) + " X " + Format(request.ThicknessMm),
+            rawDiameter.HasValue
+                ? "%%C" + Format(Math.Round(rawDiameter.Value, 0)) + " X " + Format(request.ThicknessMm)
+                : Format(Math.Round(rawWidth, 0)) + " X " + Format(Math.Round(rawHeight, 0)) + " X " + Format(request.ThicknessMm),
             Format(Math.Round(rawWeight, 2)),
             request.FinishWeightKg.HasValue ? Format(Math.Round(request.FinishWeightKg.Value, 2)) : "-"
         };

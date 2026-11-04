@@ -127,6 +127,10 @@ namespace CadToCode.Business.Services
             @"\bhub\b|\bboss\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        private static readonly Regex ImpellerRx = new(
+            @"\bimpeller\b|\bwheel\b|\brotor\b",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private static readonly Regex FlangeRx = new(
             @"flange|\bring\b|\bdisc\b|\bdisk\b|\bwasher\b",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -199,7 +203,9 @@ namespace CadToCode.Business.Services
             var hasSection = !string.IsNullOrWhiteSpace(part.Section)
                 && !string.Equals(part.Section.Trim(), "STD", StringComparison.OrdinalIgnoreCase);
 
-            if (hasSection || IsmcRx.IsMatch(text) || FlatBarRx.IsMatch(text) || RoundBarRx.IsMatch(text) || FrameRx.IsMatch(name))
+            var namedDisc = HubRx.IsMatch(name) || FlangeRx.IsMatch(name) || ImpellerRx.IsMatch(name);
+
+            if ((hasSection && !namedDisc) || IsmcRx.IsMatch(text) || FlatBarRx.IsMatch(text) || RoundBarRx.IsMatch(text) || FrameRx.IsMatch(name))
             {
                 var sectionType = ResolveSectionType(text);
                 var bomKind = sectionType == GaPartType.RoundBar ? BomPartKind.RoundBar : BomPartKind.Unknown;
@@ -245,6 +251,11 @@ namespace CadToCode.Business.Services
             if (BackPlateRx.IsMatch(name))
             {
                 return Build(part, view, GaPartType.BackPlate, GaPartFamily.Ring, BomPartKind.Flange, "Name states a back plate.");
+            }
+
+            if (ImpellerRx.IsMatch(name) && !HubRx.IsMatch(name))
+            {
+                return Build(part, view, GaPartType.Flange, GaPartFamily.Ring, BomPartKind.Flange, "Name states an impeller. Drawn as a disc from the selected view.");
             }
 
             if (HubRx.IsMatch(name))
