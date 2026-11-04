@@ -1,0 +1,178 @@
+@{
+    ViewData["Title"] = "Manufacturing Drawings";
+}
+
+<div class="cc-topbar">
+    <div>
+        <h1 class="cc-page-title">Manufacturing Drawings</h1>
+        <p class="cc-page-meta">Upload a GA .dxf drawing, review the detected parts, then generate one manufacturing drawing per part.</p>
+    </div>
+</div>
+
+<section class="cc-panel mb-4">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title">1. Upload GA drawing</h2>
+    </div>
+    <div class="cc-panel-body">
+        <form id="uploadForm" enctype="multipart/form-data">
+            @Html.AntiForgeryToken()
+            <div class="input-group">
+                <input type="file" class="form-control" name="file" id="dxfFile" accept=".dxf" required />
+                <button type="submit" class="cc-btn cc-btn-primary" id="uploadBtn">Upload &amp; Extract GA</button>
+            </div>
+        </form>
+        <div id="statusAlert" class="alert mt-3 d-none" role="alert"></div>
+    </div>
+</section>
+
+<section class="cc-panel mb-4 d-none" id="reviewSection">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title">2. Review detected parts</h2>
+    </div>
+    <div class="cc-panel-body">
+        <p class="text-muted small mb-3">Untick parts you don't need, rename them, or merge a component into another. Your choices are remembered for the next upload.</p>
+        <div class="table-responsive">
+            <table class="table align-middle mb-3">
+                <thead>
+                    <tr>
+                        <th style="width:70px">Include</th>
+                        <th style="width:110px">Type</th>
+                        <th>Part name</th>
+                        <th style="width:90px">Entities</th>
+                        <th style="width:220px">Merge into</th>
+                    </tr>
+                </thead>
+                <tbody id="reviewBody"></tbody>
+            </table>
+        </div>
+        <button type="button" class="cc-btn cc-btn-primary" id="generateBtn">Generate Manufacturing Drawings</button>
+    </div>
+</section>
+
+<section class="cc-panel d-none" id="resultsSection">
+    <div class="cc-panel-header">
+        <h2 class="cc-panel-title">3. Manufacturing drawings</h2>
+        <a id="zipBtn" class="cc-btn cc-btn-ghost cc-btn-small" href="#">Download All (ZIP)</a>
+    </div>
+    <div class="cc-panel-body">
+        <ul class="list-group" id="resultsList"></ul>
+        <div id="skippedNote" class="text-muted small mt-3 d-none"></div>
+    </div>
+</section>
+
+@section Scripts {
+<script>
+(function () {
+  let jobId = null;
+  let items = [];
+  const form = document.getElementById('uploadForm');
+  const alertBox = document.getElementById('statusAlert');
+  const reviewSection = document.getElementById('reviewSection');
+  const reviewBody = document.getElementById('reviewBody');
+  const resSection = document.getElementById('resultsSection');
+  const list = document.getElementById('resultsList');
+  const zipBtn = document.getElementById('zipBtn');
+  const skippedNote = document.getElementById('skippedNote');
+  const token = form.querySelector('input[name="__RequestVerificationToken"]').value;
+
+  function show(msg, type) {
+    alertBox.className = 'alert mt-3 alert-' + type;
+    alertBox.textContent = msg;
+  }
+
+  function renderReview() {
+    reviewBody.innerHTML = '';
+    items.forEach((it, i) => {
+      const tr = document.createElement('tr');
+
+      const tdInc = document.createElement('td');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'form-check-input'; cb.checked = it.include; cb.dataset.i = i;
+      cb.addEventListener('change', () => { it.include = cb.checked; });
+      tdInc.appendChild(cb);
+
+      const tdKind = document.createElement('td');
+      tdKind.textContent = it.kind === 'component' ? 'Component' : (it.drgNo ? 'Callout' : 'Label');
+
+      const tdName = document.createElement('td');
+      const nameIn = document.createElement('input');
+      nameIn.type = 'text'; nameIn.className = 'form-control form-control-sm'; nameIn.value = it.name;
+      nameIn.addEventListener('input', () => { it.name = nameIn.value; });
+      tdName.appendChild(nameIn);
+      if (it.drgNo) {
+        const small = document.createElement('div');
+        small.className = 'text-muted small'; small.textContent = 'DRG NO. ' + it.drgNo;
+        tdName.appendChild(small);
+      }
+
+      const tdCount = document.createElement('td');
+      tdCount.textContent = it.kind === 'component' ? it.entities : '—';
+
+      const tdMerge = document.createElement('td');
+      if (it.kind === 'component') {
+        const sel = document.createElement('select');
+        sel.className = 'form-select form-select-sm';
+        const none = document.createElement('option'); none.value = ''; none.textContent = '— none —'; sel.appendChild(none);
+        items.filter(o => o.kind === 'component' && o.key !== it.key).forEach(o => {
+          const op = document.createElement('option'); op.value = o.key; op.textContent = o.name; sel.appendChild(op);
+        });
+        sel.value = it.mergeInto || '';
+        sel.addEventListener('change', () => { it.mergeInto = sel.value || null; });
+        tdMerge.appendChild(sel);
+      } else tdMerge.textContent = '—';
+
+      tr.append(tdInc, tdKind, tdName, tdCount, tdMerge);
+      reviewBody.appendChild(tr);
+    });
+  }
+
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    reviewSection.classList.add('d-none'); resSection.classList.add('d-none');
+    show('Uploading and extracting…', 'info');
+    try {
+      const res = await fetch('/DxfProcessing/UploadGaDxf', { method: 'POST', body: new FormData(form) });
+      const data = await res.json();
+      if (!res.ok || !data.success) { show(data.message || 'Upload failed.', 'danger'); return; }
+      jobId = data.jobId;
+      items = data.items;
+      show('Extraction complete: ' + data.layerCount + ' part(s) found (job #' + data.jobId + '). Review them below.', 'success');
+      renderReview();
+      reviewSection.classList.remove('d-none');
+    } catch (err) { show('Error: ' + err.message, 'danger'); }
+  });
+
+  document.getElementById('generateBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('generateBtn');
+    btn.disabled = true; btn.textContent = 'Generating…';
+    const fd = new FormData();
+    fd.append('jobId', jobId);
+    fd.append('selections', JSON.stringify(items.map(i => ({ key: i.key, name: i.name, include: i.include, mergeInto: i.mergeInto }))));
+    fd.append('__RequestVerificationToken', token);
+    try {
+      const res = await fetch('/DxfProcessing/GenerateManufacturingDrawings', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok || !data.success) { show(data.message || 'Generation failed.', 'danger'); return; }
+      list.innerHTML = '';
+      data.files.forEach(f => {
+        const li = document.createElement('li');
+        li.className = 'list-group-item d-flex justify-content-between align-items-center';
+        const name = document.createElement('span');
+        name.textContent = f.part + ' (' + f.fileName + ', ' + f.entities + ' entities)';
+        const a = document.createElement('a');
+        a.href = f.url; a.download = f.fileName; a.className = 'cc-btn cc-btn-ghost cc-btn-small';
+        a.textContent = 'Download';
+        li.append(name, a); list.appendChild(li);
+      });
+      zipBtn.href = '/DxfProcessing/DownloadAllZip?jobId=' + data.jobId;
+      if (data.skipped && data.skipped.length) {
+        skippedNote.textContent = 'No matching geometry in GA for: ' + data.skipped.join(', ');
+        skippedNote.classList.remove('d-none');
+      } else skippedNote.classList.add('d-none');
+      resSection.classList.remove('d-none');
+    } catch (err) { show('Error: ' + err.message, 'danger'); }
+    finally { btn.disabled = false; btn.textContent = 'Generate Manufacturing Drawings'; }
+  });
+})();
+</script>
+}

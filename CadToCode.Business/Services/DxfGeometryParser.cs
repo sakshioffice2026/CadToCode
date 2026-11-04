@@ -201,13 +201,12 @@ public sealed class DxfParseResult
 
 public sealed record DxfPartRequest(string PartName, string Layer);
 
-public sealed record DxfPartFileResult(string PartName, string Layer, string FilePath, int EntityCount, string? PdfFilePath = null);
+public sealed record DxfPartFileResult(string PartName, string Layer, string FilePath, int EntityCount);
 
 public sealed record DxfSheetOptions(
     string? ProjectName,
     string? Material,
-    string? DrawingNumberPrefix,
-    PdfPaperSize PaperSize = PdfPaperSize.A3Landscape);
+    string? DrawingNumberPrefix);
 
 public interface IDxfGeometryParser
 {
@@ -226,13 +225,6 @@ public interface IDxfGeometryParser
 public sealed class DxfGeometryParser : IDxfGeometryParser
 {
     private const double Epsilon = 1e-9;
-
-    private readonly IPdfDrawingSheetService? _pdfSheetService;
-
-    public DxfGeometryParser(IPdfDrawingSheetService? pdfSheetService = null)
-    {
-        _pdfSheetService = pdfSheetService;
-    }
 
     public async Task<DxfParseResult> ParseAsync(Stream dxfStream, CancellationToken cancellationToken = default)
     {
@@ -551,68 +543,10 @@ public sealed class DxfGeometryParser : IDxfGeometryParser
                 continue;
             }
 
-            string? pdfPath = null;
-
-            if (_pdfSheetService is not null)
-            {
-                pdfPath = TryRenderPdf(filePath, uniqueName, part, sheetOptions, cancellationToken);
-            }
-
-            results.Add(new DxfPartFileResult(part.PartName, part.Layer, filePath, added, pdfPath));
+            results.Add(new DxfPartFileResult(part.PartName, part.Layer, filePath, added));
         }
 
         return results;
-    }
-
-    private string? TryRenderPdf(
-        string dxfPath,
-        string uniqueName,
-        DxfPartRequest part,
-        DxfSheetOptions? options,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            DxfParseResult geometry;
-
-            using (var dxfStream = new FileStream(dxfPath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                geometry = Parse(dxfStream, cancellationToken);
-            }
-
-            var metadata = new PdfSheetMetadata(
-                part.PartName,
-                options?.ProjectName,
-                BuildDrawingNumber(options?.DrawingNumberPrefix, uniqueName),
-                options?.Material,
-                DateTime.Today,
-                part.Layer);
-
-            var pdfPath = Path.ChangeExtension(dxfPath, ".pdf");
-
-            _pdfSheetService!.RenderToFile(
-                geometry,
-                metadata,
-                pdfPath,
-                options?.PaperSize ?? PdfPaperSize.A3Landscape);
-
-            return pdfPath;
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
-
-    private static string BuildDrawingNumber(string? prefix, string name)
-    {
-        return string.IsNullOrWhiteSpace(prefix)
-            ? name
-            : prefix.Trim() + "-" + name;
     }
 
     public static string SanitizeFileName(string? name)

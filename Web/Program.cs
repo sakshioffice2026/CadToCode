@@ -46,7 +46,6 @@ builder.Services.Configure<GeminiEmbeddingOptions>(builder.Configuration.GetSect
 
 builder.Services.Configure<TavilyOptions>(builder.Configuration.GetSection(TavilyOptions.SectionName));
 builder.Services.Configure<DuckDuckGoOptions>(builder.Configuration.GetSection(DuckDuckGoOptions.SectionName));
-builder.Services.AddScoped<IBlockBreakdownService, BlockBreakdownService>();
 builder.Services.AddCadToCodeCore();
 builder.Services.AddScoped<IDesignSessionStore, DesignSessionStore>();
 
@@ -58,7 +57,6 @@ builder.Services.AddSingleton<IPartScriptBuilder, CentrifugalFanPartScriptBuilde
 builder.Services.AddSingleton<IPartScriptBuilder, AxialFanPartScriptBuilder>();
 builder.Services.AddSingleton<IPartScriptBuilder, TemplatePartScriptBuilder>();
 builder.Services.AddSingleton<IPartScriptBuilderRegistry, PartScriptBuilderRegistry>();
-builder.Services.AddScoped<IPartManufacturingDxfService, PartManufacturingDxfService>();
 
 // One design flow per equipment type, each with its own rule pack and prompts.
 builder.Services.AddScoped<IEquipmentDesignFlow, CentrifugalFanDesignFlow>();
@@ -81,8 +79,6 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 builder.Services.AddSingleton<IFileStorageService, FileStorageService>();
 builder.Services.AddSingleton<IDxfCompatibilityService, DxfCompatibilityService>();
 builder.Services.AddSingleton<IGeometryExtractor, DxfGeometryExtractor>();
-builder.Services.AddSingleton<PartDrawingSheetService>();
-builder.Services.AddSingleton<ParametricPartSheetService>();
 // Local OCR is a best-effort service. ImageGeometryExtractor falls back to visual-only
 // feature detection when Tesseract or its local eng.traineddata is unavailable.
 builder.Services.AddSingleton<IImageTextRecognizer, TesseractTextRecognizer>();
@@ -91,24 +87,6 @@ builder.Services.AddSingleton<IGeometryExtractor, ImageGeometryExtractor>();
 builder.Services.AddScoped<IGeometryNormalizer, GeometryNormalizer>();
 builder.Services.AddSingleton<IComponentDecomposer, ComponentDecomposer>();
 builder.Services.AddSingleton<IAssemblyTopologyMapper, AssemblyTopologyMapper>();
-builder.Services.AddSingleton<GaPartRecognizer>();
-builder.Services.AddSingleton<IGaPartRecognizer, DefaultBomGaPartRecognizer>();
-builder.Services.AddSingleton<GaCalloutReader>();
-builder.Services.AddSingleton<ReferenceCalloutCatalog>();
-builder.Services.AddSingleton<GaCalloutGeometryLinker>();
-builder.Services.AddSingleton<GaViewSelector>();
-builder.Services.AddSingleton<GaPartClassifier>();
-builder.Services.AddSingleton<GaProfileBuilder>();
-builder.Services.AddSingleton<GaFlatPatternResolver>();
-builder.Services.AddSingleton<GaPartSheetDataBuilder>();
-builder.Services.AddSingleton<GaCutListBuilder>();
-builder.Services.AddSingleton<GaCompletenessChecker>();
-builder.Services.AddSingleton<GaComponentReconstructionService>();
-builder.Services.AddSingleton<GaEngineeringInferenceService>();
-builder.Services.AddSingleton<GaEngineeringReviewService>();
-builder.Services.AddSingleton<GaPdfDrawingService>();
-builder.Services.AddSingleton<GaArchiveValidator>();
-builder.Services.AddSingleton<GaManufacturingPipeline>();
 builder.Services.AddSingleton<GeometryEmbedder>();
 builder.Services.AddSingleton<IPatternMemoryService, PatternMemoryService>();
 builder.Services.AddSingleton<ILLMGenerationService, LLamaGenerationService>();
@@ -123,7 +101,6 @@ builder.Services.AddScoped<IDefinitionLearningService, DefinitionLearningService
 builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();
 builder.Services.AddScoped<IDesignStateService, DesignStateService>();
 builder.Services.AddSingleton<IStepScriptRunner, StepScriptRunner>();
-builder.Services.AddSingleton<IPdfDrawingSheetService, PdfDrawingSheetService>();
 builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>();
 builder.Services.AddSingleton<IVectorStoreService, QdrantVectorStoreService>();
 builder.Services.AddSingleton<IProjectHistoryIndex, QdrantProjectHistoryIndex>();

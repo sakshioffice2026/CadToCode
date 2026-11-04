@@ -17,7 +17,10 @@ public class ApplicationDbContext : DbContext
     public DbSet<DesignSession> DesignSessions => Set<DesignSession>();
     public DbSet<ZooGeneration> ZooGenerations => Set<ZooGeneration>();
     public DbSet<ZooGenerationFile> ZooGenerationFiles => Set<ZooGenerationFile>();
-
+    public DbSet<DxfJob> DxfJobs => Set<DxfJob>();
+    public DbSet<ExtractedPart> ExtractedParts => Set<ExtractedPart>();
+    public DbSet<GeneratedDrawing> GeneratedDrawings => Set<GeneratedDrawing>();
+    public DbSet<PartRule> PartRules => Set<PartRule>();
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
@@ -71,5 +74,18 @@ public class ApplicationDbContext : DbContext
                 .HasForeignKey(f => f.GenerationId)
                 .OnDelete(DeleteBehavior.Cascade);
         });
+
+
+        modelBuilder.Entity<ExtractedPart>()
+            .HasOne(p => p.Job)
+            .WithMany(j => j.Parts)
+            .HasForeignKey(p => p.JobId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<GeneratedDrawing>()
+            .HasOne(g => g.Job)
+            .WithMany(j => j.Drawings)
+            .HasForeignKey(g => g.JobId)
+            .OnDelete(DeleteBehavior.Cascade);
     }
 }
