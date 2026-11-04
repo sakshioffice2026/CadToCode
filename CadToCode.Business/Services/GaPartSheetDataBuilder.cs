@@ -1,11 +1,18 @@
 using System.Globalization;
 using CadToCode.Core.Rules;
+using CadToCode.Models.Dtos;
 
 namespace CadToCode.Business.Services
 {
     public sealed class GaSheetData
     {
         public int ItemNo { get; init; }
+
+        public GaManufacturingCategory Category { get; init; }
+
+        public List<GaSourcedValue> Sources { get; } = new();
+
+        public string? Tolerance { get; set; }
 
         public string Name { get; init; } = string.Empty;
 
@@ -69,7 +76,8 @@ namespace CadToCode.Business.Services
 
             foreach (var profile in profiles)
             {
-                if (profile.Classification.Family == GaPartFamily.BoughtOut
+                if (profile.Skipped
+                    || profile.Classification.Family == GaPartFamily.BoughtOut
                     || profile.Classification.Family == GaPartFamily.RolledSection
                     || profile.Classification.Family == GaPartFamily.Unknown)
                 {
@@ -134,6 +142,7 @@ namespace CadToCode.Business.Services
                 ItemNo = number,
                 Name = name,
                 Type = profile.Classification.Type,
+                Category = profile.Classification.Category,
                 Item = item,
                 Material = material,
                 ThicknessMm = item.ThicknessMm,
@@ -148,6 +157,30 @@ namespace CadToCode.Business.Services
                     Date = DateTime.Today.ToString("dd/MM/yyyy", CultureInfo.InvariantCulture)
                 }
             };
+
+            data.Sources.Add(new GaSourcedValue
+            {
+                Field = "Material",
+                Value = material,
+                Source = SourceOf(part, "Material", !string.IsNullOrWhiteSpace(part.Material), GaValueSource.Default)
+            });
+
+            data.Sources.Add(new GaSourcedValue
+            {
+                Field = "Quantity",
+                Value = item.Qty.ToString(CultureInfo.InvariantCulture),
+                Source = SourceOf(part, "Quantity", part.QtyText is not null, GaValueSource.Default)
+            });
+
+            if (item.ThicknessMm.HasValue)
+            {
+                data.Sources.Add(new GaSourcedValue
+                {
+                    Field = "ThicknessMm",
+                    Value = Fmt(item.ThicknessMm),
+                    Source = SourceOf(part, "ThicknessMm", part.ThicknessMm.HasValue, GaValueSource.Calculated)
+                });
+            }
 
             var grade = material.Trim().ToUpperInvariant();
             if (grade != "MS" && !grade.StartsWith("IS 2062", StringComparison.Ordinal) && !grade.StartsWith("E250", StringComparison.Ordinal))
@@ -179,6 +212,21 @@ namespace CadToCode.Business.Services
             }
 
             Compare(rules, data, report);
+
+            if (data.FinishWeightKg.HasValue)
+            {
+                data.Sources.Add(new GaSourcedValue { Field = "FinishWeightKg", Value = FmtKg(data.FinishWeightKg), Source = GaValueSource.Calculated });
+            }
+
+            if (data.RmWeightKg.HasValue)
+            {
+                data.Sources.Add(new GaSourcedValue { Field = "RmWeightKg", Value = FmtKg(data.RmWeightKg), Source = GaValueSource.Calculated });
+            }
+
+            if (data.RmSize.Length > 0)
+            {
+                data.Sources.Add(new GaSourcedValue { Field = "RmSize", Value = data.RmSize, Source = GaValueSource.Calculated });
+            }
 
             report.Info(
                 "SHEET_DATA",
@@ -583,6 +631,16 @@ namespace CadToCode.Business.Services
             var material = string.IsNullOrWhiteSpace(defaultMaterial) ? DefaultMaterial : defaultMaterial.Trim();
             report.Warn("MATERIAL_DEFAULT", name, "Material is not in the callout. '" + material + "' was used.");
             return material;
+        }
+
+        private static GaValueSource SourceOf(CalloutPart part, string field, bool stated, GaValueSource fallback)
+        {
+            if (part.ApprovedFields.Contains(field))
+            {
+                return GaValueSource.UserApproved;
+            }
+
+            return stated ? GaValueSource.Extracted : fallback;
         }
 
         private static string Fmt(double value)

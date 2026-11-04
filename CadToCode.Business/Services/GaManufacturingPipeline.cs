@@ -21,6 +21,16 @@ namespace CadToCode.Business.Services
 
         public double? DefaultThicknessMm { get; init; }
 
+        public int ProjectId { get; init; }
+
+        /// <summary>When true, generation stops until every required review item is approved.</summary>
+        public bool RequireApproval { get; init; }
+
+        /// <summary>When true, the run stops after inference and returns only the review items.</summary>
+        public bool ReviewOnly { get; init; }
+
+        public IReadOnlyList<GaReviewItem> ApprovedItems { get; init; } = Array.Empty<GaReviewItem>();
+
         public ManufacturingRules? Rules { get; init; }
 
 
@@ -36,6 +46,10 @@ namespace CadToCode.Business.Services
         public string FileName { get; init; } = string.Empty;
 
         public byte[] Content { get; init; } = Array.Empty<byte>();
+
+        public string PdfFileName { get; init; } = string.Empty;
+
+        public byte[] PdfContent { get; init; } = Array.Empty<byte>();
 
         public GaSheetData Data { get; init; } = new();
     }
@@ -57,6 +71,19 @@ namespace CadToCode.Business.Services
         public double CalculatedFinishTotalKg { get; set; }
 
         public bool HasFiles => Files.Count > 0;
+
+        public List<GaReconstructedComponent> Components { get; } = new();
+
+        public List<GaReviewItem> ReviewItems { get; } = new();
+
+        public bool AwaitingApproval { get; set; }
+
+        public List<string> BlockingReasons { get; } = new();
+
+        public bool IsReleasable =>
+            !AwaitingApproval
+            && BlockingReasons.Count == 0
+            && (HasFiles || CutList.CutRows.Count > 0 || CutList.BoughtOutRows.Count > 0);
 
         public bool HasErrors => Report.Issues.Any(i => i.Severity == GenerationSeverity.Error);
 
@@ -81,6 +108,10 @@ namespace CadToCode.Business.Services
         private readonly GaPartSheetDataBuilder _sheetData;
         private readonly GaCutListBuilder _cutList;
         private readonly GaCompletenessChecker _completeness;
+        private readonly GaComponentReconstructionService _reconstruction;
+        private readonly GaEngineeringInferenceService _inference;
+        private readonly GaPdfDrawingService _pdf;
+        private readonly GaArchiveValidator _validator;
         private readonly ParametricPartRulesEngine _engine = new();
         private readonly object _rulesLock = new();
         private ManufacturingRules? _rules;
@@ -94,8 +125,16 @@ namespace CadToCode.Business.Services
             GaFlatPatternResolver flatResolver,
             GaPartSheetDataBuilder sheetData,
             GaCutListBuilder cutList,
-            GaCompletenessChecker completeness)
+            GaCompletenessChecker completeness,
+            GaComponentReconstructionService reconstruction,
+            GaEngineeringInferenceService inference,
+            GaPdfDrawingService pdf,
+            GaArchiveValidator validator)
         {
+            _reconstruction = reconstruction ?? throw new ArgumentNullException(nameof(reconstruction));
+            _inference = inference ?? throw new ArgumentNullException(nameof(inference));
+            _pdf = pdf ?? throw new ArgumentNullException(nameof(pdf));
+            _validator = validator ?? throw new ArgumentNullException(nameof(validator));
             _reader = reader ?? throw new ArgumentNullException(nameof(reader));
             _linker = linker ?? throw new ArgumentNullException(nameof(linker));
             _selector = selector ?? throw new ArgumentNullException(nameof(selector));
@@ -133,6 +172,8 @@ namespace CadToCode.Business.Services
             var callouts = _reader.Read(geometry, report);
             result.Callouts = callouts;
 
+            ApplyApproved(callouts, request.ApprovedItems, report);
+
             if (callouts.Parts.Count == 0)
             {
                 report.Error("PIPELINE_NO_CALLOUTS", "GA", "No part callout was found in the drawing text.");
@@ -164,6 +205,31 @@ namespace CadToCode.Business.Services
             var profiles = _profileBuilder.Build(classification.Parts, mm, report);
             var flats = _flatResolver.Resolve(profiles, nodes, mm, report);
 
+            var components = _reconstruction.Reconstruct(profiles, flats, views, report);
+            result.Components.AddRange(components);
+
+            var reviewItems = _inference.Infer(components, request.DefaultMaterial, request.DefaultThicknessMm, report);
+            result.ReviewItems.AddRange(reviewItems);
+
+            var pendingRequired = reviewItems.Where(i => i.Required).ToList();
+
+            if (request.ReviewOnly || (request.RequireApproval && pendingRequired.Count > 0))
+            {
+                result.AwaitingApproval = pendingRequired.Count > 0;
+
+                foreach (var item in pendingRequired)
+                {
+                    report.Error(
+                        "APPROVAL_REQUIRED",
+                        item.PartName,
+                        item.Field + " must be approved before drawings are generated"
+                        + (string.IsNullOrWhiteSpace(item.SuggestedValue) ? "." : " (suggested " + item.SuggestedValue + ")."));
+                }
+
+                result.Messages.AddRange(report.ToMessages());
+                return result;
+            }
+
             var sheets = _sheetData.Build(rules, profiles, flats, request.ProjectCode, request.DefaultMaterial, report);
 
             var cutList = _cutList.Build(rules, classification, links, mm, report);
@@ -187,12 +253,52 @@ namespace CadToCode.Business.Services
                 var fileName = FileName(sheet.ItemNo, sheet.Name);
                 var content = Save(sheet.Dxf);
 
+                var dxfCheck = _validator.ValidateFile(fileName, content);
+                if (!dxfCheck.IsValid)
+                {
+                    foreach (var error in dxfCheck.Errors)
+                    {
+                        report.Error("OUTPUT_INVALID_DXF", sheet.Name, error);
+                    }
+
+                    continue;
+                }
+
+                data.Tolerance = FindApproved(request.ApprovedItems, sheet.Name, GaEngineeringInferenceService.FieldTolerance)
+                    ?? GaDrawingTemplates.Get(data.Category).DefaultTolerance;
+
+                var pdfName = Path.ChangeExtension(fileName, ".pdf");
+                byte[] pdf;
+
+                try
+                {
+                    pdf = _pdf.Build(data, data.Tolerance);
+                }
+                catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or FormatException or OverflowException)
+                {
+                    report.Error("OUTPUT_PDF_FAILED", sheet.Name, "The PDF drawing could not be built: " + ex.Message);
+                    continue;
+                }
+
+                var pdfCheck = _validator.ValidateFile(pdfName, pdf);
+                if (!pdfCheck.IsValid)
+                {
+                    foreach (var error in pdfCheck.Errors)
+                    {
+                        report.Error("OUTPUT_INVALID_PDF", sheet.Name, error);
+                    }
+
+                    continue;
+                }
+
                 result.Files.Add(new GaPipelineFile
                 {
                     ItemNo = sheet.ItemNo,
                     PartName = sheet.Name,
                     FileName = fileName,
                     Content = content,
+                    PdfFileName = pdfName,
+                    PdfContent = pdf,
                     Data = data
                 });
 
@@ -211,39 +317,201 @@ namespace CadToCode.Business.Services
 
             CompareTotals(rules, result, sheets, callouts, report);
 
+            result.BlockingReasons.AddRange(result.Completeness.BlockingReasons());
+
             result.Messages.AddRange(report.ToMessages());
             result.Messages.AddRange(result.Completeness.ToMessages());
 
+            foreach (var reason in result.BlockingReasons)
+            {
+                result.Messages.Add("[ERROR] PACKAGE (PACKAGE_BLOCKED): " + reason);
+            }
+
             return result;
+        }
+
+        private static string? FindApproved(IReadOnlyList<GaReviewItem> items, string partName, string field)
+        {
+            var item = items.FirstOrDefault(i =>
+                i.Status == GaReviewStatus.Approved
+                && !string.IsNullOrWhiteSpace(i.ApprovedValue)
+                && string.Equals(i.PartName, partName, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(i.Field, field, StringComparison.OrdinalIgnoreCase));
+
+            return item?.ApprovedValue;
+        }
+
+        private static void ApplyApproved(CalloutReadResult callouts, IReadOnlyList<GaReviewItem> items, GenerationReport report)
+        {
+            foreach (var item in items)
+            {
+                if (item.Status != GaReviewStatus.Approved || string.IsNullOrWhiteSpace(item.ApprovedValue))
+                {
+                    continue;
+                }
+
+                var part = callouts.Parts.FirstOrDefault(p => string.Equals(p.Name, item.PartName, StringComparison.OrdinalIgnoreCase));
+                if (part is null)
+                {
+                    continue;
+                }
+
+                var value = item.ApprovedValue.Trim();
+
+                switch (item.Field)
+                {
+                    case GaEngineeringInferenceService.FieldThickness:
+                        if (double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out var thickness) && thickness > 0.0)
+                        {
+                            part.ThicknessMm = thickness;
+                            part.ApprovedFields.Add(GaEngineeringInferenceService.FieldThickness);
+                            report.Info("APPROVED_APPLIED", part.Name, "Thickness " + value + " mm applied from user approval.");
+                        }
+
+                        break;
+
+                    case GaEngineeringInferenceService.FieldMaterial:
+                        part.Material = value;
+                        part.ApprovedFields.Add(GaEngineeringInferenceService.FieldMaterial);
+                        report.Info("APPROVED_APPLIED", part.Name, "Material " + value + " applied from user approval.");
+                        break;
+
+                    case GaEngineeringInferenceService.FieldQuantity:
+                        if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var qty) && qty > 0)
+                        {
+                            part.Qty = qty;
+                            part.QtyText = value;
+                            part.ApprovedFields.Add(GaEngineeringInferenceService.FieldQuantity);
+                            report.Info("APPROVED_APPLIED", part.Name, "Quantity " + value + " applied from user approval.");
+                        }
+
+                        break;
+                }
+            }
+        }
+
+        public static string BuildBomCsv(CalloutReadResult callouts)
+        {
+            ArgumentNullException.ThrowIfNull(callouts);
+
+            var sb = new StringBuilder();
+            sb.AppendLine("NO,NAME,DRAWING NO,SECTION,MATERIAL,THK MM,QTY,WEIGHT KG");
+
+            var number = 0;
+            foreach (var part in callouts.Parts)
+            {
+                number++;
+                sb.AppendLine(string.Join(",", new[]
+                {
+                    number.ToString(CultureInfo.InvariantCulture),
+                    Csv(part.Name),
+                    Csv(part.DrawingNumber ?? string.Empty),
+                    Csv(part.Section ?? string.Empty),
+                    Csv(part.Material ?? string.Empty),
+                    part.ThicknessMm.HasValue ? part.ThicknessMm.Value.ToString("0.##", CultureInfo.InvariantCulture) : string.Empty,
+                    part.Qty.ToString(CultureInfo.InvariantCulture),
+                    part.WeightKg.HasValue ? part.WeightKg.Value.ToString("0.##", CultureInfo.InvariantCulture) : string.Empty
+                }));
+            }
+
+            return sb.ToString();
+        }
+
+        public static string BuildValueSourcesCsv(GaPipelineResult result)
+        {
+            ArgumentNullException.ThrowIfNull(result);
+
+            var sb = new StringBuilder();
+            sb.AppendLine("PART,FIELD,VALUE,SOURCE");
+
+            foreach (var file in result.Files)
+            {
+                foreach (var source in file.Data.Sources)
+                {
+                    sb.AppendLine(string.Join(",", new[]
+                    {
+                        Csv(file.PartName),
+                        Csv(source.Field),
+                        Csv(source.Value ?? string.Empty),
+                        source.Source.ToString()
+                    }));
+                }
+
+                sb.AppendLine(string.Join(",", new[]
+                {
+                    Csv(file.PartName),
+                    "GeneralTolerance",
+                    Csv(file.Data.Tolerance ?? string.Empty),
+                    file.Data.Tolerance is null ? "Default" : GaValueSource.Inferred.ToString()
+                }));
+            }
+
+            return sb.ToString();
         }
 
         public byte[]? BuildZip(GaPipelineResult result)
         {
             ArgumentNullException.ThrowIfNull(result);
 
+            if (result.AwaitingApproval || result.BlockingReasons.Count > 0)
+            {
+                return null;
+            }
+
             if (result.Files.Count == 0 && result.CutList.CutRows.Count == 0 && result.CutList.BoughtOutRows.Count == 0)
             {
                 return null;
             }
 
-            using var output = new MemoryStream();
+            var expected = new List<string>();
+            byte[] bytes;
 
-            using (var zip = new ZipArchive(output, ZipArchiveMode.Create, true))
+            using (var output = new MemoryStream())
             {
-                foreach (var file in result.Files)
+                using (var zip = new ZipArchive(output, ZipArchiveMode.Create, true))
                 {
-                    WriteEntry(zip, file.FileName, file.Content);
+                    foreach (var file in result.Files)
+                    {
+                        WriteEntry(zip, file.FileName, file.Content);
+                        expected.Add(file.FileName);
+
+                        WriteEntry(zip, file.PdfFileName, file.PdfContent);
+                        expected.Add(file.PdfFileName);
+                    }
+
+                    if (result.CutList.CutRows.Count > 0 || result.CutList.BoughtOutRows.Count > 0)
+                    {
+                        WriteEntry(zip, "CUT-LIST.csv", Encoding.UTF8.GetBytes(BuildCutListCsv(result.CutList)));
+                        expected.Add("CUT-LIST.csv");
+                    }
+
+                    WriteEntry(zip, "BOM.csv", Encoding.UTF8.GetBytes(BuildBomCsv(result.Callouts)));
+                    expected.Add("BOM.csv");
+
+                    WriteEntry(zip, "VALUE-SOURCES.csv", Encoding.UTF8.GetBytes(BuildValueSourcesCsv(result)));
+                    expected.Add("VALUE-SOURCES.csv");
+
+                    WriteEntry(zip, "COMPLETENESS-REPORT.csv", Encoding.UTF8.GetBytes(BuildCompletenessCsv(result.Completeness)));
+                    expected.Add("COMPLETENESS-REPORT.csv");
                 }
 
-                if (result.CutList.CutRows.Count > 0 || result.CutList.BoughtOutRows.Count > 0)
-                {
-                    WriteEntry(zip, "CUT-LIST.csv", Encoding.UTF8.GetBytes(BuildCutListCsv(result.CutList)));
-                }
-
-                WriteEntry(zip, "COMPLETENESS-REPORT.csv", Encoding.UTF8.GetBytes(BuildCompletenessCsv(result.Completeness)));
+                bytes = output.ToArray();
             }
 
-            return output.ToArray();
+            var check = _validator.Validate(bytes, expected);
+
+            if (!check.IsValid)
+            {
+                foreach (var error in check.Errors)
+                {
+                    result.BlockingReasons.Add("Archive check failed: " + error);
+                    result.Messages.Add("[ERROR] PACKAGE (ARCHIVE_INVALID): " + error);
+                }
+
+                return null;
+            }
+
+            return bytes;
         }
 
         public static string BuildCutListCsv(GaCutListResult cutList)

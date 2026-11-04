@@ -34,6 +34,10 @@ namespace CadToCode.Business.Services
 
         public List<double> ThicknessValues { get; set; } = new();
 
+        public string? DrawingNumber { get; set; }
+
+        public HashSet<string> ApprovedFields { get; } = new(StringComparer.OrdinalIgnoreCase);
+
         public PartBomItem ToBomItem()
         {
             var remarks = new List<string> { "Read from drawing callout." };
@@ -91,6 +95,8 @@ namespace CadToCode.Business.Services
         public int TextBlocksRead { get; set; }
 
         public int DuplicatesMerged { get; set; }
+
+        public string? DrawingNumber { get; set; }
     }
 
     public sealed class GaCalloutReader
@@ -135,6 +141,10 @@ namespace CadToCode.Business.Services
 
         private static readonly Regex NumberingRx = new(@"^\s*\d{1,2}\s*\)\s*", RegexOptions.Compiled);
 
+        private static readonly Regex DrawingNoRx = new(
+            @"\b(?:drg|dwg|drawing)\.?\s*(?:no|number|#)\.?\s*[:=\-]?\s*(?<n>[A-Z0-9][A-Z0-9\-_/\.]{2,30})",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         public CalloutReadResult Read(ExtractedGeometry geometry, GenerationReport report)
         {
             ArgumentNullException.ThrowIfNull(geometry);
@@ -164,6 +174,12 @@ namespace CadToCode.Business.Services
                 if (joined.Length > MaxBlockLength)
                 {
                     continue;
+                }
+
+                var dwg = DrawingNoRx.Match(joined);
+                if (dwg.Success && string.IsNullOrWhiteSpace(result.DrawingNumber))
+                {
+                    result.DrawingNumber = dwg.Groups["n"].Value.Trim().ToUpperInvariant();
                 }
 
                 var total = TotalRx.Match(joined);
@@ -241,7 +257,8 @@ namespace CadToCode.Business.Services
                     Layer = text.Layer,
                     Raw = joined,
                     FromTable = string.Equals(text.EntityType, "TABLEROW", StringComparison.Ordinal),
-                    ThicknessValues = ReadThicknessValues(joined)
+                    ThicknessValues = ReadThicknessValues(joined),
+                    DrawingNumber = dwg.Success ? dwg.Groups["n"].Value.Trim().ToUpperInvariant() : null
                 };
 
                 var key = string.Join("|",
@@ -263,6 +280,14 @@ namespace CadToCode.Business.Services
             }
 
             ExpandCombinedParts(result.Parts, report);
+
+            foreach (var part in result.Parts)
+            {
+                if (string.IsNullOrWhiteSpace(part.DrawingNumber))
+                {
+                    part.DrawingNumber = result.DrawingNumber;
+                }
+            }
 
             foreach (var part in result.Parts)
             {
@@ -556,7 +581,8 @@ namespace CadToCode.Business.Services
                 Raw = name + " | " + source.Raw,
                 Duplicates = source.Duplicates,
                 FromTable = source.FromTable,
-                ThicknessValues = new List<double>()
+                ThicknessValues = new List<double>(),
+                DrawingNumber = source.DrawingNumber
             };
         }
 

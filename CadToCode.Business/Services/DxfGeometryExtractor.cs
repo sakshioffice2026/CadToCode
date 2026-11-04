@@ -435,6 +435,12 @@ public class DxfGeometryExtractor : IGeometryExtractor
         int depth,
         HashSet<string> blockStack)
     {
+        foreach (var attribute in insert.Attributes)
+        {
+            AddText(context, matrix, attribute.Value, attribute.Location.X, attribute.Location.Y,
+                attribute.TextHeight, attribute.Rotation, "ATTRIB", attribute);
+        }
+
         var name = insert.Name;
         if (string.IsNullOrEmpty(name) || !context.Blocks.TryGetValue(name, out var block))
         {

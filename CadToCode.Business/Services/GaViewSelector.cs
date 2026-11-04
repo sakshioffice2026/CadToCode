@@ -32,6 +32,9 @@ namespace CadToCode.Business.Services
         public List<ViewSelection> Selections { get; } = new();
 
         public List<CalloutPart> Failed { get; } = new();
+
+        /// <summary>Every scored view for each part, best first. The chosen view is still in Selections.</summary>
+        public Dictionary<string, List<ViewSelection>> ViewsByPart { get; } = new(StringComparer.OrdinalIgnoreCase);
     }
 
     public sealed class GaViewSelector
@@ -80,7 +83,7 @@ namespace CadToCode.Business.Services
             {
                 var part = link.Part;
 
-                if (BoughtOutRx.IsMatch(part.Name) || !string.IsNullOrWhiteSpace(part.Section))
+                if (BoughtOutRx.IsMatch(part.Name) || GaPartNameRules.IsConsumable(part.Name) || !string.IsNullOrWhiteSpace(part.Section))
                 {
                     continue;
                 }
@@ -106,6 +109,8 @@ namespace CadToCode.Business.Services
                         allEdgeOn = false;
                     }
                 }
+
+                result.ViewsByPart[part.Name] = scoredAll.OrderByDescending(s => s.Score).ToList();
 
                 var preferred = scoredAll.Where(s => !s.IsEdgeOn && !s.IsWholeView).ToList();
 

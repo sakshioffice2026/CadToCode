@@ -51,6 +51,8 @@ namespace CadToCode.Business.Services
 
         public string Reason { get; init; } = string.Empty;
 
+        public GaManufacturingCategory Category => GaDrawingTemplates.CategoryOf(Family, Type);
+
         public bool NeedsGeometry =>
             Family != GaPartFamily.BoughtOut &&
             Family != GaPartFamily.RolledSection &&
@@ -189,7 +191,7 @@ namespace CadToCode.Business.Services
             var name = part.Name ?? string.Empty;
             var text = name + " " + (part.Section ?? string.Empty);
 
-            if (BoughtOutRx.IsMatch(name))
+            if (BoughtOutRx.IsMatch(name) || GaPartNameRules.IsConsumable(name))
             {
                 return Build(part, view, GaPartType.BoughtOut, GaPartFamily.BoughtOut, BomPartKind.Unknown, "Bought-out item.");
             }

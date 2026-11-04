@@ -54,6 +54,29 @@ namespace CadToCode.Business.Services
 
         public bool IsComplete => Unmatched == 0 && UnusedFiles.Count == 0;
 
+        /// <summary>Reasons the package must not be released. Weight differences are warnings, not blockers.</summary>
+        public List<string> BlockingReasons(IReadOnlyCollection<string>? excluded = null)
+        {
+            var reasons = new List<string>();
+
+            foreach (var row in Rows.Where(r => r.Disposition == PartDisposition.Unmatched))
+            {
+                if (excluded is not null && excluded.Contains(row.Part.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                reasons.Add("No usable drawing for " + row.Part.Name + ": " + row.Reason);
+            }
+
+            foreach (var file in UnusedFiles)
+            {
+                reasons.Add("Drawing " + file + " has no matching callout.");
+            }
+
+            return reasons;
+        }
+
         public List<string> ToMessages()
         {
             var list = new List<string>
@@ -125,7 +148,7 @@ namespace CadToCode.Business.Services
                 var part = callouts.Parts[i];
                 var text = part.Name + " " + (part.Section ?? string.Empty);
 
-                if (BoughtOutRx.IsMatch(part.Name))
+                if (BoughtOutRx.IsMatch(part.Name) || GaPartNameRules.IsConsumable(part.Name))
                 {
                     result.Rows.Add(new CompletenessRow
                     {
@@ -195,7 +218,7 @@ namespace CadToCode.Business.Services
             {
                 var part = callouts.Parts[p];
 
-                if (assigned.TryGetValue(p, out var f))
+                if (assigned.TryGetValue(p, out var f) && files[f].Content is { Length: > 0 })
                 {
                     var file = files[f];
                     var reason = "DXF generated.";
@@ -221,10 +244,15 @@ namespace CadToCode.Business.Services
                 {
                     Part = part,
                     Disposition = PartDisposition.Unmatched,
-                    Reason = "No DXF sheet was generated for this callout."
+                    Reason = assigned.ContainsKey(p)
+                        ? "The generated DXF sheet is empty."
+                        : "No DXF sheet was generated for this callout."
                 });
 
-                report.Error("COMPLETENESS_UNMATCHED", part.Name, "No DXF sheet was generated for this callout (" + Brief(part) + ").");
+                report.Error(
+                    "COMPLETENESS_UNMATCHED",
+                    part.Name,
+                    (assigned.ContainsKey(p) ? "The generated DXF sheet is empty (" : "No DXF sheet was generated for this callout (") + Brief(part) + ").");
             }
 
             for (var f = 0; f < files.Count; f++)

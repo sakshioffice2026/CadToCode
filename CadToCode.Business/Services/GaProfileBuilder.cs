@@ -24,6 +24,8 @@ namespace CadToCode.Business.Services
 
         public List<GaHolePattern> Holes { get; } = new();
 
+        public int SlotCount { get; set; }
+
         public bool Skipped { get; set; }
 
         public bool OutlineClosed { get; set; }
@@ -404,6 +406,7 @@ namespace CadToCode.Business.Services
 
             var groups = GroupHoles(holes, 0.0, 0.0, false);
             result.Holes.AddRange(groups);
+            result.SlotCount = inner.Count(IsSlot);
             result.OutlineClosed = true;
 
             var rectangle = IsRectangle(outer, out var length, out var width);
@@ -482,7 +485,25 @@ namespace CadToCode.Business.Services
                 + Fmt(result.WidthMm) + " x " + Fmt(result.HeightMm) + " mm, "
                 + groups.Sum(g => g.Count).ToString(CultureInfo.InvariantCulture) + " hole(s) in "
                 + groups.Count.ToString(CultureInfo.InvariantCulture) + " size group(s), "
-                + inner.Count.ToString(CultureInfo.InvariantCulture) + " cut-out(s).");
+                + inner.Count.ToString(CultureInfo.InvariantCulture) + " cut-out(s), "
+                + result.SlotCount.ToString(CultureInfo.InvariantCulture) + " of them slot(s).");
+        }
+
+        private static bool IsSlot(Loop loop)
+        {
+            var arcs = loop.Segs.Count(s => s.IsArc);
+            var lines = loop.Segs.Count - arcs;
+            var width = loop.MaxX - loop.MinX;
+            var height = loop.MaxY - loop.MinY;
+            var longSide = Math.Max(width, height);
+            var shortSide = Math.Min(width, height);
+
+            return arcs >= 2
+                && arcs <= 4
+                && lines >= 2
+                && lines <= 4
+                && shortSide > 0.0
+                && longSide / shortSide >= 1.5;
         }
 
         private static GaProfileResult BuildFromOpenGeometry(
