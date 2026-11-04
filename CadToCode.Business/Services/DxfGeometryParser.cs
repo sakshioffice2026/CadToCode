@@ -2,6 +2,7 @@
 using System.Text;
 using netDxf;
 using netDxf.Entities;
+using netDxf.Units;
 using Vector3 = netDxf.Vector3;
 
 namespace CadToCode.Business.Services;
@@ -454,6 +455,11 @@ public sealed class DxfGeometryParser : IDxfGeometryParser
                 continue;
             }
 
+            if (IsNonPartLayer(part.Layer))
+            {
+                continue;
+            }
+
             var entities = CollectLayerEntities(document, part.Layer);
 
             if (entities.Count == 0)
@@ -462,17 +468,14 @@ public sealed class DxfGeometryParser : IDxfGeometryParser
             }
 
             var partDocument = new DxfDocument();
-            partDocument.DrawingVariables.InsUnits = document.DrawingVariables.InsUnits;
+            partDocument.DrawingVariables.InsUnits = DrawingUnits.Millimeters;
 
             var added = 0;
 
-            foreach (var entity in entities)
+            foreach (var copy in BuildNormalizedViews(entities))
             {
-                if (entity.Clone() is EntityObject copy)
-                {
-                    partDocument.Entities.Add(copy);
-                    added++;
-                }
+                partDocument.Entities.Add(copy);
+                added++;
             }
 
             if (added == 0)
@@ -617,6 +620,340 @@ public sealed class DxfGeometryParser : IDxfGeometryParser
         }
 
         return document;
+    }
+
+    private const int MaxClusterableEntities = 4000;
+
+    private static readonly string[] NonPartLayerMarkers = { "TITLE", "DEFPOINTS", "VIEWPORT" };
+
+    private static bool IsNonPartLayer(string layer)
+    {
+        var name = (layer ?? string.Empty).Trim();
+
+        if (name.Length == 0)
+        {
+            return true;
+        }
+
+        if (name.StartsWith("DIM", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        foreach (var marker in NonPartLayerMarkers)
+        {
+            if (name.Contains(marker, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private sealed class PlacedEntity
+    {
+        public PlacedEntity(EntityObject entity, double minX, double minY, double maxX, double maxY)
+        {
+            Entity = entity;
+            MinX = minX;
+            MinY = minY;
+            MaxX = maxX;
+            MaxY = maxY;
+        }
+
+        public EntityObject Entity { get; }
+
+        public double MinX { get; }
+
+        public double MinY { get; }
+
+        public double MaxX { get; }
+
+        public double MaxY { get; }
+    }
+
+    private sealed class ViewCluster
+    {
+        public List<PlacedEntity> Items { get; } = new();
+
+        public double MinX { get; private set; } = double.MaxValue;
+
+        public double MinY { get; private set; } = double.MaxValue;
+
+        public double MaxX { get; private set; } = double.MinValue;
+
+        public double MaxY { get; private set; } = double.MinValue;
+
+        public double Width => MaxX - MinX;
+
+        public double Height => MaxY - MinY;
+
+        public void Add(PlacedEntity item)
+        {
+            Items.Add(item);
+
+            if (item.MinX < MinX) MinX = item.MinX;
+            if (item.MinY < MinY) MinY = item.MinY;
+            if (item.MaxX > MaxX) MaxX = item.MaxX;
+            if (item.MaxY > MaxY) MaxY = item.MaxY;
+        }
+    }
+
+    private static List<EntityObject> BuildNormalizedViews(List<EntityObject> entities)
+    {
+        var placed = new List<PlacedEntity>();
+
+        foreach (var entity in entities)
+        {
+            if (entity.Clone() is not EntityObject copy)
+            {
+                continue;
+            }
+
+            if (!TryGetBounds(copy, out var minX, out var minY, out var maxX, out var maxY))
+            {
+                continue;
+            }
+
+            placed.Add(new PlacedEntity(copy, minX, minY, maxX, maxY));
+        }
+
+        var result = new List<EntityObject>();
+
+        if (placed.Count == 0)
+        {
+            return result;
+        }
+
+        var overallMinX = placed.Min(p => p.MinX);
+        var overallMinY = placed.Min(p => p.MinY);
+        var overallMaxX = placed.Max(p => p.MaxX);
+        var overallMaxY = placed.Max(p => p.MaxY);
+        var extent = Math.Max(overallMaxX - overallMinX, overallMaxY - overallMinY);
+        var linkGap = Math.Max(1.0, extent * 0.01);
+
+        var clusters = RemoveDuplicateClusters(BuildClusters(placed, linkGap));
+
+        clusters.Sort((a, b) =>
+        {
+            var byX = a.MinX.CompareTo(b.MinX);
+            return byX != 0 ? byX : a.MinY.CompareTo(b.MinY);
+        });
+
+        var largestSide = clusters.Max(c => Math.Max(c.Width, c.Height));
+        var layoutGap = Math.Max(10.0, largestSide * 0.05);
+        var cursorX = 0.0;
+
+        foreach (var cluster in clusters)
+        {
+            var shift = new Vector3(cursorX - cluster.MinX, -cluster.MinY, 0.0);
+
+            foreach (var item in cluster.Items)
+            {
+                try
+                {
+                    item.Entity.TransformBy(Matrix3.Identity, shift);
+                    result.Add(item.Entity);
+                }
+                catch (Exception)
+                {
+                    // An entity that cannot be moved is left out rather than written at its old position.
+                }
+            }
+
+            cursorX += cluster.Width + layoutGap;
+        }
+
+        return result;
+    }
+
+    private static List<ViewCluster> BuildClusters(List<PlacedEntity> items, double gap)
+    {
+        var clusters = new List<ViewCluster>();
+
+        if (items.Count > MaxClusterableEntities)
+        {
+            var single = new ViewCluster();
+
+            foreach (var item in items)
+            {
+                single.Add(item);
+            }
+
+            clusters.Add(single);
+            return clusters;
+        }
+
+        var assigned = new bool[items.Count];
+
+        for (var seed = 0; seed < items.Count; seed++)
+        {
+            if (assigned[seed])
+            {
+                continue;
+            }
+
+            var cluster = new ViewCluster();
+            var queue = new Queue<int>();
+
+            assigned[seed] = true;
+            queue.Enqueue(seed);
+
+            while (queue.Count > 0)
+            {
+                var current = items[queue.Dequeue()];
+                cluster.Add(current);
+
+                for (var other = 0; other < items.Count; other++)
+                {
+                    if (assigned[other])
+                    {
+                        continue;
+                    }
+
+                    var candidate = items[other];
+
+                    if (current.MinX - gap <= candidate.MaxX
+                        && candidate.MinX - gap <= current.MaxX
+                        && current.MinY - gap <= candidate.MaxY
+                        && candidate.MinY - gap <= current.MaxY)
+                    {
+                        assigned[other] = true;
+                        queue.Enqueue(other);
+                    }
+                }
+            }
+
+            clusters.Add(cluster);
+        }
+
+        return clusters;
+    }
+
+    private static List<ViewCluster> RemoveDuplicateClusters(List<ViewCluster> clusters)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var kept = new List<ViewCluster>();
+
+        foreach (var cluster in clusters)
+        {
+            var signature = string.Join(
+                "|",
+                cluster.Items.Count.ToString(CultureInfo.InvariantCulture),
+                Math.Round(cluster.Width, 1).ToString("0.0", CultureInfo.InvariantCulture),
+                Math.Round(cluster.Height, 1).ToString("0.0", CultureInfo.InvariantCulture),
+                cluster.Items.Count(i => i.Entity is Line).ToString(CultureInfo.InvariantCulture),
+                cluster.Items.Count(i => i.Entity is Circle).ToString(CultureInfo.InvariantCulture),
+                cluster.Items.Count(i => i.Entity is Arc).ToString(CultureInfo.InvariantCulture),
+                cluster.Items.Count(i => i.Entity is Polyline2D).ToString(CultureInfo.InvariantCulture));
+
+            if (seen.Add(signature))
+            {
+                kept.Add(cluster);
+            }
+        }
+
+        return kept;
+    }
+
+    private static bool TryGetBounds(EntityObject entity, out double minX, out double minY, out double maxX, out double maxY)
+    {
+        var loX = double.MaxValue;
+        var loY = double.MaxValue;
+        var hiX = double.MinValue;
+        var hiY = double.MinValue;
+
+        void Include(double x, double y)
+        {
+            if (x < loX) loX = x;
+            if (y < loY) loY = y;
+            if (x > hiX) hiX = x;
+            if (y > hiY) hiY = y;
+        }
+
+        switch (entity)
+        {
+            case Line line:
+                Include(line.StartPoint.X, line.StartPoint.Y);
+                Include(line.EndPoint.X, line.EndPoint.Y);
+                break;
+
+            case Circle circle:
+                {
+                    var c = MathHelper.Transform(circle.Center, circle.Normal, CoordinateSystem.Object, CoordinateSystem.World);
+                    Include(c.X - circle.Radius, c.Y - circle.Radius);
+                    Include(c.X + circle.Radius, c.Y + circle.Radius);
+                    break;
+                }
+
+            case Arc arc:
+                {
+                    var c = MathHelper.Transform(arc.Center, arc.Normal, CoordinateSystem.Object, CoordinateSystem.World);
+                    var upright = Math.Abs(arc.Normal.X) < 1e-9 && Math.Abs(arc.Normal.Y) < 1e-9 && arc.Normal.Z > 0.0;
+
+                    if (!upright)
+                    {
+                        Include(c.X - arc.Radius, c.Y - arc.Radius);
+                        Include(c.X + arc.Radius, c.Y + arc.Radius);
+                        break;
+                    }
+
+                    var start = NormalizeDegrees(arc.StartAngle);
+                    var sweep = NormalizeDegrees(arc.EndAngle - arc.StartAngle);
+
+                    if (sweep <= 1e-9)
+                    {
+                        sweep = 360.0;
+                    }
+
+                    var startRad = start * Math.PI / 180.0;
+                    var endRad = (start + sweep) * Math.PI / 180.0;
+
+                    Include(c.X + arc.Radius * Math.Cos(startRad), c.Y + arc.Radius * Math.Sin(startRad));
+                    Include(c.X + arc.Radius * Math.Cos(endRad), c.Y + arc.Radius * Math.Sin(endRad));
+
+                    foreach (var quadrant in new[] { 0.0, 90.0, 180.0, 270.0 })
+                    {
+                        if (AngleWithinArc(quadrant, start, sweep))
+                        {
+                            var radians = quadrant * Math.PI / 180.0;
+                            Include(c.X + arc.Radius * Math.Cos(radians), c.Y + arc.Radius * Math.Sin(radians));
+                        }
+                    }
+
+                    break;
+                }
+
+            case Polyline2D poly:
+                {
+                    List<Vector2> points;
+
+                    try
+                    {
+                        points = poly.PolygonalVertexes(6);
+                    }
+                    catch (Exception)
+                    {
+                        points = poly.Vertexes.Select(v => v.Position).ToList();
+                    }
+
+                    foreach (var point in points)
+                    {
+                        var world = MathHelper.Transform(point, poly.Normal, poly.Elevation);
+                        Include(world.X, world.Y);
+                    }
+
+                    break;
+                }
+        }
+
+        minX = loX;
+        minY = loY;
+        maxX = hiX;
+        maxY = hiY;
+
+        return AllFinite(loX, loY, hiX, hiY) && hiX >= loX && hiY >= loY;
     }
 
     private static List<EntityObject> CollectLayerEntities(DxfDocument document, string layer)

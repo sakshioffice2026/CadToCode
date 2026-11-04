@@ -53,22 +53,22 @@ public class ManufacturingController : Controller
             IConfiguration configuration,
             IDxfGeometryParser dxfParser,
             IWebHostEnvironment environment)
-                {
-                    _processingService = processingService;
-                    _breakdownService = breakdownService;
-                    _logger = logger;
-                    _manufacturingDxfService = manufacturingDxfService;
-                    _parametricSheets = parametricSheets;
-                    _gaPipeline = gaPipeline;
-                    _unitOfWork = unitOfWork;
-                    _storage = storage;
-                    _extractors = extractors;
-                    _decomposer = decomposer;
-                    _referenceCatalog = referenceCatalog;
-                    _configuration = configuration;
-                    _dxfParser = dxfParser;
-                    _environment = environment;
-                }
+    {
+        _processingService = processingService;
+        _breakdownService = breakdownService;
+        _logger = logger;
+        _manufacturingDxfService = manufacturingDxfService;
+        _parametricSheets = parametricSheets;
+        _gaPipeline = gaPipeline;
+        _unitOfWork = unitOfWork;
+        _storage = storage;
+        _extractors = extractors;
+        _decomposer = decomposer;
+        _referenceCatalog = referenceCatalog;
+        _configuration = configuration;
+        _dxfParser = dxfParser;
+        _environment = environment;
+    }
     [HttpGet]
     public async Task<IActionResult> Index(int? id, CancellationToken cancellationToken)
     {
@@ -105,18 +105,21 @@ public class ManufacturingController : Controller
     [RequestFormLimits(MultipartBodyLengthLimit = MaxUploadBytes)]
     public async Task<IActionResult> Upload(IFormFile? file, CancellationToken cancellationToken)
     {
+        var isAjax = string.Equals(
+            Request.Headers["X-Requested-With"].ToString(),
+            "XMLHttpRequest",
+            StringComparison.OrdinalIgnoreCase);
+
         if (file is null || file.Length == 0)
         {
-            TempData["Error"] = "Please choose a DXF file to upload.";
-            return RedirectToAction(nameof(Index));
+            return UploadFailure(isAjax, "Please choose a DXF file to upload.");
         }
 
         var fileName = Path.GetFileName(file.FileName);
 
         if (!string.Equals(Path.GetExtension(fileName), ".dxf", StringComparison.OrdinalIgnoreCase))
         {
-            TempData["Error"] = "Only DXF drawings contain blocks. Please upload a .dxf file.";
-            return RedirectToAction(nameof(Index));
+            return UploadFailure(isAjax, "Only DXF drawings contain blocks. Please upload a .dxf file.");
         }
 
         try
@@ -126,10 +129,36 @@ public class ManufacturingController : Controller
 
             if (result.Success && result.ProjectId.HasValue)
             {
-                return RedirectToAction(nameof(Index), new { id = result.ProjectId.Value });
+                if (!isAjax)
+                {
+                    return RedirectToAction(nameof(Index), new { id = result.ProjectId.Value });
+                }
+
+                int? partCount = null;
+
+                try
+                {
+                    var breakdown = await _breakdownService.BuildBreakdownAsync(result.ProjectId.Value, cancellationToken);
+                    partCount = breakdown?.Parts?.Count;
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Part count could not be read for project {ProjectId}.", result.ProjectId.Value);
+                }
+
+                return Json(new
+                {
+                    success = true,
+                    projectId = result.ProjectId.Value,
+                    partCount
+                });
             }
 
-            TempData["Error"] = result.ErrorMessage ?? "The drawing could not be processed.";
+            return UploadFailure(isAjax, result.ErrorMessage ?? "The drawing could not be processed.");
         }
         catch (OperationCanceledException)
         {
@@ -138,9 +167,18 @@ public class ManufacturingController : Controller
         catch (Exception ex)
         {
             _logger.LogWarning(ex, "Manufacturing upload failed for file {FileName}.", fileName);
-            TempData["Error"] = "The upload could not be processed.";
+            return UploadFailure(isAjax, "The upload could not be processed.");
+        }
+    }
+
+    private IActionResult UploadFailure(bool isAjax, string message)
+    {
+        if (isAjax)
+        {
+            return Json(new { success = false, error = message });
         }
 
+        TempData["Error"] = message;
         return RedirectToAction(nameof(Index));
     }
 
@@ -318,6 +356,28 @@ public class ManufacturingController : Controller
                 return BadRequest(new { error = breakdown?.ErrorMessage ?? "The drawing could not be analysed." });
             }
 
+            var outputFolder = Path.Combine(
+                _environment.ContentRootPath,
+                "App_Data",
+                "manufacturing",
+                id.ToString(CultureInfo.InvariantCulture));
+
+            var exported = await TryBuildPartPackageAsync(id, projectCode, material, outputFolder, cancellationToken);
+
+            if (exported is not null)
+            {
+                await _unitOfWork.Projects.TouchLastOpenedAsync(id, cancellationToken);
+                await _unitOfWork.SaveChangesAsync(cancellationToken);
+
+                return Json(new
+                {
+                    projectId = id,
+                    count = exported.Count,
+                    pdfCount = 0,
+                    files = exported
+                });
+            }
+
             var requests = (breakdown.Parts ?? new List<BlockPartDto>())
                 .Where(p => p is not null && !string.IsNullOrWhiteSpace(p.Layer))
                 .GroupBy(p => p.Layer!, StringComparer.OrdinalIgnoreCase)
@@ -341,12 +401,6 @@ public class ManufacturingController : Controller
             var buffer = new MemoryStream();
             await stream.CopyToAsync(buffer, cancellationToken);
             buffer.Position = 0;
-
-            var outputFolder = Path.Combine(
-                _environment.ContentRootPath,
-                "App_Data",
-                "manufacturing",
-                id.ToString(CultureInfo.InvariantCulture));
 
             if (Directory.Exists(outputFolder))
             {
@@ -417,6 +471,110 @@ public class ManufacturingController : Controller
         {
             _logger.LogWarning(ex, "Manufacturing drawing generation failed for project {ProjectId}.", id);
             return StatusCode(500, new { error = "The manufacturing drawings could not be generated." });
+        }
+    }
+
+    private sealed record GeneratedFileView(
+        string Part,
+        string Layer,
+        int EntityCount,
+        string DxfFileName,
+        string? DxfDownloadUrl,
+        string? PdfFileName,
+        string? PdfDownloadUrl);
+
+    private async Task<List<GeneratedFileView>?> TryBuildPartPackageAsync(
+        int id,
+        string? projectCode,
+        string? material,
+        string outputFolder,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var request = new PartManufacturingRequestDto
+            {
+                ProjectId = id,
+                ProjectCode = string.IsNullOrWhiteSpace(projectCode) ? null : projectCode.Trim(),
+                Origin = PartOriginMode.BottomLeft,
+                DefaultMaterial = material
+            };
+
+            var package = await _manufacturingDxfService.BuildPackageAsync(request, cancellationToken);
+
+            if (package is null || !package.Success || package.Files.Count == 0)
+            {
+                _logger.LogWarning(
+                    "Part exporter returned no files for project {ProjectId}: {Reason}",
+                    id,
+                    package?.ErrorMessage ?? "no files");
+                return null;
+            }
+
+            Directory.CreateDirectory(outputFolder);
+
+            foreach (var oldFile in Directory.GetFiles(outputFolder, "*.dxf")
+                .Concat(Directory.GetFiles(outputFolder, "*.pdf")))
+            {
+                System.IO.File.Delete(oldFile);
+            }
+
+            var invalid = Path.GetInvalidFileNameChars();
+            var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var files = new List<GeneratedFileView>();
+
+            foreach (var file in package.Files)
+            {
+                if (file.Content is null || file.Content.Length == 0)
+                {
+                    continue;
+                }
+
+                var baseName = Path.GetFileNameWithoutExtension(Path.GetFileName(file.FileName ?? string.Empty));
+
+                if (string.IsNullOrWhiteSpace(baseName))
+                {
+                    baseName = "part";
+                }
+
+                baseName = new string(baseName.Select(c => invalid.Contains(c) ? '_' : c).ToArray());
+
+                var uniqueName = baseName;
+                var counter = 2;
+
+                while (!used.Add(uniqueName))
+                {
+                    uniqueName = baseName + "_" + counter.ToString(CultureInfo.InvariantCulture);
+                    counter++;
+                }
+
+                var dxfName = uniqueName + ".dxf";
+
+                await System.IO.File.WriteAllBytesAsync(
+                    Path.Combine(outputFolder, dxfName),
+                    file.Content,
+                    cancellationToken);
+
+                files.Add(new GeneratedFileView(
+                    string.IsNullOrWhiteSpace(file.PartName) ? baseName : file.PartName,
+                    file.NodeId ?? string.Empty,
+                    file.EntityCount,
+                    dxfName,
+                    Url.Action(nameof(DownloadGeneratedFile), "Manufacturing", new { id, fileName = dxfName }),
+                    null,
+                    null));
+            }
+
+            return files.Count == 0 ? null : files;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Part exporter failed for project {ProjectId}. Falling back to layer split.", id);
+            return null;
         }
     }
 

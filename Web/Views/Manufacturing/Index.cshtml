@@ -502,18 +502,15 @@ else
                     data: formData,
                     processData: false,
                     contentType: false,
-                    dataType: 'html'
-                }).done(function (html, textStatus, xhr) {
-                    var id = projectIdFromUrl(xhr.responseURL);
-                    var $dom = $('<div></div>').append($.parseHTML(html, false));
-
-                    if (!id) {
-                        var message = $.trim($dom.find('.cc-alert-error').first().text());
-                        showError(message || 'The drawing could not be processed.');
+                    dataType: 'json'
+                }).done(function (data) {
+                    if (!data || !data.success || !data.projectId) {
+                        showError((data && data.error) || 'The drawing could not be processed.');
                         return;
                     }
 
-                    var parts = $.trim($dom.find('.cc-mfg-stat-value').eq(0).text());
+                    var id = String(data.projectId);
+                    var parts = (data.partCount === null || data.partCount === undefined) ? '' : String(data.partCount);
 
                     $projectId.val(id);
                     setOpenLink(id);
@@ -525,7 +522,7 @@ else
                     var message = (xhr.responseJSON && xhr.responseJSON.error) || 'The upload could not be processed.';
                     showError(message);
                 }).always(function () {
-                    $submit.prop('disabled', false);
+                    $submit.prop('disabled', false).text('Upload GA DXF');
                     $spinner.prop('hidden', true);
                 });
             });
