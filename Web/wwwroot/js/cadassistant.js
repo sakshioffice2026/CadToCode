@@ -419,6 +419,40 @@
         scrollToEnd();
     }
 
+
+    function addManufacturingDownloads(result) {
+        var parts = (result && result.parts) || [];
+
+        if (parts.length === 0) {
+            return;
+        }
+
+        var wrap = el("div", "ca-msg ca-msg-assistant");
+        var row = el("div", "ca-actions");
+
+        if (result.zipDownloadUrl) {
+            var zip = el("a", "ca-action ca-action-primary", "Download all (ZIP)");
+            zip.href = result.zipDownloadUrl;
+            zip.style.textDecoration = "none";
+            zip.style.display = "inline-block";
+            row.appendChild(zip);
+        }
+
+        parts.forEach(function (part) {
+            var link = el("a", "ca-action", (part.drawingNumber ? part.drawingNumber + " \u00B7 " : "") + part.name);
+            link.href = part.downloadUrl;
+            link.download = part.fileName;
+            link.title = part.fileName + " (" + part.entityCount + " entities)";
+            link.style.textDecoration = "none";
+            link.style.display = "inline-block";
+            row.appendChild(link);
+        });
+
+        wrap.appendChild(row);
+        thread.appendChild(wrap);
+        scrollToEnd();
+    }
+
     function renderCode(block) {
         var details = el("details", "ca-code");
         var summary = el("summary");
@@ -824,6 +858,11 @@
                 if (data && data.success && data.message) {
                     replied = true;
                     addAssistant(data.message);
+
+
+                    if (data.manufacturing) {
+                        addManufacturingDownloads(data.manufacturing);
+                    }
 
                     if (data.warnings && data.warnings.length > 0) {
                         addNote(data.warnings.join(" "));

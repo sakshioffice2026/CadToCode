@@ -448,6 +448,21 @@ public class CadAssistController : Controller
 
         var sessionId = _ai.EnsureSession(request.ProjectId, request.SessionId);
 
+        if (CadAssistManufacturingIntentResolver.IsManufacturingRequest(request.Prompt))
+        {
+            return Json(new CadAssistChatResponse
+            {
+                Success = true,
+                SessionId = sessionId,
+                Model = "manufacturing",
+                Message = new CadAssistMessageDto
+                {
+                    Content = "To generate manufacturing drawings I need the GA drawing. Attach the GA .dxf with the paperclip, then send the same request again.",
+                    Model = "manufacturing"
+                }
+            });
+        }
+
         if (ShouldUseConversation(request.ProjectId, sessionId, request.Prompt))
         {
             var started = System.Diagnostics.Stopwatch.StartNew();
@@ -685,6 +700,18 @@ public class CadAssistController : Controller
             return BadRequest(new CadAssistChatResponse { Error = "You can upload up to " + MaxUploadFiles + " files at a time." });
         }
 
+        if (CadAssistManufacturingIntentResolver.IsManufacturingRequest(prompt))
+        {
+            var gaFile = selected.FirstOrDefault(f => Path.GetExtension(f.FileName).Equals(".dxf", StringComparison.OrdinalIgnoreCase));
+
+            if (gaFile is null)
+            {
+                return BadRequest(new CadAssistChatResponse { Error = "Manufacturing drawings need a GA .dxf file. Attach the GA drawing and ask again." });
+            }
+
+            return await GenerateManufacturingAsync(gaFile, projectId, sessionId, prompt, cancellationToken);
+        }
+
         var session = _ai.EnsureSession(projectId, sessionId);
 
         var perFileChars = Math.Max(MinGeometryChars, _options.MaxGeometryChars) / selected.Count;
@@ -869,6 +896,126 @@ public class CadAssistController : Controller
             unverified,
             processing = summaries
         });
+    }
+
+    private async Task<IActionResult> GenerateManufacturingAsync(
+        IFormFile gaFile,
+        int projectId,
+        string? sessionId,
+        string? prompt,
+        CancellationToken cancellationToken)
+    {
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var session = _ai.EnsureSession(projectId, sessionId);
+        var service = HttpContext.RequestServices.GetRequiredService<IManufacturingDrawingService>();
+
+        var request = new CadAssistManufacturingRequest
+        {
+            ProjectId = projectId,
+            SessionId = session,
+            Prompt = prompt ?? string.Empty,
+            IncludeAllParts = CadAssistManufacturingIntentResolver.WantsAllParts(prompt),
+            PartKeys = CadAssistManufacturingIntentResolver.ExtractPartNames(prompt),
+            GaFileName = gaFile.FileName
+        };
+
+        CadAssistManufacturingResult result;
+
+        await using (var stream = gaFile.OpenReadStream())
+        {
+            result = await service.GenerateFromGaDxfAsync(stream, gaFile.FileName, request, cancellationToken);
+        }
+
+        if (!result.Success)
+        {
+            return Json(new
+            {
+                success = false,
+                sessionId = session,
+                model = "manufacturing",
+                elapsedMs = started.ElapsedMilliseconds,
+                error = result.Error ?? "Manufacturing drawings could not be generated."
+            });
+        }
+
+        var text = new StringBuilder();
+        text.Append("Generated ").Append(result.Parts.Count).Append(" manufacturing drawing(s) from ").Append(result.GaFileName).AppendLine(":");
+        text.AppendLine();
+
+        foreach (var part in result.Parts)
+        {
+            text.Append("- ").Append(part.Name).Append(" (DRG ").Append(part.DrawingNumber).Append(", ").Append(part.EntityCount).AppendLine(" entities)");
+        }
+
+        if (result.Skipped.Count > 0)
+        {
+            text.AppendLine().Append("Skipped: ").AppendLine(string.Join(", ", result.Skipped));
+        }
+
+        foreach (var warning in result.Warnings)
+        {
+            text.AppendLine().Append("Note: ").AppendLine(warning);
+        }
+
+        var message = new CadAssistMessageDto
+        {
+            Role = CadAssistRole.Assistant,
+            Content = text.ToString().TrimEnd(),
+            Model = "manufacturing",
+            ElapsedMs = started.ElapsedMilliseconds,
+            Attachments = new List<string> { result.GaFileName }
+        };
+
+        _memory.Append(projectId, session, new CadAssistMessageDto
+        {
+            Role = CadAssistRole.User,
+            Content = string.IsNullOrWhiteSpace(prompt) ? "Generate manufacturing drawings" : prompt,
+            Attachments = new List<string> { result.GaFileName }
+        });
+        _memory.Append(projectId, session, message);
+
+        return Json(new
+        {
+            success = true,
+            sessionId = session,
+            message,
+            model = "manufacturing",
+            elapsedMs = started.ElapsedMilliseconds,
+            manufacturing = result
+        });
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> ManufacturingDownload(
+        int jobId,
+        string file,
+        [FromServices] IManufacturingDrawingService service,
+        CancellationToken cancellationToken)
+    {
+        var opened = await service.OpenDrawingAsync(jobId, file, cancellationToken);
+
+        if (opened is null)
+        {
+            return NotFound();
+        }
+
+        return File(opened.Value.Content, "application/dxf", opened.Value.FileName);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> ManufacturingZip(
+        int jobId,
+        [FromServices] IManufacturingDrawingService service,
+        CancellationToken cancellationToken)
+    {
+        var opened = await service.OpenZipAsync(jobId, cancellationToken);
+
+        if (opened is null)
+        {
+            return NotFound();
+        }
+
+        return File(opened.Value.Content, "application/zip", opened.Value.FileName);
     }
 
     [HttpGet]

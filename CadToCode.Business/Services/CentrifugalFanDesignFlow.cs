@@ -21,9 +21,9 @@ public sealed class CentrifugalFanDesignFlow : IEquipmentDesignFlow
     public const string ManifestId = "centrifugal-fan";
 
     private static readonly Regex QuantityRegex = new(
-        @"(?<![\w.])(?<num>\d+(?:[.,]\d+)?)\s*(?<unit>m\s*(?:3|\u00B3)\s*/\s*(?:s|sec|h|hr|min)|cmh|cfm|l\s*/\s*s|lps|kpa|mbar|mmwg|mm\s*wg|mm\s*h2o|inwg|in\s*wg|pa|rpm|rad\s*/\s*s|rps|hz|mm|cm|%|m)(?![a-z0-9])",
-        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
-        TimeSpan.FromMilliseconds(250));
+    @"(?<![\w.])(?<num>\d+(?:[.,]\d+)?)\s*(?<unit>m\s*(?:3|\u00B3)\s*/\s*(?:s|sec|h|hr|min)|cmh|cfm|l\s*/\s*s|lps|kpa|mbar|mmwg|mm\s*wg|mm\s*h2o|inwg|in\s*wg|pa|rpm|rad\s*/\s*s|rps|hz|mm|cm|%|m)(?![a-z0-9])",
+    RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+    TimeSpan.FromSeconds(5));
 
     private static readonly Regex DensityRegex = new(
         @"densit\w*\D{0,12}?(?<n>\d+(?:[.,]\d+)?)",

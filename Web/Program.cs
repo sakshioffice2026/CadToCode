@@ -99,6 +99,12 @@ builder.Services.AddScoped<IAiComponentClassifier, AiComponentClassifier>();
 builder.Services.AddScoped<ICodeGenerationService, CodeGenerationService>();
 builder.Services.AddScoped<IDefinitionLearningService, DefinitionLearningService>();
 builder.Services.AddScoped<IProjectProcessingService, ProjectProcessingService>();
+builder.Services.Configure<ComponentSettings>(builder.Configuration.GetSection("ComponentSettings"));
+builder.Services.AddScoped<IManufacturingDrawingService>(sp => new ManufacturingDrawingService(
+    sp.GetRequiredService<ApplicationDbContext>(),
+    sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<ComponentSettings>>(),
+    sp.GetRequiredService<Microsoft.Extensions.Options.IOptions<UploadOptions>>(),
+    builder.Environment.WebRootPath));
 builder.Services.AddScoped<IDesignStateService, DesignStateService>();
 builder.Services.AddSingleton<IStepScriptRunner, StepScriptRunner>();
 builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>();
