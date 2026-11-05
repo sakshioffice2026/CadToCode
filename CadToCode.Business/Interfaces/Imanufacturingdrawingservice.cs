@@ -35,4 +35,11 @@ public interface IManufacturingDrawingService
     Task<(Stream Content, string FileName)?> OpenStepZipAsync(
         int jobId,
         CancellationToken cancellationToken = default);
+
+    Task<CadAssistStepResult> SaveTemplateStepAsync(
+    int jobId,
+    string fileName,
+    string stepContent,
+    string title,
+    CancellationToken cancellationToken = default);
 }

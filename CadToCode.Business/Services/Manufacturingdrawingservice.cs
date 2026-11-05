@@ -401,7 +401,77 @@ public sealed class ManufacturingDrawingService : IManufacturingDrawingService
         result.ZipDownloadUrl = $"/CadAssist/StepZip?jobId={jobId}";
         return result;
     }
+    public async Task<CadAssistStepResult> SaveTemplateStepsAsync(
+    int jobId,
+    IReadOnlyList<(string FileName, string StepContent, string Title)> files,
+    CancellationToken cancellationToken = default)
+    {
+        var result = new CadAssistStepResult { JobId = jobId };
 
+        if (files is null || files.Count == 0)
+        {
+            result.Error = "The template STEP content is empty.";
+            return result;
+        }
+
+        foreach (var item in files)
+        {
+            var checkName = Path.GetFileName(item.FileName ?? string.Empty);
+
+            if (checkName.Length == 0
+                || !checkName.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
+                || string.IsNullOrWhiteSpace(item.StepContent))
+            {
+                result.Error = "The template STEP content is empty.";
+                return result;
+            }
+        }
+
+        var job = await _db.DxfJobs.FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken).ConfigureAwait(false);
+
+        if (job == null)
+        {
+            result.Error = "The manufacturing drawings were not found. Generate them first.";
+            return result;
+        }
+
+        var dir = StepDirectory(jobId);
+        Directory.CreateDirectory(dir);
+
+        foreach (var old in Directory.GetFiles(dir, "*.step"))
+        {
+            File.Delete(old);
+        }
+
+        var index = 0;
+
+        foreach (var item in files)
+        {
+            var name = Path.GetFileName(item.FileName);
+
+            await File.WriteAllTextAsync(
+                Path.Combine(dir, name),
+                item.StepContent,
+                new System.Text.UTF8Encoding(false),
+                cancellationToken).ConfigureAwait(false);
+
+            result.Parts.Add(new CadAssistStepPartDto
+            {
+                Key = index == 0 ? "Assembly" : Path.GetFileNameWithoutExtension(name),
+                Name = item.Title,
+                DrawingNumber = string.Empty,
+                FileName = name,
+                Thickness = 0,
+                DownloadUrl = $"/CadAssist/StepDownload?jobId={jobId}&file={Uri.EscapeDataString(name)}"
+            });
+
+            index++;
+        }
+
+        result.Success = true;
+        result.ZipDownloadUrl = $"/CadAssist/StepZip?jobId={jobId}";
+        return result;
+    }
     public Task<(Stream Content, string FileName)?> OpenStepAsync(
         int jobId,
         string fileName,

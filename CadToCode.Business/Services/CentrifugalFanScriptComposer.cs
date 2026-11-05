@@ -32,6 +32,11 @@ public static class CentrifugalFanScriptComposer
     private const int MinBlades = 3;
     private const int MaxBlades = 64;
 
+    public static readonly string[] PartNames =
+    {
+        "ScrollCasing", "InletPlate", "BackPlate", "Hub", "ImpellerBackPlate", "Shroud", "Blade"
+    };
+
     private static readonly string[] RequiredKeys =
     {
         ImpellerOuterDiameterM, ImpellerInletDiameterM, BladeWidthM, BladeInletWidthM, HubDiameterM,
@@ -46,9 +51,12 @@ public static class CentrifugalFanScriptComposer
         CasingInletDiameterM
     };
 
-    public static ComposedScriptResult Compose(IReadOnlyDictionary<string, double> valuesSi)
+    public static ComposedScriptResult Compose(IReadOnlyDictionary<string, double> valuesSi, string? onlyPart = null)
     {
         ArgumentNullException.ThrowIfNull(valuesSi);
+
+        if (onlyPart is not null && !PartNames.Contains(onlyPart, StringComparer.Ordinal))
+            return ComposedScriptResult.Fail(new[] { $"Unknown fan part '{onlyPart}'." });
 
         var values = new Dictionary<string, double>(valuesSi, StringComparer.OrdinalIgnoreCase);
         var errors = new List<string>();
@@ -157,7 +165,8 @@ public static class CentrifugalFanScriptComposer
             .Replace("@@WALL@@", Mm(wall))
             .Replace("@@HOUT@@", Mm(outlet))
             .Replace("@@DIN@@", Mm(inlet))
-            .Replace("@@COUNT@@", count.ToString(CultureInfo.InvariantCulture));
+            .Replace("@@COUNT@@", count.ToString(CultureInfo.InvariantCulture))
+            .Replace("@@ONLY@@", onlyPart ?? string.Empty);
 
         var applied = RequiredKeys.ToDictionary(k => k, k => values[k], StringComparer.OrdinalIgnoreCase);
 
@@ -165,12 +174,11 @@ public static class CentrifugalFanScriptComposer
         {
             Success = true,
             Script = script,
-            FileBaseName = FileBaseName,
-            IsFullAssembly = true,
-            IncludedScriptNames = new[]
-            {
-                "ScrollCasing", "InletPlate", "BackPlate", "Hub", "ImpellerBackPlate", "Shroud", "Blades"
-            },
+            FileBaseName = onlyPart is null ? FileBaseName : FileBaseName + "_" + onlyPart,
+            IsFullAssembly = onlyPart is null,
+            IncludedScriptNames = onlyPart is null
+                ? new[] { "ScrollCasing", "InletPlate", "BackPlate", "Hub", "ImpellerBackPlate", "Shroud", "Blades" }
+                : new[] { onlyPart },
             AppliedValues = applied,
             Errors = Array.Empty<string>()
         };
@@ -209,8 +217,9 @@ const double CasingInletDiameter = @@DIN@@;
 const int BladeCount = @@COUNT@@;
 const int ScrollSteps = 120;
 const int BladeSteps = 24;
+const string OnlyPart = "@@ONLY@@";
 
-var doc = new StepDocument("CentrifugalFan");
+var doc = new StepDocument(OnlyPart.Length == 0 ? "CentrifugalFan" : OnlyPart);
 
 var r2 = ImpellerOuterDiameter / 2.0;
 var r1 = ImpellerInletDiameter / 2.0;
@@ -249,22 +258,22 @@ for (var i = ScrollSteps; i >= 0; i--)
     wallOutline.Add(innerSpiral[i]);
 }
 
-doc.Add.Part(Solid.Extrude(outerSpiral, CasingWall).AtZ(0.0).Named("BackPlate"));
-doc.Add.Part(Solid.Extrude(wallOutline, CasingWidth).AtZ(CasingWall).Named("ScrollCasing"));
+if (OnlyPart.Length == 0 || OnlyPart == "BackPlate") doc.Add.Part(Solid.Extrude(outerSpiral, CasingWall).AtZ(0.0).Named("BackPlate"));
+if (OnlyPart.Length == 0 || OnlyPart == "ScrollCasing") doc.Add.Part(Solid.Extrude(wallOutline, CasingWidth).AtZ(CasingWall).Named("ScrollCasing"));
 
 var inletProfile = Profile2D.Create(
     ProfileLoop.Polygon(outerSpiral),
     new[] { ProfileLoop.Circle(0, 0, CasingInletDiameter / 2.0) });
 
-doc.Add.Part(Solid.Extrude(inletProfile, CasingWall).Placed(Frame3D.At(0, 0, casingTopZ)).Named("InletPlate"));
+if (OnlyPart.Length == 0 || OnlyPart == "InletPlate") doc.Add.Part(Solid.Extrude(inletProfile, CasingWall).Placed(Frame3D.At(0, 0, casingTopZ)).Named("InletPlate"));
 
-doc.Add.Part(Solid.Cylinder(0, 0, hubRadius, PlateThickness + bladeHeight).AtZ(impellerZ).Named("Hub"));
+if (OnlyPart.Length == 0 || OnlyPart == "Hub") doc.Add.Part(Solid.Cylinder(0, 0, hubRadius, PlateThickness + bladeHeight).AtZ(impellerZ).Named("Hub"));
 
 var backPlateProfile = Profile2D.Rectangle(hubRadius, 0, r2 - hubRadius, PlateThickness);
-doc.Add.Part(Solid.Revolve(backPlateProfile).Placed(Frame3D.At(0, 0, impellerZ)).Named("ImpellerBackPlate"));
+if (OnlyPart.Length == 0 || OnlyPart == "ImpellerBackPlate") doc.Add.Part(Solid.Revolve(backPlateProfile).Placed(Frame3D.At(0, 0, impellerZ)).Named("ImpellerBackPlate"));
 
 var shroudProfile = Profile2D.Rectangle(r1, 0, r2 - r1, PlateThickness);
-doc.Add.Part(Solid.Revolve(shroudProfile).Placed(Frame3D.At(0, 0, shroudZ)).Named("Shroud"));
+if (OnlyPart.Length == 0 || OnlyPart == "Shroud") doc.Add.Part(Solid.Revolve(shroudProfile).Placed(Frame3D.At(0, 0, shroudZ)).Named("Shroud"));
 
 var radii = new List<double>();
 var angles = new List<double>();
@@ -325,7 +334,10 @@ for (var i = 0; i < BladeCount; i++)
         outline.Add((q.X * cosR - q.Y * sinR, q.X * sinR + q.Y * cosR));
     }
 
-    doc.Add.Part(Solid.Extrude(outline, bladeHeight).AtZ(bladeZ).Named("Blade" + (i + 1)));
+    if (OnlyPart.Length == 0 || (OnlyPart == "Blade" && i == 0))
+    {
+        doc.Add.Part(Solid.Extrude(outline, bladeHeight).AtZ(bladeZ).Named(OnlyPart == "Blade" ? "Blade" : "Blade" + (i + 1)));
+    }
 }
 
 var outputPath = Path.GetFullPath("CentrifugalFan.step");

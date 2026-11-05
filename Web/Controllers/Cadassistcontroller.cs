@@ -457,8 +457,7 @@ public class CadAssistController : Controller
                 Model = "manufacturing",
                 Message = new CadAssistMessageDto
                 {
-                    Content = "To generate manufacturing drawings I need the GA drawing. Attach the GA .dxf with the paperclip, then send the same request again.",
-                    Model = "manufacturing"
+                    Content = "To generate manufacturing drawings I need the GA drawing. Attach the GA drawing (.dxf, .png or .jpg) with the paperclip, then send the same request again.",
                 }
             });
         }
@@ -706,7 +705,27 @@ public class CadAssistController : Controller
 
             if (gaFile is null)
             {
-                return BadRequest(new CadAssistChatResponse { Error = "Manufacturing drawings need a GA .dxf file. Attach the GA drawing and ask again." });
+                var imageFile = selected.FirstOrDefault(f =>
+                {
+                    var imageExt = Path.GetExtension(f.FileName);
+                    return imageExt.Equals(".png", StringComparison.OrdinalIgnoreCase)
+                        || imageExt.Equals(".jpg", StringComparison.OrdinalIgnoreCase)
+                        || imageExt.Equals(".jpeg", StringComparison.OrdinalIgnoreCase);
+                });
+
+                if (imageFile is null)
+                {
+                    return BadRequest(new CadAssistChatResponse { Error = "Manufacturing drawings need a GA .dxf file. Attach the GA drawing and ask again." });
+                }
+
+                var converted = await ConvertImageToGaDxfAsync(imageFile, cancellationToken);
+
+                if (converted.File is null)
+                {
+                    return BadRequest(new CadAssistChatResponse { Error = converted.Error ?? "The image could not be converted to a GA drawing." });
+                }
+
+                gaFile = converted.File;
             }
 
             return await GenerateManufacturingAsync(gaFile, projectId, sessionId, prompt, cancellationToken);
@@ -985,6 +1004,118 @@ public class CadAssistController : Controller
             elapsedMs = started.ElapsedMilliseconds,
             manufacturing = result
         });
+    }
+
+    private async Task<(IFormFile? File, string? Error)> ConvertImageToGaDxfAsync(
+        IFormFile image,
+        CancellationToken cancellationToken)
+    {
+        var extractor = HttpContext.RequestServices
+            .GetServices<IGeometryExtractor>()
+            .FirstOrDefault(e => e.CanHandle(SourceFileType.Image));
+
+        if (extractor is null)
+        {
+            return (null, "Image drawings are not available on this server.");
+        }
+
+        ExtractedGeometry geometry;
+
+        try
+        {
+            await using var imageStream = image.OpenReadStream();
+            geometry = await extractor.ExtractAsync(imageStream, cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return (null, "The image could not be read: " + ex.Message);
+        }
+
+        static string LayerName(string? raw) => "IMAGE";
+        static bool Ok(double v) => double.IsFinite(v);
+
+        var doc = new netDxf.DxfDocument(netDxf.Header.DxfVersion.AutoCad2010);
+        var count = 0;
+
+        foreach (var l in geometry.Lines)
+        {
+            if (!Ok(l.Start.X) || !Ok(l.Start.Y) || !Ok(l.End.X) || !Ok(l.End.Y))
+            {
+                continue;
+            }
+
+            doc.Entities.Add(new netDxf.Entities.Line(
+                new netDxf.Vector2(l.Start.X, l.Start.Y),
+                new netDxf.Vector2(l.End.X, l.End.Y))
+            { Layer = new netDxf.Tables.Layer(LayerName(l.Layer)) });
+            count++;
+        }
+
+        foreach (var p in geometry.Polylines)
+        {
+            var vertices = p.Vertices
+                .Where(v => Ok(v.X) && Ok(v.Y) && Ok(v.Bulge))
+                .Select(v => new netDxf.Entities.Polyline2DVertex(v.X, v.Y, v.Bulge))
+                .ToList();
+
+            if (vertices.Count < 2)
+            {
+                continue;
+            }
+
+            doc.Entities.Add(new netDxf.Entities.Polyline2D(vertices, p.IsClosed)
+            { Layer = new netDxf.Tables.Layer(LayerName(p.Layer)) });
+            count++;
+        }
+
+        foreach (var c in geometry.Circles)
+        {
+            if (!Ok(c.Center.X) || !Ok(c.Center.Y) || !Ok(c.Radius) || c.Radius <= 0)
+            {
+                continue;
+            }
+
+            doc.Entities.Add(new netDxf.Entities.Circle(new netDxf.Vector2(c.Center.X, c.Center.Y), c.Radius)
+            { Layer = new netDxf.Tables.Layer(LayerName(c.Layer)) });
+            count++;
+        }
+
+        foreach (var a in geometry.Arcs)
+        {
+            if (!Ok(a.Center.X) || !Ok(a.Center.Y) || !Ok(a.Radius) || a.Radius <= 0 || !Ok(a.StartAngle) || !Ok(a.EndAngle))
+            {
+                continue;
+            }
+
+            doc.Entities.Add(new netDxf.Entities.Arc(new netDxf.Vector2(a.Center.X, a.Center.Y), a.Radius, a.StartAngle, a.EndAngle)
+            { Layer = new netDxf.Tables.Layer(LayerName(a.Layer)) });
+            count++;
+        }
+
+        if (count == 0)
+        {
+            return (null, "No usable drawing geometry was detected in the image.");
+        }
+
+        var memory = new MemoryStream();
+        doc.Save(memory);
+        memory.Position = 0;
+        HttpContext.Response.RegisterForDispose(memory);
+
+        var baseName = Path.GetFileNameWithoutExtension(image.FileName ?? string.Empty);
+        var dxfName = (string.IsNullOrWhiteSpace(baseName) ? "ga-drawing" : baseName) + ".dxf";
+
+        IFormFile file = new FormFile(memory, 0, memory.Length, "files", dxfName)
+        {
+            Headers = new HeaderDictionary(),
+            ContentType = "application/dxf"
+        };
+
+        return (file, null);
     }
 
     [HttpPost]
