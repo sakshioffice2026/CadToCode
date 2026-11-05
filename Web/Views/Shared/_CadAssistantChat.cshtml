@@ -19,8 +19,6 @@
 
 @Html.AntiForgeryToken()
 
-@if (isDraft)
-{
     <button type="button"
             class="ca-launcher ca-toggle"
             data-ca-toggle
@@ -29,14 +27,13 @@
         <span class="ca-launcher-icon" aria-hidden="true">&#9889;</span>
         <span class="ca-launcher-label">CAD Assistant</span>
     </button>
-}
 
 <aside class="ca-panel"
        id="cc-assist"
        data-ca-root
        data-ca-project="@projectId"
        data-ca-page="@(isUploadPage ? "upload" : (isDraft ? "general" : "workspace"))"
-       data-ca-open-default="@(isUploadPage ? "true" : "false")"
+       data-ca-open-default="false"
        data-ca-chat-url="@Url.Action("Chat", "CadAssist")"
        data-ca-history-url="@Url.Action("History", "CadAssist")"
        data-ca-reset-url="@Url.Action("Reset", "CadAssist")"
@@ -61,6 +58,8 @@
             <span>Save</span>
         </button>
         <button type="button" class="ca-icon-btn" data-ca-reset title="Start a new chat" aria-label="Start a new chat">&#8635;</button>
+        <button type="button" class="ca-icon-btn" data-ca-minimize title="Minimize" aria-label="Minimize CAD Assistant">&#8722;</button>
+        <button type="button" class="ca-icon-btn" data-ca-maximize title="Maximize" aria-label="Maximize CAD Assistant">&#9633;</button>
         <button type="button" class="ca-icon-btn" data-ca-close title="Close" aria-label="Close CAD Assistant">&times;</button>
     </header>
 

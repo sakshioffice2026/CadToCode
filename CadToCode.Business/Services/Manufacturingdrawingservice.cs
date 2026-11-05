@@ -18,6 +18,8 @@ public sealed class ManufacturingDrawingService : IManufacturingDrawingService
     private const string OutputFolder = "ManufacturingDrawings";
     private const int ClusterThreshold = 40;
     private const int MaxCellsPerEntity = 400;
+    private const double DefaultStepThickness = 10.0;
+    private const double MaxStepThickness = 10000.0;
 
     private readonly ApplicationDbContext _db;
     private readonly ComponentSettings _settings;
@@ -156,6 +158,307 @@ public sealed class ManufacturingDrawingService : IManufacturingDrawingService
 
         ms.Position = 0;
         return Task.FromResult<(Stream Content, string FileName)?>((ms, $"Job_{jobId}_Manufacturing_Drawings.zip"));
+    }
+
+    // ------------------------------------------------------------- STEP files
+
+    public async Task<CadAssistStepResult> GenerateStepFilesAsync(
+        CadAssistStepRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var clock = Stopwatch.StartNew();
+
+        var requested = request.Thickness;
+        var useDefault = !requested.HasValue || !double.IsFinite(requested.Value) || requested.Value <= 0;
+        var thickness = useDefault ? DefaultStepThickness : requested!.Value;
+
+        var result = new CadAssistStepResult
+        {
+            JobId = request.JobId,
+            Thickness = thickness,
+            UsedDefaultThickness = useDefault
+        };
+
+        if (thickness > MaxStepThickness)
+        {
+            result.Error = "The thickness must be between 0 and " + MaxStepThickness + " mm.";
+            return result;
+        }
+
+        var job = await _db.DxfJobs.FirstOrDefaultAsync(j => j.Id == request.JobId, cancellationToken).ConfigureAwait(false);
+
+        if (job == null)
+        {
+            result.Error = "The manufacturing drawings were not found. Generate them first.";
+            return result;
+        }
+
+        var sourcePath = ResolveSourcePath(job.StoredFilePath);
+
+        if (sourcePath == null)
+        {
+            result.Error = "The original GA DXF file is missing.";
+            return result;
+        }
+
+        DxfDocument? doc;
+
+        try
+        {
+            doc = await Task.Run(() => DxfDocument.Load(sourcePath), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            result.Error = "Could not read the GA DXF: " + ex.Message;
+            return result;
+        }
+
+        if (doc == null)
+        {
+            result.Error = "Could not read the GA DXF.";
+            return result;
+        }
+
+        Plan plan;
+
+        try
+        {
+            var planRequest = new CadAssistManufacturingRequest
+            {
+                ProjectId = request.ProjectId,
+                SessionId = request.SessionId,
+                JobId = job.Id,
+                IncludeAllParts = true,
+                GaFileName = job.OriginalFileName
+            };
+
+            plan = await Task.Run(() => BuildPlan(doc, planRequest, job.Id, cancellationToken), cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            result.Error = "The GA DXF could not be analysed: " + ex.Message;
+            return result;
+        }
+
+        if (plan.Sheets.Count == 0)
+        {
+            result.Error = "No parts could be detected in this GA DXF.";
+            return result;
+        }
+
+        var outDir = StepDirectory(job.Id);
+        Directory.CreateDirectory(outDir);
+
+        foreach (var old in Directory.GetFiles(outDir, "*.step"))
+        {
+            File.Delete(old);
+        }
+
+        var index = 0;
+
+        foreach (var sheet in plan.Sheets)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            index++;
+
+            var baseName = $"{index:00}_{Sanitize((sheet.DrgNo.Length > 0 && !sheet.DrgNo.StartsWith("J", StringComparison.Ordinal) ? sheet.DrgNo + "_" : string.Empty) + sheet.Name)}";
+            var fileName = baseName + ".step";
+            var entities = ToDrawingEntities(DropOutliers(sheet.Items));
+
+            var outcome = ManufacturingStepBuilder.Build(
+                entities,
+                sheet.Name,
+                sheet.DrgNo,
+                thickness,
+                Path.Combine(outDir, fileName));
+
+            if (!outcome.Success)
+            {
+                result.Skipped.Add(sheet.Name + ": " + outcome.Error);
+                continue;
+            }
+
+            if (outcome.Warning != null)
+            {
+                result.Warnings.Add(outcome.Warning);
+            }
+
+            result.Parts.Add(new CadAssistStepPartDto
+            {
+                Key = sheet.Key,
+                Name = sheet.Name,
+                DrawingNumber = sheet.DrgNo,
+                FileName = fileName,
+                Thickness = thickness,
+                DownloadUrl = $"/CadAssist/StepDownload?jobId={job.Id}&file={Uri.EscapeDataString(fileName)}"
+            });
+        }
+
+        if (result.Parts.Count == 0)
+        {
+            result.Error = "No STEP files could be created. " + string.Join(" ", result.Skipped);
+            return result;
+        }
+
+        result.Success = true;
+        result.ZipDownloadUrl = $"/CadAssist/StepZip?jobId={job.Id}";
+        result.ElapsedMs = clock.ElapsedMilliseconds;
+        return result;
+    }
+
+    public Task<(Stream Content, string FileName)?> OpenStepAsync(
+        int jobId,
+        string fileName,
+        CancellationToken cancellationToken = default)
+    {
+        var name = Path.GetFileName(fileName ?? string.Empty);
+
+        if (name.Length == 0
+            || !string.Equals(name, fileName, StringComparison.Ordinal)
+            || !name.EndsWith(".step", StringComparison.OrdinalIgnoreCase))
+        {
+            return Task.FromResult<(Stream Content, string FileName)?>(null);
+        }
+
+        var path = Path.Combine(StepDirectory(jobId), name);
+
+        if (!File.Exists(path))
+        {
+            return Task.FromResult<(Stream Content, string FileName)?>(null);
+        }
+
+        Stream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
+        return Task.FromResult<(Stream Content, string FileName)?>((stream, name));
+    }
+
+    public Task<(Stream Content, string FileName)?> OpenStepZipAsync(
+        int jobId,
+        CancellationToken cancellationToken = default)
+    {
+        var dir = StepDirectory(jobId);
+
+        if (!Directory.Exists(dir))
+        {
+            return Task.FromResult<(Stream Content, string FileName)?>(null);
+        }
+
+        var files = Directory.GetFiles(dir, "*.step");
+
+        if (files.Length == 0)
+        {
+            return Task.FromResult<(Stream Content, string FileName)?>(null);
+        }
+
+        var ms = new MemoryStream();
+
+        using (var zip = new ZipArchive(ms, ZipArchiveMode.Create, true))
+        {
+            foreach (var file in files.OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            {
+                zip.CreateEntryFromFile(file, Path.GetFileName(file));
+            }
+        }
+
+        ms.Position = 0;
+        return Task.FromResult<(Stream Content, string FileName)?>((ms, $"Job_{jobId}_Step_Files.zip"));
+    }
+
+    private string StepDirectory(int jobId)
+    {
+        return Path.Combine(JobDirectory(jobId), "Step");
+    }
+
+    private static List<DrawingEntity> ToDrawingEntities(IEnumerable<EntityObject> items)
+    {
+        var list = new List<DrawingEntity>();
+
+        foreach (var e in items)
+        {
+            try
+            {
+                var layer = e.Layer?.Name;
+                var lineType = e.Linetype?.Name;
+
+                switch (e)
+                {
+                    case Line line:
+                        if (Math.Abs(line.StartPoint.X - line.EndPoint.X) > 1e-9 || Math.Abs(line.StartPoint.Y - line.EndPoint.Y) > 1e-9)
+                        {
+                            list.Add(DrawingEntity.CreateLine(line.StartPoint.X, line.StartPoint.Y, line.EndPoint.X, line.EndPoint.Y, layer, lineType));
+                        }
+
+                        break;
+
+                    case Arc arc:
+                        if (arc.Radius > 1e-9)
+                        {
+                            list.Add(DrawingEntity.CreateArc(arc.Center.X, arc.Center.Y, arc.Radius, arc.StartAngle, arc.EndAngle, layer, lineType));
+                        }
+
+                        break;
+
+                    case Circle circle:
+                        if (circle.Radius > 1e-9)
+                        {
+                            list.Add(DrawingEntity.CreateCircle(circle.Center.X, circle.Center.Y, circle.Radius, layer, lineType));
+                        }
+
+                        break;
+
+                    case Polyline2D poly2:
+                        {
+                            var vertices = poly2.Vertexes
+                                .Select(v => new DrawingVertex(v.Position.X, v.Position.Y, v.Bulge))
+                                .ToList();
+
+                            if (vertices.Count >= 2)
+                            {
+                                list.Add(DrawingEntity.CreatePolyline(vertices, poly2.IsClosed, layer, lineType));
+                            }
+
+                            break;
+                        }
+
+                    case Polyline3D poly3:
+                        {
+                            var vertices = poly3.Vertexes
+                                .Select(v => new DrawingVertex(v.X, v.Y))
+                                .ToList();
+
+                            if (vertices.Count >= 2)
+                            {
+                                list.Add(DrawingEntity.CreatePolyline(vertices, poly3.IsClosed, layer, lineType));
+                            }
+
+                            break;
+                        }
+
+                    case Ellipse ellipse:
+                        {
+                            var vertices = ellipse.PolygonalVertexes(72)
+                                .Select(v => new DrawingVertex(v.X, v.Y))
+                                .ToList();
+
+                            if (vertices.Count >= 3)
+                            {
+                                list.Add(DrawingEntity.CreatePolyline(vertices, ellipse.IsFullEllipse, layer, lineType));
+                            }
+
+                            break;
+                        }
+                }
+            }
+            catch
+            {
+                // an entity that cannot be converted is left out of the outline
+            }
+        }
+
+        return list;
     }
 
     // -------------------------------------------------------------- pipeline

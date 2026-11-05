@@ -957,6 +957,8 @@ public class CadAssistController : Controller
             text.AppendLine().Append("Note: ").AppendLine(warning);
         }
 
+        text.AppendLine().Append("Do you want STEP files for these parts? Reply with the thickness in mm (for example 12), or reply \"default\" to use 10 mm. Reply \"no\" to skip.");
+
         var message = new CadAssistMessageDto
         {
             Role = CadAssistRole.Assistant,
@@ -983,6 +985,126 @@ public class CadAssistController : Controller
             elapsedMs = started.ElapsedMilliseconds,
             manufacturing = result
         });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Step(
+        [FromBody] CadAssistStepRequest? request,
+        [FromServices] IManufacturingDrawingService service,
+        CancellationToken cancellationToken)
+    {
+        if (request is null || request.ProjectId < 0 || request.JobId <= 0)
+        {
+            return BadRequest(new CadAssistChatResponse { Error = "The request was not valid." });
+        }
+
+        var started = System.Diagnostics.Stopwatch.StartNew();
+        var session = _ai.EnsureSession(request.ProjectId, request.SessionId);
+        request.SessionId = session;
+
+        var result = await service.GenerateStepFilesAsync(request, cancellationToken);
+
+        if (!result.Success)
+        {
+            return Json(new
+            {
+                success = false,
+                sessionId = session,
+                model = "manufacturing",
+                elapsedMs = started.ElapsedMilliseconds,
+                error = result.Error ?? "STEP files could not be generated."
+            });
+        }
+
+        var thickness = result.Thickness.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture);
+        var text = new StringBuilder();
+
+        text.Append("Generated ").Append(result.Parts.Count).Append(" STEP file(s) with a thickness of ").Append(thickness).Append(" mm");
+        text.AppendLine(result.UsedDefaultThickness ? " (default):" : ":");
+        text.AppendLine();
+
+        foreach (var part in result.Parts)
+        {
+            text.Append("- ").Append(part.Name);
+
+            if (!string.IsNullOrWhiteSpace(part.DrawingNumber))
+            {
+                text.Append(" (DRG ").Append(part.DrawingNumber).Append(')');
+            }
+
+            text.AppendLine();
+        }
+
+        if (result.Skipped.Count > 0)
+        {
+            text.AppendLine().Append("Skipped: ").AppendLine(string.Join("; ", result.Skipped));
+        }
+
+        foreach (var warning in result.Warnings)
+        {
+            text.AppendLine().Append("Note: ").AppendLine(warning);
+        }
+
+        var message = new CadAssistMessageDto
+        {
+            Role = CadAssistRole.Assistant,
+            Content = text.ToString().TrimEnd(),
+            Model = "manufacturing",
+            ElapsedMs = started.ElapsedMilliseconds
+        };
+
+        _memory.Append(request.ProjectId, session, new CadAssistMessageDto
+        {
+            Role = CadAssistRole.User,
+            Content = request.Thickness.HasValue && request.Thickness.Value > 0
+                ? "STEP files, thickness " + thickness + " mm"
+                : "STEP files, default thickness"
+        });
+        _memory.Append(request.ProjectId, session, message);
+
+        return Json(new
+        {
+            success = true,
+            sessionId = session,
+            message,
+            model = "manufacturing",
+            elapsedMs = started.ElapsedMilliseconds,
+            step = result
+        });
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> StepDownload(
+        int jobId,
+        string file,
+        [FromServices] IManufacturingDrawingService service,
+        CancellationToken cancellationToken)
+    {
+        var opened = await service.OpenStepAsync(jobId, file, cancellationToken);
+
+        if (opened is null)
+        {
+            return NotFound();
+        }
+
+        return File(opened.Value.Content, "application/step", opened.Value.FileName);
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> StepZip(
+        int jobId,
+        [FromServices] IManufacturingDrawingService service,
+        CancellationToken cancellationToken)
+    {
+        var opened = await service.OpenStepZipAsync(jobId, cancellationToken);
+
+        if (opened is null)
+        {
+            return NotFound();
+        }
+
+        return File(opened.Value.Content, "application/zip", opened.Value.FileName);
     }
 
     [HttpGet]

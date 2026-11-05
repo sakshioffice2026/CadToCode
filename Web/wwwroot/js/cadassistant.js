@@ -18,7 +18,8 @@
         save: root.getAttribute("data-ca-save-url"),
         projectPage: root.getAttribute("data-ca-project-url"),
         status: root.getAttribute("data-ca-status-url"),
-        upload: root.getAttribute("data-ca-upload-url")
+        upload: root.getAttribute("data-ca-upload-url"),
+        step: root.getAttribute("data-ca-step-url")
     };
     var maxText = parseInt(root.getAttribute("data-ca-max-text"), 10) || 4000;
     var maxFiles = parseInt(root.getAttribute("data-ca-max-files"), 10) || 5;
@@ -29,6 +30,7 @@
 
     var SESSION_KEY = "cadassistant:session:" + projectId;
     var OPEN_KEY = "cadassistant:open";
+    var STEP_KEY = "cadassistant:stepjob:" + projectId;
 
     /* ---------- Elements ---------- */
 
@@ -39,6 +41,7 @@
     var dropHint = root.querySelector("[data-ca-drop]");
     var input = root.querySelector("[data-ca-input]");
     var sendButton = root.querySelector("[data-ca-send]");
+    data - ca - step - url="@Url.Action("Step", "CadAssist")"
     var attachButton = root.querySelector("[data-ca-attach]");
     var fileInput = root.querySelector("[data-ca-file]");
     var attachmentBox = root.querySelector("[data-ca-attachments]");
@@ -53,6 +56,7 @@
     /* ---------- State ---------- */
 
     var sessionId = readStore(SESSION_KEY) || "";
+    var pendingStepJob = parseInt(readStore(STEP_KEY), 10) || 0;
     var attachments = [];
     var busy = false;
     var controller = null;
@@ -753,6 +757,75 @@
             textContent: item.textContent
         };
     }
+    function setPendingStep(jobId) {
+        pendingStepJob = jobId > 0 ? jobId : 0;
+        writeStore(STEP_KEY, pendingStepJob > 0 ? String(pendingStepJob) : "");
+    }
+
+    var STEP_CANCEL_PATTERN = /^\s*(no|n|nope|cancel|skip|no thanks|not now)\s*[.!]*\s*$/i;
+    var STEP_DEFAULT_PATTERN = /^\s*(default|yes|y|yeah|yep|ok|okay|sure|go ahead|use default|default thickness)\s*[.!]*\s*$/i;
+    var STEP_THICKNESS_PATTERN = /^\s*(?:thickness\s*(?:is|=|of|:)?\s*)?(\d+(?:[.,]\d+)?)\s*(?:mm|millimet(?:er|re)s?)?\s*(?:thick(?:ness)?)?\s*[.!]*\s*$/i;
+
+    function parseStepReply(text) {
+        if (STEP_CANCEL_PATTERN.test(text)) {
+            return { cancel: true };
+        }
+
+        if (STEP_DEFAULT_PATTERN.test(text)) {
+            return { thickness: null };
+        }
+
+        var match = STEP_THICKNESS_PATTERN.exec(text);
+
+        if (match) {
+            var value = parseFloat(match[1].replace(",", "."));
+
+            if (isFinite(value) && value > 0) {
+                return { thickness: value };
+            }
+        }
+
+        return null;
+    }
+
+    function addStepDownloads(result) {
+        var parts = (result && result.parts) || [];
+
+        if (parts.length === 0) {
+            return;
+        }
+
+        var wrap = el("div", "ca-msg ca-msg-assistant");
+        var row = el("div", "ca-actions");
+
+        if (result.zipDownloadUrl) {
+            var zip = el("a", "ca-action ca-action-primary", "Download all STEP (ZIP)");
+            zip.href = result.zipDownloadUrl;
+            zip.style.textDecoration = "none";
+            zip.style.display = "inline-block";
+            row.appendChild(zip);
+        }
+
+        parts.forEach(function (part) {
+            var link = el("a", "ca-action", (part.drawingNumber ? part.drawingNumber + " \u00B7 " : "") + part.name + " (STEP)");
+            link.href = part.downloadUrl;
+            link.download = part.fileName;
+            link.title = part.fileName;
+            link.style.textDecoration = "none";
+            link.style.display = "inline-block";
+            row.appendChild(link);
+        });
+
+        wrap.appendChild(row);
+        thread.appendChild(wrap);
+        scrollToEnd();
+    }
+    var MANUFACTURING_PATTERN = new RegExp(
+        "\\b(generate|create|make|build|produce|prepare|give|get|export|extract|split|need|want)\\b.{0,80}\\b(manufacturing|fabrication|shop|workshop|production|detail|detailed|part|parts|component|components|individual|per[\\s-]?part)\\b.{0,40}\\b(drawings?|drgs?|dxfs?|sheets?)\\b" +
+        "|\\b(manufacturing|fabrication|shop|workshop|production)\\s+(drawings?|drgs?)\\b" +
+        "|\\b(drawings?|drgs?)\\s+(for|of)\\s+(each|every|all)\\s+(parts?|components?)\\b" +
+        "|\\b(split|break|separate)\\b.{0,40}\\b(ga|general\\s+arrangement)\\b.{0,40}\\b(parts?|components?|drawings?)\\b",
+        "i");
 
     function isImageName(name) {
         return /\.(png|jpe?g)$/i.test(name || "");
@@ -780,6 +853,16 @@
 
         lastSend = { prompt: prompt, attachments: files, drawingType: type, filterInstructions: filter };
 
+        var stepReply = null;
+
+        if (!replay && pendingStepJob > 0 && files.length === 0 && prompt) {
+            stepReply = parseStepReply(prompt);
+
+            if (!stepReply) {
+                setPendingStep(0);
+            }
+        }
+
         var payload = {
             projectId: projectId,
             sessionId: sessionId || null,
@@ -793,7 +876,9 @@
         var uploadFiles = files.filter(function (f) {
             return f.file && (isImageName(f.fileName) || /\.dxf$/i.test(f.fileName || ""));
         });
-        var useUpload = !!urls.upload && uploadFiles.some(function (f) { return isImageName(f.fileName); });
+        var hasDxfFile = uploadFiles.some(function (f) { return /\.dxf$/i.test(f.fileName || ""); });
+        var wantsManufacturing = hasDxfFile && MANUFACTURING_PATTERN.test(prompt);
+        var useUpload = !!urls.upload && (wantsManufacturing || uploadFiles.some(function (f) { return isImageName(f.fileName); }));
 
         if (uploadFiles.length > 0) {
             lastDrawingFile = uploadFiles[0];
@@ -808,7 +893,13 @@
             renderAttachments();
             autoGrow();
         }
+        if (stepReply && stepReply.cancel) {
+            setPendingStep(0);
+            addNote("OK, no STEP files will be generated.");
+            return;
+        }
 
+        var useStep = !!stepReply && !!urls.step;
         setBusy(true);
         startLive(files.some(function (f) { return /\.(png|jpe?g)$/i.test(f.fileName || ""); }));
         controller = new AbortController();
@@ -816,7 +907,14 @@
         var request;
         var replied = false;
 
-        if (useUpload) {
+        if (useStep) {
+            request = postJson(urls.step, {
+                projectId: projectId,
+                sessionId: sessionId || null,
+                jobId: pendingStepJob,
+                thickness: stepReply.thickness
+            }, controller.signal);
+        } else if (useUpload) {
             var form = new FormData();
 
             uploadFiles.forEach(function (f) { form.append("files", f.file, f.fileName); });
@@ -862,6 +960,15 @@
 
                     if (data.manufacturing) {
                         addManufacturingDownloads(data.manufacturing);
+
+                        if (data.manufacturing.jobId) {
+                            setPendingStep(data.manufacturing.jobId);
+                        }
+                    }
+
+                    if (data.step) {
+                        addStepDownloads(data.step);
+                        setPendingStep(0);
                     }
 
                     if (data.warnings && data.warnings.length > 0) {
@@ -1101,6 +1208,8 @@
         contextSignature = "";
         lastDrawingFile = null;
 
+        setPendingStep(0);
+
         thread.querySelectorAll(".ca-msg").forEach(function (node) { node.remove(); });
         attachments = [];
         renderAttachments();
@@ -1200,6 +1309,198 @@
             setOpen(false);
         }
     });
+
+    /* ---------- Floating window (drag, minimize, maximize) ---------- */
+
+    var LAYOUT_KEY = "cadassistant:layout";
+    var headerBar = root.querySelector(".ca-header");
+    var minimizeButton = root.querySelector("[data-ca-minimize]");
+    var maximizeButton = root.querySelector("[data-ca-maximize]");
+    var dragState = null;
+
+    function clampNumber(value, low, high) {
+        return Math.max(low, Math.min(high, value));
+    }
+
+    function placeAt(left, top) {
+        var x = clampNumber(left, 0, Math.max(0, window.innerWidth - root.offsetWidth));
+        var y = clampNumber(top, 0, Math.max(0, window.innerHeight - root.offsetHeight));
+        root.style.left = x + "px";
+        root.style.top = y + "px";
+        root.style.right = "auto";
+        root.style.bottom = "auto";
+    }
+
+    function anchorToTopLeft() {
+        if (root.style.left) {
+            return;
+        }
+        placeAt(window.innerWidth - root.offsetWidth - 20, window.innerHeight - root.offsetHeight - 20);
+    }
+
+    function keepInView() {
+        if (root.classList.contains("is-maximized") || !root.style.left) {
+            return;
+        }
+        placeAt(parseFloat(root.style.left) || 0, parseFloat(root.style.top) || 0);
+    }
+
+    function saveLayout() {
+        var layout = {
+            minimized: root.classList.contains("is-minimized"),
+            maximized: root.classList.contains("is-maximized")
+        };
+
+        if (!layout.maximized && !layout.minimized) {
+            layout.width = root.offsetWidth;
+            layout.height = root.offsetHeight;
+        } else {
+            var saved = readLayout();
+            if (saved) {
+                layout.width = saved.width;
+                layout.height = saved.height;
+            }
+        }
+
+        if (root.style.left) {
+            layout.left = parseFloat(root.style.left);
+            layout.top = parseFloat(root.style.top);
+        }
+
+        writeStore(LAYOUT_KEY, JSON.stringify(layout));
+    }
+
+    function readLayout() {
+        try {
+            return JSON.parse(readStore(LAYOUT_KEY) || "null");
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function syncWindowButtons() {
+        var minimized = root.classList.contains("is-minimized");
+        var maximized = root.classList.contains("is-maximized");
+
+        minimizeButton.innerHTML = minimized ? "&#9650;" : "&#8722;";
+        minimizeButton.title = minimized ? "Restore" : "Minimize";
+        minimizeButton.setAttribute("aria-label", minimized ? "Restore CAD Assistant" : "Minimize CAD Assistant");
+
+        maximizeButton.innerHTML = maximized ? "&#10064;" : "&#9633;";
+        maximizeButton.title = maximized ? "Restore size" : "Maximize";
+        maximizeButton.setAttribute("aria-label", maximized ? "Restore CAD Assistant size" : "Maximize CAD Assistant");
+    }
+
+    function setMinimized(value) {
+        if (value) {
+            anchorToTopLeft();
+            root.classList.remove("is-maximized");
+        }
+        root.classList.toggle("is-minimized", value);
+        syncWindowButtons();
+        keepInView();
+        saveLayout();
+    }
+
+    function setMaximized(value) {
+        if (value) {
+            anchorToTopLeft();
+            root.classList.remove("is-minimized");
+        }
+        root.classList.toggle("is-maximized", value);
+        syncWindowButtons();
+        keepInView();
+        saveLayout();
+        if (!value) {
+            window.setTimeout(keepInView, 0);
+        }
+    }
+
+    function restoreLayout() {
+        var layout = readLayout();
+        if (!layout) {
+            syncWindowButtons();
+            return;
+        }
+
+        if (layout.width && layout.height) {
+            root.style.width = Math.min(layout.width, window.innerWidth) + "px";
+            root.style.height = Math.min(layout.height, window.innerHeight) + "px";
+        }
+
+        if (typeof layout.left === "number" && typeof layout.top === "number") {
+            placeAt(layout.left, layout.top);
+        }
+
+        root.classList.toggle("is-minimized", !!layout.minimized);
+        root.classList.toggle("is-maximized", !!layout.maximized);
+        syncWindowButtons();
+    }
+
+    minimizeButton.addEventListener("click", function () {
+        setMinimized(!root.classList.contains("is-minimized"));
+    });
+
+    maximizeButton.addEventListener("click", function () {
+        setMaximized(!root.classList.contains("is-maximized"));
+    });
+
+    headerBar.addEventListener("dblclick", function (event) {
+        if (event.target.closest && event.target.closest("button, a, input, select, textarea")) {
+            return;
+        }
+        setMaximized(!root.classList.contains("is-maximized"));
+    });
+
+    headerBar.addEventListener("pointerdown", function (event) {
+        if (event.button !== 0 || root.classList.contains("is-maximized")) {
+            return;
+        }
+        if (event.target.closest && event.target.closest("button, a, input, select, textarea")) {
+            return;
+        }
+
+        anchorToTopLeft();
+
+        var rect = root.getBoundingClientRect();
+        dragState = {
+            id: event.pointerId,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top
+        };
+
+        root.classList.add("is-dragging");
+        try { headerBar.setPointerCapture(event.pointerId); } catch (e) { /* ignore */ }
+        event.preventDefault();
+    });
+
+    headerBar.addEventListener("pointermove", function (event) {
+        if (!dragState || event.pointerId !== dragState.id) {
+            return;
+        }
+        placeAt(event.clientX - dragState.offsetX, event.clientY - dragState.offsetY);
+    });
+
+    function endDrag(event) {
+        if (!dragState || (event && event.pointerId !== dragState.id)) {
+            return;
+        }
+        try { headerBar.releasePointerCapture(dragState.id); } catch (e) { /* ignore */ }
+        dragState = null;
+        root.classList.remove("is-dragging");
+        saveLayout();
+    }
+
+    headerBar.addEventListener("pointerup", endDrag);
+    headerBar.addEventListener("pointercancel", endDrag);
+
+    root.addEventListener("pointerup", function (event) {
+        if (!dragState && event.target === root) {
+            saveLayout();
+        }
+    });
+
+    window.addEventListener("resize", keepInView);
 
     /* ---------- Drag and drop ---------- */
 
@@ -1342,9 +1643,6 @@
                         : entries.length + " drawings selected for upload. Ask a question about them." + extra,
                     names);
 
-                if (pageKind === "upload" && !isOpen()) {
-                    setOpen(true, true);
-                }
             });
         });
     }
@@ -1368,11 +1666,7 @@
 
     /* ---------- Init ---------- */
 
+    restoreLayout();
     autoGrow();
 
-    var storedOpen = readStore(OPEN_KEY);
-
-    if (storedOpen === "1" || (storedOpen === null && openByDefault)) {
-        setOpen(true, true);
-    }
 }());
