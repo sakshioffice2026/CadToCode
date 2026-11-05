@@ -259,6 +259,7 @@ public sealed class ManufacturingDrawingService : IManufacturingDrawingService
         }
 
         var index = 0;
+        var assemblyParts = new List<ManufacturingStepBuilder.AssemblyPart>();
 
         foreach (var sheet in plan.Sheets)
         {
@@ -287,6 +288,8 @@ public sealed class ManufacturingDrawingService : IManufacturingDrawingService
                 result.Warnings.Add(outcome.Warning);
             }
 
+            assemblyParts.Add(new ManufacturingStepBuilder.AssemblyPart(sheet.Name, sheet.DrgNo, entities));
+
             result.Parts.Add(new CadAssistStepPartDto
             {
                 Key = sheet.Key,
@@ -304,9 +307,98 @@ public sealed class ManufacturingDrawingService : IManufacturingDrawingService
             return result;
         }
 
+        if (assemblyParts.Count > 0)
+        {
+            const string assemblyFileName = "00_ASSEMBLY.step";
+
+            var assemblyOutcome = ManufacturingStepBuilder.BuildAssembly(
+                assemblyParts,
+                "ASSEMBLY",
+                "GA",
+                thickness,
+                Path.Combine(outDir, assemblyFileName));
+
+            if (assemblyOutcome.Success)
+            {
+                if (assemblyOutcome.Warning != null)
+                {
+                    result.Warnings.Add(assemblyOutcome.Warning);
+                }
+
+                result.Parts.Insert(0, new CadAssistStepPartDto
+                {
+                    Key = "Assembly",
+                    Name = "ASSEMBLY (all parts at GA positions)",
+                    DrawingNumber = "GA",
+                    FileName = assemblyFileName,
+                    Thickness = thickness,
+                    DownloadUrl = $"/CadAssist/StepDownload?jobId={job.Id}&file={Uri.EscapeDataString(assemblyFileName)}"
+                });
+            }
+            else
+            {
+                result.Skipped.Add("ASSEMBLY: " + assemblyOutcome.Error);
+            }
+        }
+
         result.Success = true;
         result.ZipDownloadUrl = $"/CadAssist/StepZip?jobId={job.Id}";
         result.ElapsedMs = clock.ElapsedMilliseconds;
+        return result;
+    }
+
+    public async Task<CadAssistStepResult> SaveTemplateStepAsync(
+        int jobId,
+        string fileName,
+        string stepContent,
+        string title,
+        CancellationToken cancellationToken = default)
+    {
+        var result = new CadAssistStepResult { JobId = jobId };
+        var name = Path.GetFileName(fileName ?? string.Empty);
+
+        if (name.Length == 0
+            || !name.EndsWith(".step", StringComparison.OrdinalIgnoreCase)
+            || string.IsNullOrWhiteSpace(stepContent))
+        {
+            result.Error = "The template STEP content is empty.";
+            return result;
+        }
+
+        var job = await _db.DxfJobs.FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken).ConfigureAwait(false);
+
+        if (job == null)
+        {
+            result.Error = "The manufacturing drawings were not found. Generate them first.";
+            return result;
+        }
+
+        var dir = StepDirectory(jobId);
+        Directory.CreateDirectory(dir);
+
+        foreach (var old in Directory.GetFiles(dir, "*.step"))
+        {
+            File.Delete(old);
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(dir, name),
+            stepContent,
+            new System.Text.UTF8Encoding(false),
+            cancellationToken).ConfigureAwait(false);
+
+        result.Parts.Add(new CadAssistStepPartDto
+        {
+            Key = "Assembly",
+            Name = title,
+            DrawingNumber = string.Empty,
+            FileName = name,
+            Thickness = 0,
+            DownloadUrl = $"/CadAssist/StepDownload?jobId={jobId}&file={Uri.EscapeDataString(name)}"
+        });
+
+        result.Success = true;
+        result.ZipDownloadUrl = $"/CadAssist/StepZip?jobId={jobId}";
         return result;
     }
 

@@ -8,6 +8,12 @@ public class CadAssistStepRequest
 
     /// <summary>Extrusion thickness in drawing units (mm). Null or non-positive means "use the default".</summary>
     public double? Thickness { get; set; }
+
+    /// <summary>"outline" (default) extrudes the DXF outlines; "template" builds the 3D centrifugal fan from the saved template.</summary>
+    public string? Mode { get; set; }
+
+    /// <summary>Template mode only: empty or "default" for the default fan, otherwise dimensions such as "impeller 900, hub 150, blades 14" (mm, degrees).</summary>
+    public string? TemplateDimensions { get; set; }
 }
 
 public class CadAssistStepPartDto

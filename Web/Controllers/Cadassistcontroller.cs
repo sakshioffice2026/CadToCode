@@ -957,7 +957,7 @@ public class CadAssistController : Controller
             text.AppendLine().Append("Note: ").AppendLine(warning);
         }
 
-        text.AppendLine().Append("Do you want STEP files for these parts? Reply with the thickness in mm (for example 12), or reply \"default\" to use 10 mm. Reply \"no\" to skip.");
+        text.AppendLine().Append("Do you want STEP files for these parts? Reply with the thickness in mm (for example 12), or reply \"default\" to use 10 mm. Reply \"template\" to build the 3D centrifugal fan from the saved template instead of extruding the drawing outlines. Reply \"no\" to skip.");
 
         var message = new CadAssistMessageDto
         {
@@ -1002,6 +1002,11 @@ public class CadAssistController : Controller
         var started = System.Diagnostics.Stopwatch.StartNew();
         var session = _ai.EnsureSession(request.ProjectId, request.SessionId);
         request.SessionId = session;
+
+        if (string.Equals(request.Mode, "template", StringComparison.OrdinalIgnoreCase))
+        {
+            return await StepFromTemplateAsync(request, service, session, started, cancellationToken);
+        }
 
         var result = await service.GenerateStepFilesAsync(request, cancellationToken);
 
@@ -1071,6 +1076,98 @@ public class CadAssistController : Controller
             model = "manufacturing",
             elapsedMs = started.ElapsedMilliseconds,
             step = result
+        });
+    }
+
+    private async Task<IActionResult> StepFromTemplateAsync(
+        CadAssistStepRequest request,
+        IManufacturingDrawingService service,
+        string session,
+        System.Diagnostics.Stopwatch started,
+        CancellationToken cancellationToken)
+    {
+        IActionResult Fail(string error) => Json(new
+        {
+            success = false,
+            sessionId = session,
+            model = "manufacturing",
+            elapsedMs = started.ElapsedMilliseconds,
+            error
+        });
+
+        if (!CentrifugalFanStepTemplate.TryResolve(request.TemplateDimensions, out var values, out var inputError))
+        {
+            return Fail(inputError ?? "The dimensions could not be read.");
+        }
+
+        var composed = CentrifugalFanScriptComposer.Compose(values);
+
+        if (!composed.Success)
+        {
+            return Fail("The fan template could not be built: " + string.Join(" ", composed.Errors));
+        }
+
+        var run = await _stepScriptRunner.RunAsync(composed.Script, cancellationToken);
+
+        if (run is null || !run.Success || string.IsNullOrWhiteSpace(run.StepContent))
+        {
+            return Fail("The fan template STEP could not be generated. " + (run?.Message ?? string.Empty));
+        }
+
+        var fileName = (string.IsNullOrWhiteSpace(composed.FileBaseName) ? "CentrifugalFan" : composed.FileBaseName) + ".step";
+        var saved = await service.SaveTemplateStepAsync(
+            request.JobId,
+            fileName,
+            run.StepContent!,
+            "Centrifugal fan assembly (template)",
+            cancellationToken);
+
+        if (!saved.Success)
+        {
+            return Fail(saved.Error ?? "The STEP file could not be saved.");
+        }
+
+        var usedDefault = string.IsNullOrWhiteSpace(request.TemplateDimensions);
+        var text = new StringBuilder();
+
+        text.Append("Generated the centrifugal fan assembly STEP from the saved template");
+        text.AppendLine(usedDefault ? " (default dimensions):" : " (your dimensions):");
+        text.AppendLine();
+
+        foreach (var pair in composed.AppliedValues)
+        {
+            var key = pair.Key;
+            var isLength = key.EndsWith("_m", StringComparison.OrdinalIgnoreCase);
+            var shown = isLength ? pair.Value * 1000.0 : pair.Value;
+            var unit = isLength ? " mm" : key.EndsWith("_deg", StringComparison.OrdinalIgnoreCase) ? " deg" : string.Empty;
+
+            text.Append("- ").Append(key).Append(": ")
+                .Append(shown.ToString("0.###", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(unit);
+        }
+
+        var message = new CadAssistMessageDto
+        {
+            Role = CadAssistRole.Assistant,
+            Content = text.ToString().TrimEnd(),
+            Model = "manufacturing",
+            ElapsedMs = started.ElapsedMilliseconds
+        };
+
+        _memory.Append(request.ProjectId, session, new CadAssistMessageDto
+        {
+            Role = CadAssistRole.User,
+            Content = usedDefault ? "STEP from template, default dimensions" : "STEP from template: " + request.TemplateDimensions
+        });
+        _memory.Append(request.ProjectId, session, message);
+
+        return Json(new
+        {
+            success = true,
+            sessionId = session,
+            message,
+            model = "manufacturing",
+            elapsedMs = started.ElapsedMilliseconds,
+            step = saved
         });
     }
 

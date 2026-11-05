@@ -41,7 +41,6 @@
     var dropHint = root.querySelector("[data-ca-drop]");
     var input = root.querySelector("[data-ca-input]");
     var sendButton = root.querySelector("[data-ca-send]");
-    data - ca - step - url="@Url.Action("Step", "CadAssist")"
     var attachButton = root.querySelector("[data-ca-attach]");
     var fileInput = root.querySelector("[data-ca-file]");
     var attachmentBox = root.querySelector("[data-ca-attachments]");
@@ -57,6 +56,7 @@
 
     var sessionId = readStore(SESSION_KEY) || "";
     var pendingStepJob = parseInt(readStore(STEP_KEY), 10) || 0;
+    var templateStage = false;
     var attachments = [];
     var busy = false;
     var controller = null;
@@ -760,15 +760,38 @@
     function setPendingStep(jobId) {
         pendingStepJob = jobId > 0 ? jobId : 0;
         writeStore(STEP_KEY, pendingStepJob > 0 ? String(pendingStepJob) : "");
+
+        if (pendingStepJob <= 0) {
+            templateStage = false;
+        }
+    }
+
+    var STEP_TEMPLATE_PATTERN = /^\s*(template|use template|use the template|fan template|use fan template)\s*[.!]*\s*$/i;
+
+    function parseTemplateReply(text) {
+        if (STEP_CANCEL_PATTERN.test(text)) {
+            return { cancel: true };
+        }
+
+        if (STEP_DEFAULT_PATTERN.test(text)) {
+            return { template: true, dimensions: "" };
+        }
+
+        return { template: true, dimensions: text };
     }
 
     var STEP_CANCEL_PATTERN = /^\s*(no|n|nope|cancel|skip|no thanks|not now)\s*[.!]*\s*$/i;
-    var STEP_DEFAULT_PATTERN = /^\s*(default|yes|y|yeah|yep|ok|okay|sure|go ahead|use default|default thickness)\s*[.!]*\s*$/i;
-    var STEP_THICKNESS_PATTERN = /^\s*(?:thickness\s*(?:is|=|of|:)?\s*)?(\d+(?:[.,]\d+)?)\s*(?:mm|millimet(?:er|re)s?)?\s*(?:thick(?:ness)?)?\s*[.!]*\s*$/i;
+    var STEP_SUFFIX = "(?:\\s*[.,!]*\\s*(?:please\\s*)?(?:generate|create|make|build|give)?\\s*(?:the\\s*)?(?:step|stp)\\s*(?:files?|model)?)?";
+    var STEP_DEFAULT_PATTERN = new RegExp("^\\s*(default|yes|y|yeah|yep|ok|okay|sure|go ahead|use default|default thickness)" + STEP_SUFFIX + "\\s*[.!]*\\s*$", "i");
+    var STEP_THICKNESS_PATTERN = new RegExp("^\\s*(?:thickness\\s*(?:is|=|of|:)?\\s*)?(\\d+(?:[.,]\\d+)?)\\s*(?:mm|millimet(?:er|re)s?)?\\s*(?:thick(?:ness)?)?" + STEP_SUFFIX + "\\s*[.!]*\\s*$", "i");
 
     function parseStepReply(text) {
         if (STEP_CANCEL_PATTERN.test(text)) {
             return { cancel: true };
+        }
+
+        if (STEP_TEMPLATE_PATTERN.test(text)) {
+            return { askTemplate: true };
         }
 
         if (STEP_DEFAULT_PATTERN.test(text)) {
@@ -856,7 +879,7 @@
         var stepReply = null;
 
         if (!replay && pendingStepJob > 0 && files.length === 0 && prompt) {
-            stepReply = parseStepReply(prompt);
+            stepReply = templateStage ? parseTemplateReply(prompt) : parseStepReply(prompt);
 
             if (!stepReply) {
                 setPendingStep(0);
@@ -899,6 +922,12 @@
             return;
         }
 
+        if (stepReply && stepReply.askTemplate) {
+            templateStage = true;
+            addNote("Use the default fan dimensions, or enter your own? Reply \"default\", or enter dimensions in mm, for example: impeller 900, hub 170, blades 14, casing 1150. Anything you leave out is derived from the impeller diameter. Reply \"no\" to skip.");
+            return;
+        }
+
         var useStep = !!stepReply && !!urls.step;
         setBusy(true);
         startLive(files.some(function (f) { return /\.(png|jpe?g)$/i.test(f.fileName || ""); }));
@@ -912,7 +941,9 @@
                 projectId: projectId,
                 sessionId: sessionId || null,
                 jobId: pendingStepJob,
-                thickness: stepReply.thickness
+                thickness: stepReply.template ? null : stepReply.thickness,
+                mode: stepReply.template ? "template" : "outline",
+                templateDimensions: stepReply.template ? (stepReply.dimensions || "") : null
             }, controller.signal);
         } else if (useUpload) {
             var form = new FormData();
