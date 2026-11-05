@@ -15,7 +15,7 @@ public class HomeController : Controller
     [HttpGet]
     public IActionResult Index()
     {
-        return RedirectToAction("Upload", "Project");
+        return RedirectToAction("Dashboard");
     }
 
     [HttpGet]
@@ -33,5 +33,11 @@ public class HomeController : Controller
 
         ViewData["RequestId"] = requestId;
         return View();
+    }
+
+    [HttpGet]
+    public IActionResult Dashboard()
+    {
+        return View("CadDashboard");
     }
 }

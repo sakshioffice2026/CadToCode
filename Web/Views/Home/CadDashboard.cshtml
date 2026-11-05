@@ -1,0 +1,1018 @@
+@{
+    Layout = "_DashboardLayout";
+    ViewData["Title"] = "Dashboard";
+}
+@section Styles {
+    <style>
+        :root {
+            --bg: #0b0f19;
+            --card: #151c2e;
+            --card-glass: rgba(21, 28, 46, 0.72);
+            --line: rgba(255, 255, 255, 0.08);
+            --line-strong: rgba(255, 255, 255, 0.16);
+            --ink: #e8ecf5;
+            --ink-soft: #9aa6c1;
+            --ink-faint: #667290;
+            --accent: #ff6b4a;
+            --accent-soft: rgba(255, 107, 74, 0.16);
+            --holo: #7fd4ff;
+            --ok: #3ddc97;
+            --warn: #ffb347;
+            --bad: #ff5d6c;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            height: 100%;
+            background: var(--bg);
+            color: var(--ink);
+            font-family: "Segoe UI", system-ui, -apple-system, Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        body::before {
+            content: "";
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(60% 50% at 50% 46%, rgba(255, 107, 74, 0.10), transparent 70%),
+                radial-gradient(40% 40% at 50% 50%, rgba(127, 212, 255, 0.06), transparent 70%),
+                linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+            background-size: auto, auto, 48px 48px, 48px 48px;
+            pointer-events: none;
+        }
+
+        .dash {
+            position: relative;
+            height: 100%;
+            display: grid;
+            place-items: center;
+        }
+
+        .brand {
+            position: fixed;
+            top: 22px;
+            left: 26px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: var(--ink);
+            text-decoration: none;
+        }
+
+        .brand-mark {
+            width: 28px;
+            height: 28px;
+            border-radius: 8px;
+            display: grid;
+            place-items: center;
+            background: var(--accent);
+            color: #0b0f19;
+            font-weight: 800;
+        }
+
+        /* ------------------------------------------------------------ core */
+        .stage {
+            display: grid;
+            justify-items: center;
+            gap: 18px;
+            transition: transform 0.45s ease;
+        }
+
+        .core {
+            position: relative;
+            width: min(62vmin, 520px);
+            aspect-ratio: 1;
+            padding: 0;
+            border: 0;
+            background: transparent;
+            cursor: pointer;
+            border-radius: 50%;
+            animation: float 6s ease-in-out infinite;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .core:focus-visible {
+            outline: 2px solid var(--accent);
+            outline-offset: 8px;
+        }
+
+        .core svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+            overflow: visible;
+            filter: drop-shadow(0 0 22px rgba(255, 107, 74, 0.28));
+            transition: filter 0.3s ease, transform 0.3s ease;
+        }
+
+        .core:hover svg,
+        .core[aria-expanded="true"] svg {
+            filter: drop-shadow(0 0 34px rgba(255, 107, 74, 0.5));
+            transform: scale(1.02);
+        }
+
+        .ring { transform-box: fill-box; transform-origin: 50% 50%; }
+        .ring-a { animation: spin 60s linear infinite; }
+        .ring-b { animation: spin 38s linear infinite reverse; }
+        .ring-c { animation: spin 16s linear infinite; }
+        .ring-d { animation: spin 90s linear infinite reverse; }
+
+        .scan-beam { animation: scan 3.2s ease-in-out infinite alternate; }
+        .scan-trail { animation: scan 3.2s ease-in-out infinite alternate; }
+        .core-pulse { transform-box: fill-box; transform-origin: 50% 50%; animation: pulse 3.2s ease-in-out infinite; }
+
+        .stage-hint {
+            margin: 0;
+            font-size: 0.78rem;
+            letter-spacing: 0.22em;
+            text-transform: uppercase;
+            color: var(--ink-faint);
+        }
+
+        .pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            border: 1px solid var(--line);
+            background: var(--card-glass);
+            backdrop-filter: blur(14px);
+            -webkit-backdrop-filter: blur(14px);
+            font-size: 0.8rem;
+            color: var(--ink-soft);
+        }
+
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--ink-faint);
+            box-shadow: 0 0 0 0 transparent;
+        }
+
+        .pill[data-state="ready"] .dot { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
+        .pill[data-state="warn"] .dot { background: var(--warn); box-shadow: 0 0 10px var(--warn); }
+        .pill[data-state="bad"] .dot { background: var(--bad); box-shadow: 0 0 10px var(--bad); }
+        .pill[data-state="busy"] .dot { background: var(--accent); animation: blink 1s infinite; }
+
+        /* --------------------------------------------------------- console */
+        .console {
+            position: fixed;
+            right: 24px;
+            bottom: 24px;
+            width: min(460px, calc(100vw - 32px));
+            max-height: calc(100vh - 48px);
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            padding: 18px;
+            overflow: auto;
+            border-radius: 20px;
+            border: 1px solid var(--line-strong);
+            background: var(--card-glass);
+            backdrop-filter: blur(22px) saturate(140%);
+            -webkit-backdrop-filter: blur(22px) saturate(140%);
+            box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(18px) scale(0.98);
+            transition: opacity 0.3s ease, transform 0.3s ease, visibility 0s linear 0.3s;
+        }
+
+        .console.is-open {
+            opacity: 1;
+            visibility: visible;
+            transform: none;
+            transition: opacity 0.3s ease, transform 0.3s ease;
+        }
+
+        .console-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .console-title {
+            margin: 0;
+            font-size: 1rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+        }
+
+        .x-btn {
+            width: 30px;
+            height: 30px;
+            border-radius: 8px;
+            border: 1px solid var(--line);
+            background: transparent;
+            color: var(--ink-soft);
+            font-size: 1.1rem;
+            line-height: 1;
+            cursor: pointer;
+        }
+
+        .x-btn:hover { color: var(--ink); border-color: var(--line-strong); }
+
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 8px 14px;
+            border-radius: 999px;
+            border: 1px solid var(--line-strong);
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--ink);
+            font: inherit;
+            font-size: 0.82rem;
+            text-decoration: none;
+            cursor: pointer;
+            transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+        }
+
+        .chip:hover:not(:disabled) { border-color: var(--accent); background: var(--accent-soft); color: #fff; }
+        .chip:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .chip:disabled { opacity: 0.4; cursor: not-allowed; }
+        .chip-primary { background: var(--accent); border-color: var(--accent); color: #0b0f19; font-weight: 600; }
+        .chip-primary:hover:not(:disabled) { background: #ff8467; color: #0b0f19; }
+
+        .drop {
+            position: relative;
+            display: grid;
+            justify-items: center;
+            gap: 6px;
+            padding: 22px 16px;
+            border-radius: 14px;
+            border: 1.5px dashed var(--line-strong);
+            background: rgba(255, 255, 255, 0.02);
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.2s ease, background 0.2s ease;
+        }
+
+        .drop:hover,
+        .drop.is-over { border-color: var(--accent); background: var(--accent-soft); }
+        .drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+        .drop-title { margin: 0; font-size: 0.92rem; font-weight: 600; }
+        .drop-hint { margin: 0; font-size: 0.76rem; color: var(--ink-soft); }
+        .drop-file { margin: 0; font-size: 0.8rem; color: var(--accent); word-break: break-all; }
+        .drop input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+
+        .log-wrap { display: grid; gap: 6px; }
+
+        .log-label {
+            margin: 0;
+            font-size: 0.7rem;
+            letter-spacing: 0.18em;
+            text-transform: uppercase;
+            color: var(--ink-faint);
+        }
+
+        .log {
+            height: 170px;
+            overflow: auto;
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--line);
+            background: rgba(7, 10, 18, 0.7);
+            font-family: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+            font-size: 0.74rem;
+            line-height: 1.6;
+        }
+
+        .log-line { display: flex; gap: 10px; color: var(--ink-soft); }
+        .log-time { color: var(--ink-faint); flex: none; }
+        .log-msg { word-break: break-word; }
+        .log-line.ok .log-msg { color: var(--ok); }
+        .log-line.warn .log-msg { color: var(--warn); }
+        .log-line.bad .log-msg { color: var(--bad); }
+        .log-line.run .log-msg { color: var(--accent); }
+        .log-msg a { color: var(--holo); text-decoration: none; }
+        .log-msg a:hover { text-decoration: underline; }
+
+        /* -------------------------------------------------------- nav dock */
+        .dock {
+            position: fixed;
+            left: 50%;
+            bottom: 22px;
+            transform: translateX(-50%);
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 6px;
+            max-width: calc(100vw - 32px);
+        }
+
+        .dock a {
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 0.76rem;
+            color: var(--ink-soft);
+            text-decoration: none;
+            border: 1px solid transparent;
+            transition: color 0.2s ease, border-color 0.2s ease;
+        }
+
+        .dock a:hover { color: var(--ink); border-color: var(--line-strong); }
+
+        .brand-wrap { position: fixed; top: 22px; left: 26px; z-index: 5; }
+        .brand { position: static; background: transparent; border: 0; padding: 0; font: inherit; font-weight: 600; cursor: pointer; }
+        .brand:focus-visible { outline: 2px solid var(--accent); outline-offset: 6px; border-radius: 8px; }
+
+        .menu {
+            position: absolute;
+            top: 46px;
+            left: 0;
+            min-width: 230px;
+            display: grid;
+            gap: 2px;
+            padding: 8px;
+            border-radius: 16px;
+            border: 1px solid var(--line-strong);
+            background: var(--card-glass);
+            backdrop-filter: blur(22px) saturate(140%);
+            -webkit-backdrop-filter: blur(22px) saturate(140%);
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.55);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-8px);
+            transition: opacity 0.2s ease, transform 0.2s ease, visibility 0s linear 0.2s;
+        }
+
+        .menu.is-open {
+            opacity: 1;
+            visibility: visible;
+            transform: none;
+            transition: opacity 0.2s ease, transform 0.2s ease;
+        }
+
+        .menu a {
+            padding: 10px 14px;
+            border-radius: 10px;
+            color: var(--ink-soft);
+            font-size: 0.9rem;
+            text-decoration: none;
+        }
+
+        .menu a:hover,
+        .menu a:focus-visible { background: var(--accent-soft); color: #fff; outline: none; }
+
+        /* ------------------------------------------------------- animation */
+        @@keyframes spin { to { transform: rotate(360deg); } }
+        @@keyframes float { 0%, 100% { transform: translateY(-6px); } 50% { transform: translateY(8px); } }
+        @@keyframes scan { from { transform: translateY(-72px); } to { transform: translateY(72px); } }
+        @@keyframes pulse { 0%, 100% { opacity: 0.55; transform: scale(0.96); } 50% { opacity: 1; transform: scale(1.04); } }
+        @@keyframes blink { 50% { opacity: 0.3; } }
+        /* ---------------------------------------------------- ring orbit */
+        .core-wrap { --core: min(62vmin, 520px); position: relative; width: var(--core); }
+        .core { display: block; width: 100%; }
+        .core.is-ring-hover svg { filter: drop-shadow(0 0 34px rgba(127, 212, 255, 0.5)); }
+        .core.is-orbit .ring-a { animation-duration: 14s; }
+        .core.is-orbit .ring-b { animation-duration: 12s; }
+
+        .stage-hint, .pill { transition: opacity 0.3s ease; }
+        .stage.is-orbit .stage-hint,
+        .stage.is-orbit .pill { opacity: 0; }
+
+        .orbit {
+            --r: calc(var(--core) * 0.68);
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 0;
+            height: 0;
+            z-index: 3;
+            pointer-events: none;
+        }
+
+        .orbit-line {
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: calc(var(--core) * 0.2);
+            height: 1px;
+            background: linear-gradient(90deg, rgba(255, 107, 74, 0), var(--accent));
+            transform-origin: 0 50%;
+            transform: rotate(var(--a)) translateX(calc(var(--core) * 0.48)) scaleX(0);
+            opacity: 0;
+            transition: transform 0.5s ease calc(var(--i) * 70ms + 150ms), opacity 0.3s ease calc(var(--i) * 70ms + 150ms);
+        }
+
+        .orbit.is-open .orbit-line {
+            transform: rotate(var(--a)) translateX(calc(var(--core) * 0.48)) scaleX(1);
+            opacity: 0.85;
+        }
+
+        .orbit-card {
+            --rc: calc(var(--r) * 0.4);
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 206px;
+            display: grid;
+            gap: 4px;
+            padding: 14px 16px;
+            border-radius: 14px;
+            border: 1px solid var(--line-strong);
+            background: rgba(21, 28, 46, 0.94);
+            box-shadow: 0 18px 40px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+            color: var(--ink);
+            text-decoration: none;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transform: translate(-50%, -50%) rotate(var(--a)) translateX(var(--rc)) rotate(calc(var(--a) * -1)) scale(0.6);
+            transition: transform 0.55s cubic-bezier(0.2, 0.9, 0.25, 1.1) calc(var(--i) * 70ms), opacity 0.35s ease calc(var(--i) * 70ms), border-color 0.2s ease, box-shadow 0.2s ease, visibility 0s linear 0.9s;
+        }
+
+        .orbit.is-open .orbit-card {
+            --rc: var(--r);
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            transform: translate(-50%, -50%) rotate(var(--a)) translateX(var(--rc)) rotate(calc(var(--a) * -1)) scale(1);
+            transition: transform 0.55s cubic-bezier(0.2, 0.9, 0.25, 1.1) calc(var(--i) * 70ms), opacity 0.35s ease calc(var(--i) * 70ms), border-color 0.2s ease, box-shadow 0.2s ease, visibility 0s;
+        }
+
+        .orbit-card::before,
+        .orbit-card::after {
+            content: "";
+            position: absolute;
+            width: 10px;
+            height: 10px;
+            border: 0 solid var(--accent);
+        }
+
+        .orbit-card::before { top: -1px; left: -1px; border-top-width: 2px; border-left-width: 2px; border-top-left-radius: 14px; }
+        .orbit-card::after { bottom: -1px; right: -1px; border-bottom-width: 2px; border-right-width: 2px; border-bottom-right-radius: 14px; }
+
+        .orbit-card:hover,
+        .orbit-card:focus-visible {
+            border-color: var(--accent);
+            box-shadow: 0 18px 44px rgba(255, 107, 74, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            outline: none;
+        }
+
+        .orbit-num {
+            font-family: ui-monospace, "Cascadia Code", Consolas, Menlo, monospace;
+            font-size: 0.7rem;
+            letter-spacing: 0.2em;
+            color: var(--accent);
+        }
+
+        .orbit-title { font-size: 0.98rem; font-weight: 600; }
+        .orbit-desc { font-size: 0.74rem; line-height: 1.45; color: var(--ink-soft); }
+
+        @@media (max-width: 760px) {
+            .orbit { position: fixed; left: 16px; right: 16px; top: auto; bottom: 16px; width: auto; height: auto; display: grid; gap: 8px; }
+            .orbit-line { display: none; }
+            .orbit-card { position: relative; width: auto; transform: translateY(24px); }
+            .orbit.is-open .orbit-card { transform: none; }
+        }
+
+
+        @@media (max-width: 760px) {
+            .console { right: 16px; left: 16px; bottom: 16px; width: auto; }
+            .dock { display: none; }
+            .stage { position: relative; top: -14vh; }
+        }
+
+        @@media (prefers-reduced-motion: reduce) {
+            .core, .ring, .scan-beam, .scan-trail, .core-pulse { animation: none !important; }
+        }
+    </style>
+}
+
+    <main class="dash"
+          data-cc-dash
+          data-status-url="@Url.Action("Status", "CadAssist")"
+          data-upload-url="@Url.Action("UploadGaDxf", "DxfProcessing")"
+          data-generate-url="@Url.Action("GenerateManufacturingDrawings", "DxfProcessing")"
+          data-zip-url="@Url.Action("DownloadAllZip", "DxfProcessing")">
+
+        <form id="ccTokenForm" hidden>@Html.AntiForgeryToken()</form>
+
+        <div class="brand-wrap">
+            <button type="button" class="brand" data-cc-menu-toggle aria-haspopup="true" aria-expanded="false" aria-controls="ccMenu">
+                <span class="brand-mark" aria-hidden="true">C</span>
+                <span>CadToCode</span>
+            </button>
+            <nav class="menu" id="ccMenu" data-cc-menu aria-label="Pages" aria-hidden="true">
+                <a href="@Url.Action("Upload", "Project")">Upload drawing</a>
+                <a href="@Url.Action("History", "Project")">History</a>
+                <a href="@Url.Action("Index", "Library")">CAD Library</a>
+                <a href="@Url.Action("Index", "Zoo")">Text to CAD</a>
+                <a href="@Url.Action("Index", "DxfProcessing")">Manufacturing Drawings</a>
+            </nav>
+        </div>
+
+        <section class="stage">
+            <div class="core-wrap">
+            <button type="button"
+                    class="core"
+                    data-cc-core
+                    aria-controls="ccConsole"
+                    aria-expanded="false"
+                    aria-label="Toggle CAD Assistant console">
+                <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-hidden="true">
+                    <defs>
+                        <radialGradient id="ccGlow" cx="50%" cy="50%" r="50%">
+                            <stop offset="0%" stop-color="#ff6b4a" stop-opacity="0.38" />
+                            <stop offset="55%" stop-color="#ff6b4a" stop-opacity="0.08" />
+                            <stop offset="100%" stop-color="#ff6b4a" stop-opacity="0" />
+                        </radialGradient>
+                        <radialGradient id="ccCore" cx="50%" cy="38%" r="70%">
+                            <stop offset="0%" stop-color="#2a3556" />
+                            <stop offset="60%" stop-color="#151c2e" />
+                            <stop offset="100%" stop-color="#0b0f19" />
+                        </radialGradient>
+                        <linearGradient id="ccTrail" x1="0" y1="1" x2="0" y2="0">
+                            <stop offset="0%" stop-color="#ff6b4a" stop-opacity="0.35" />
+                            <stop offset="100%" stop-color="#ff6b4a" stop-opacity="0" />
+                        </linearGradient>
+                        <clipPath id="ccClip"><circle cx="200" cy="200" r="76" /></clipPath>
+                        <filter id="ccLaser" x="-20%" y="-300%" width="140%" height="700%">
+                            <feGaussianBlur stdDeviation="2.2" />
+                        </filter>
+                    </defs>
+
+                    <circle cx="200" cy="200" r="196" fill="url(#ccGlow)" />
+
+                    <!-- drafting reticle rings -->
+                    <g class="ring ring-a">
+                        <circle cx="200" cy="200" r="190" fill="none" stroke="#e8ecf5" stroke-opacity="0.35" stroke-width="6" stroke-dasharray="2 7.948" />
+                        <circle cx="200" cy="200" r="184" fill="none" stroke="#e8ecf5" stroke-opacity="0.18" stroke-width="1" />
+                    </g>
+                    <g class="ring ring-b">
+                        <circle cx="200" cy="200" r="160" fill="none" stroke="#7fd4ff" stroke-opacity="0.55" stroke-width="1.5" stroke-dasharray="220 31.33" stroke-linecap="round" />
+                    </g>
+                    <g class="ring ring-d">
+                        <circle cx="200" cy="200" r="144" fill="none" stroke="#e8ecf5" stroke-opacity="0.22" stroke-width="1" stroke-dasharray="3 6" />
+                    </g>
+                    <g class="ring ring-c">
+                        <circle cx="200" cy="200" r="128" fill="none" stroke="#ff6b4a" stroke-width="2.5" stroke-dasharray="90 111.06" stroke-linecap="round" />
+                    </g>
+
+                    <!-- precision crosshairs -->
+                    <g stroke="#e8ecf5" stroke-opacity="0.45" stroke-width="1" fill="none">
+                        <line x1="4" y1="200" x2="112" y2="200" />
+                        <line x1="288" y1="200" x2="396" y2="200" />
+                        <line x1="200" y1="4" x2="200" y2="112" />
+                        <line x1="200" y1="288" x2="200" y2="396" />
+                        <path d="M18 56V18H56" />
+                        <path d="M344 18H382V56" />
+                        <path d="M18 344V382H56" />
+                        <path d="M382 344V382H344" />
+                    </g>
+                    <g stroke="#ff6b4a" stroke-width="1.5">
+                        <line x1="104" y1="200" x2="118" y2="200" />
+                        <line x1="282" y1="200" x2="296" y2="200" />
+                        <line x1="200" y1="104" x2="200" y2="118" />
+                        <line x1="200" y1="282" x2="200" y2="296" />
+                    </g>
+
+                    <!-- holographic core -->
+                    <circle class="core-pulse" cx="200" cy="200" r="86" fill="none" stroke="#ff6b4a" stroke-opacity="0.45" stroke-width="1" />
+                    <circle cx="200" cy="200" r="78" fill="url(#ccCore)" stroke="#7fd4ff" stroke-opacity="0.6" stroke-width="1.5" />
+
+                    <g clip-path="url(#ccClip)">
+                        <g stroke="#7fd4ff" stroke-opacity="0.12" stroke-width="1">
+                            <line x1="120" y1="170" x2="280" y2="170" />
+                            <line x1="120" y1="185" x2="280" y2="185" />
+                            <line x1="120" y1="200" x2="280" y2="200" />
+                            <line x1="120" y1="215" x2="280" y2="215" />
+                            <line x1="120" y1="230" x2="280" y2="230" />
+                            <line x1="170" y1="120" x2="170" y2="280" />
+                            <line x1="200" y1="120" x2="200" y2="280" />
+                            <line x1="230" y1="120" x2="230" y2="280" />
+                        </g>
+
+                        <polygon points="200,156 238.1,178 238.1,222 200,244 161.9,222 161.9,178"
+                                 fill="rgba(255,107,74,0.08)" stroke="#ff6b4a" stroke-width="2" stroke-linejoin="round" />
+                        <text x="200" y="213" text-anchor="middle" font-family="Segoe UI, system-ui, sans-serif" font-size="38" font-weight="700" fill="#ff6b4a">C</text>
+
+                        <!-- laser scanning core -->
+                        <rect class="scan-trail" x="120" y="176" width="160" height="24" fill="url(#ccTrail)" />
+                        <rect class="scan-beam" x="120" y="199" width="160" height="2" fill="#ff6b4a" filter="url(#ccLaser)" />
+                        <rect class="scan-beam" x="120" y="199.5" width="160" height="1" fill="#ffd2c7" />
+                    </g>
+                </svg>
+            </button>
+
+            <nav class="orbit" data-cc-orbit aria-label="Pages" aria-hidden="true">
+                <span class="orbit-line" style="--a:-90deg;--i:0" aria-hidden="true"></span>
+                <span class="orbit-line" style="--a:-18deg;--i:1" aria-hidden="true"></span>
+                <span class="orbit-line" style="--a:54deg;--i:2" aria-hidden="true"></span>
+                <span class="orbit-line" style="--a:126deg;--i:3" aria-hidden="true"></span>
+                <span class="orbit-line" style="--a:198deg;--i:4" aria-hidden="true"></span>
+
+                <a class="orbit-card" style="--a:-90deg;--i:0" href="@Url.Action("Upload", "Project")">
+                    <span class="orbit-num">01</span>
+                    <span class="orbit-title">Upload drawing</span>
+                    <span class="orbit-desc">Read shapes, recognize each part and write the C# classes.</span>
+                </a>
+                <a class="orbit-card" style="--a:-18deg;--i:1" href="@Url.Action("History", "Project")">
+                    <span class="orbit-num">02</span>
+                    <span class="orbit-title">History</span>
+                    <span class="orbit-desc">Open any saved drawing and continue where you left off.</span>
+                </a>
+                <a class="orbit-card" style="--a:54deg;--i:2" href="@Url.Action("Index", "Library")">
+                    <span class="orbit-num">03</span>
+                    <span class="orbit-title">CAD Library</span>
+                    <span class="orbit-desc">Reference .dxf, .step and C# templates for the assistant.</span>
+                </a>
+                <a class="orbit-card" style="--a:126deg;--i:3" href="@Url.Action("Index", "Zoo")">
+                    <span class="orbit-num">04</span>
+                    <span class="orbit-title">Text to CAD</span>
+                    <span class="orbit-desc">Describe a part and download it as STEP, glTF, STL or OBJ.</span>
+                </a>
+                <a class="orbit-card" style="--a:198deg;--i:4" href="@Url.Action("Index", "DxfProcessing")">
+                    <span class="orbit-num">05</span>
+                    <span class="orbit-title">Manufacturing Drawings</span>
+                    <span class="orbit-desc">One manufacturing drawing per part from a GA .dxf.</span>
+                </a>
+            </nav>
+            </div>
+
+            <p class="stage-hint">Tap the core &middot; Tap the ring</p>
+
+            <div class="pill" data-cc-status-pill data-state="idle" role="status" aria-live="polite">
+                <span class="dot" aria-hidden="true"></span>
+                <span data-cc-status-text>Checking local model&hellip;</span>
+            </div>
+        </section>
+
+        <aside class="console" id="ccConsole" data-cc-console aria-label="CAD Assistant console" aria-hidden="true">
+            <div class="console-head">
+                <h2 class="console-title">CAD Assistant</h2>
+                <button type="button" class="x-btn" data-cc-close aria-label="Close console">&times;</button>
+            </div>
+
+            <div class="chips" role="group" aria-label="Quick actions">
+                <button type="button" class="chip" data-cc-extract>Extract GA Parts</button>
+                <button type="button" class="chip chip-primary" data-cc-generate disabled>Generate Fabrication DXF Package</button>
+                <button type="button" class="chip" data-cc-zip disabled>Download Package (ZIP)</button>
+                <a class="chip" href="@Url.Action("Index", "DxfProcessing")">Review &amp; Rename Parts</a>
+            </div>
+
+            <div class="drop" data-cc-drop tabindex="0" role="button" aria-label="Drop a GA DXF drawing or click to browse">
+                <input type="file" accept=".dxf" data-cc-file aria-label="GA DXF drawing" />
+                <p class="drop-title">Drop a GA DXF drawing here</p>
+                <p class="drop-hint">or click to browse &middot; .dxf up to 100 MB</p>
+                <p class="drop-file" data-cc-file-name hidden></p>
+            </div>
+
+            <div class="log-wrap">
+                <p class="log-label">Execution log</p>
+                <div class="log" data-cc-log role="log" aria-live="polite"></div>
+            </div>
+        </aside>
+    </main>
+
+@section Scripts {
+    <script>
+        (function () {
+            var root = document.querySelector("[data-cc-dash]");
+            var core = root.querySelector("[data-cc-core]");
+            var panel = root.querySelector("[data-cc-console]");
+            var closeBtn = root.querySelector("[data-cc-close]");
+            var pill = root.querySelector("[data-cc-status-pill]");
+            var pillText = root.querySelector("[data-cc-status-text]");
+            var log = root.querySelector("[data-cc-log]");
+            var drop = root.querySelector("[data-cc-drop]");
+            var fileInput = root.querySelector("[data-cc-file]");
+            var fileName = root.querySelector("[data-cc-file-name]");
+            var extractBtn = root.querySelector("[data-cc-extract]");
+            var generateBtn = root.querySelector("[data-cc-generate]");
+            var zipBtn = root.querySelector("[data-cc-zip]");
+            var tokenInput = document.querySelector("#ccTokenForm input[name='__RequestVerificationToken']");
+
+            var urls = {
+                status: root.getAttribute("data-status-url"),
+                upload: root.getAttribute("data-upload-url"),
+                generate: root.getAttribute("data-generate-url"),
+                zip: root.getAttribute("data-zip-url")
+            };
+
+            var state = { jobId: null, items: [], generated: false, busy: false };
+
+            function stamp() {
+                return new Date().toTimeString().slice(0, 8);
+            }
+
+            function addLog(message, level, href, linkText) {
+                var line = document.createElement("div");
+                line.className = "log-line" + (level ? " " + level : "");
+
+                var time = document.createElement("span");
+                time.className = "log-time";
+                time.textContent = stamp();
+
+                var msg = document.createElement("span");
+                msg.className = "log-msg";
+                msg.textContent = message;
+
+                if (href) {
+                    msg.appendChild(document.createTextNode(" "));
+                    var a = document.createElement("a");
+                    a.href = href;
+                    a.textContent = linkText || "Download";
+                    msg.appendChild(a);
+                }
+
+                line.appendChild(time);
+                line.appendChild(msg);
+                log.appendChild(line);
+
+                while (log.children.length > 200) {
+                    log.removeChild(log.firstChild);
+                }
+
+                log.scrollTop = log.scrollHeight;
+            }
+
+            function setPill(stateName, text) {
+                pill.setAttribute("data-state", stateName);
+                pillText.textContent = text;
+            }
+
+            function openConsole(open) {
+                panel.classList.toggle("is-open", open);
+                panel.setAttribute("aria-hidden", open ? "false" : "true");
+                core.setAttribute("aria-expanded", open ? "true" : "false");
+                if (open) { openOrbit(false); }
+            }
+
+            function setBusy(busy) {
+                state.busy = busy;
+                extractBtn.disabled = busy;
+                generateBtn.disabled = busy || state.jobId === null;
+                zipBtn.disabled = busy || !state.generated;
+            }
+
+            function formatSize(bytes) {
+                if (bytes >= 1048576) { return (bytes / 1048576).toFixed(1) + " MB"; }
+                return Math.max(1, Math.round(bytes / 1024)) + " KB";
+            }
+
+            function readJson(response) {
+                return response.text().then(function (text) {
+                    try { return JSON.parse(text); } catch (e) { return {}; }
+                });
+            }
+
+            /* ---------------------------------------------------- status */
+            function refreshStatus() {
+                fetch(urls.status, { headers: { "Accept": "application/json" } })
+                    .then(readJson)
+                    .then(function (s) {
+                        if (s.enabled === false) {
+                            setPill("warn", "CAD Assistant disabled");
+                        } else if (s.available) {
+                            setPill("ready", "Local model ready" + (s.model ? " \u00B7 " + s.model : "") + " \u00B7 offline");
+                        } else {
+                            setPill("bad", s.message || "Local model not reachable");
+                        }
+                    })
+                    .catch(function () {
+                        setPill("bad", "Status unavailable");
+                    });
+            }
+
+            /* ---------------------------------------------------- upload */
+            function handleFile(file) {
+                if (!file || state.busy) { return; }
+
+                if (!/\.dxf$/i.test(file.name)) {
+                    addLog("Only .dxf files are supported: " + file.name, "bad");
+                    return;
+                }
+
+                fileName.textContent = file.name + " (" + formatSize(file.size) + ")";
+                fileName.hidden = false;
+
+                state.jobId = null;
+                state.items = [];
+                state.generated = false;
+                setBusy(true);
+                setPill("busy", "Extracting GA parts\u2026");
+                addLog("Uploading " + file.name + " (" + formatSize(file.size) + ")", "run");
+
+                var fd = new FormData();
+                fd.append("file", file);
+                fd.append("__RequestVerificationToken", tokenInput ? tokenInput.value : "");
+
+                fetch(urls.upload, { method: "POST", body: fd })
+                    .then(function (res) {
+                        return readJson(res).then(function (data) { return { ok: res.ok, data: data }; });
+                    })
+                    .then(function (r) {
+                        if (!r.ok || !r.data.success) {
+                            addLog(r.data.message || "Upload failed.", "bad");
+                            return;
+                        }
+
+                        state.jobId = r.data.jobId;
+                        state.items = r.data.items || [];
+
+                        addLog("GA parsed: " + r.data.layerCount + " part(s) detected (job #" + r.data.jobId + ")", "ok");
+
+                        var shown = state.items.slice(0, 12);
+                        shown.forEach(function (it) {
+                            var detail = it.kind === "component" ? it.entities + " entities" : (it.drgNo ? "DRG NO. " + it.drgNo : "label");
+                            addLog((it.include ? "+ " : "- ") + it.name + " (" + detail + ")");
+                        });
+
+                        if (state.items.length > shown.length) {
+                            addLog("\u2026and " + (state.items.length - shown.length) + " more");
+                        }
+
+                        addLog("Ready. Run \u201CGenerate Fabrication DXF Package\u201D.", "ok");
+                    })
+                    .catch(function (err) {
+                        addLog("Error: " + err.message, "bad");
+                    })
+                    .then(function () {
+                        setBusy(false);
+                        refreshStatus();
+                    });
+            }
+
+            /* ------------------------------------------------- generate */
+            function generate() {
+                if (state.busy || state.jobId === null) { return; }
+
+                setBusy(true);
+                setPill("busy", "Generating manufacturing drawings\u2026");
+                addLog("Generating manufacturing drawings for job #" + state.jobId, "run");
+
+                var fd = new FormData();
+                fd.append("jobId", state.jobId);
+                fd.append("selections", JSON.stringify(state.items.map(function (i) {
+                    return { key: i.key, name: i.name, include: i.include, mergeInto: i.mergeInto };
+                })));
+                fd.append("__RequestVerificationToken", tokenInput ? tokenInput.value : "");
+
+                fetch(urls.generate, { method: "POST", body: fd })
+                    .then(function (res) {
+                        return readJson(res).then(function (data) { return { ok: res.ok, data: data }; });
+                    })
+                    .then(function (r) {
+                        if (!r.ok || !r.data.success) {
+                            addLog(r.data.message || "Generation failed.", "bad");
+                            return;
+                        }
+
+                        (r.data.files || []).forEach(function (f) {
+                            addLog(f.part + " \u2192 " + f.fileName + " (" + f.entities + " entities)", "ok", f.url, "Download");
+                        });
+
+                        if (r.data.skipped && r.data.skipped.length) {
+                            addLog("No matching geometry in GA for: " + r.data.skipped.join(", "), "warn");
+                        }
+
+                        state.generated = true;
+                        addLog("Package complete: " + r.data.count + " drawing(s).", "ok");
+                    })
+                    .catch(function (err) {
+                        addLog("Error: " + err.message, "bad");
+                    })
+                    .then(function () {
+                        setBusy(false);
+                        refreshStatus();
+                    });
+            }
+
+            /* --------------------------------------------------- events */
+            var stage = root.querySelector(".stage");
+            var orbit = root.querySelector("[data-cc-orbit]");
+
+            function ringHit(e) {
+                var r = core.getBoundingClientRect();
+                var dx = e.clientX - (r.left + r.width / 2);
+                var dy = e.clientY - (r.top + r.height / 2);
+                return Math.sqrt(dx * dx + dy * dy) / r.width * 400 > 112;
+            }
+
+            function openOrbit(open) {
+                orbit.classList.toggle("is-open", open);
+                orbit.setAttribute("aria-hidden", open ? "false" : "true");
+                stage.classList.toggle("is-orbit", open);
+                core.classList.toggle("is-orbit", open);
+
+                if (open) {
+                    openConsole(false);
+                    openMenu(false);
+                }
+            }
+
+            core.addEventListener("click", function (e) {
+                if (e.detail !== 0 && ringHit(e)) {
+                    openOrbit(!orbit.classList.contains("is-open"));
+                } else {
+                    openConsole(!panel.classList.contains("is-open"));
+                }
+            });
+
+            core.addEventListener("mousemove", function (e) {
+                core.classList.toggle("is-ring-hover", ringHit(e));
+            });
+
+            core.addEventListener("mouseleave", function () {
+                core.classList.remove("is-ring-hover");
+            });
+
+            document.addEventListener("click", function (e) {
+                if (!orbit.contains(e.target) && !core.contains(e.target)) { openOrbit(false); }
+            });
+
+            closeBtn.addEventListener("click", function () { openConsole(false); });
+
+            var menuToggle = root.querySelector("[data-cc-menu-toggle]");
+            var menuPanel = root.querySelector("[data-cc-menu]");
+
+            function openMenu(open) {
+                menuPanel.classList.toggle("is-open", open);
+                menuPanel.setAttribute("aria-hidden", open ? "false" : "true");
+                menuToggle.setAttribute("aria-expanded", open ? "true" : "false");
+            }
+
+            menuToggle.addEventListener("click", function (e) {
+                e.stopPropagation();
+                openMenu(menuPanel.getAttribute("aria-hidden") === "true");
+            });
+
+            document.addEventListener("click", function (e) {
+                if (!menuPanel.contains(e.target)) { openMenu(false); }
+            });
+
+            document.addEventListener("keydown", function (e) {
+                if (e.key === "Escape") { openConsole(false); openMenu(false); openOrbit(false); }
+            });
+
+            extractBtn.addEventListener("click", function () { fileInput.click(); });
+            generateBtn.addEventListener("click", generate);
+
+            zipBtn.addEventListener("click", function () {
+                if (state.jobId === null || !state.generated) { return; }
+                addLog("Downloading package ZIP for job #" + state.jobId, "run");
+                window.location.href = urls.zip + (urls.zip.indexOf("?") === -1 ? "?" : "&") + "jobId=" + encodeURIComponent(state.jobId);
+            });
+
+            fileInput.addEventListener("change", function () {
+                if (fileInput.files && fileInput.files.length) { handleFile(fileInput.files[0]); }
+                fileInput.value = "";
+            });
+
+            ["dragenter", "dragover"].forEach(function (name) {
+                drop.addEventListener(name, function (e) {
+                    e.preventDefault();
+                    drop.classList.add("is-over");
+                });
+                core.addEventListener(name, function (e) {
+                    e.preventDefault();
+                    openConsole(true);
+                });
+            });
+
+            ["dragleave", "drop"].forEach(function (name) {
+                drop.addEventListener(name, function (e) {
+                    e.preventDefault();
+                    drop.classList.remove("is-over");
+                });
+            });
+
+            drop.addEventListener("drop", function (e) {
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+                    handleFile(e.dataTransfer.files[0]);
+                }
+            });
+
+            core.addEventListener("drop", function (e) {
+                e.preventDefault();
+                if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+                    handleFile(e.dataTransfer.files[0]);
+                }
+            });
+
+            drop.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    fileInput.click();
+                }
+            });
+
+            addLog("Console ready. Drop a GA DXF to begin.");
+            refreshStatus();
+            window.setInterval(refreshStatus, 30000);
+        })();
+    </script>
+}

@@ -45,6 +45,7 @@ public sealed class ManufacturingDrawingService : IManufacturingDrawingService
         _storageRoot = Path.GetFullPath(root);
     }
 
+
     // ------------------------------------------------------------ public API
 
     public async Task<CadAssistManufacturingResult> GenerateFromGaDxfAsync(

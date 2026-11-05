@@ -1245,26 +1245,65 @@ public class CadAssistController : Controller
             return Fail("The fan template STEP could not be generated. " + (run?.Message ?? string.Empty));
         }
 
-        var fileName = (string.IsNullOrWhiteSpace(composed.FileBaseName) ? "CentrifugalFan" : composed.FileBaseName) + ".step";
-        var saved = await service.SaveTemplateStepAsync(
-            request.JobId,
-            fileName,
-            run.StepContent!,
-            "Centrifugal fan assembly (template)",
-            cancellationToken);
+        var assemblyFileName = (string.IsNullOrWhiteSpace(composed.FileBaseName) ? "CentrifugalFan" : composed.FileBaseName) + ".step";
+        var files = new List<(string FileName, string StepContent, string Title)>
+        {
+            (assemblyFileName, run.StepContent!, "Centrifugal fan assembly (template)")
+        };
+        var partFailures = new List<string>();
+
+        foreach (var partName in CentrifugalFanScriptComposer.PartNames)
+        {
+            var partComposed = CentrifugalFanScriptComposer.Compose(values, partName);
+
+            if (!partComposed.Success)
+            {
+                partFailures.Add(partName);
+                continue;
+            }
+
+            var partRun = await _stepScriptRunner.RunAsync(partComposed.Script, cancellationToken);
+
+            if (partRun is null || !partRun.Success || string.IsNullOrWhiteSpace(partRun.StepContent))
+            {
+                partFailures.Add(partName);
+                continue;
+            }
+
+            files.Add((partComposed.FileBaseName + ".step", partRun.StepContent!, partName));
+        }
+
+        var saved = await service.SaveTemplateStepsAsync(request.JobId, files, cancellationToken);
 
         if (!saved.Success)
         {
-            return Fail(saved.Error ?? "The STEP file could not be saved.");
+            return Fail(saved.Error ?? "The STEP files could not be saved.");
+        }
+
+        foreach (var failedPart in partFailures)
+        {
+            saved.Warnings.Add("Part STEP could not be generated: " + failedPart);
         }
 
         var usedDefault = string.IsNullOrWhiteSpace(request.TemplateDimensions);
         var text = new StringBuilder();
 
-        text.Append("Generated the centrifugal fan assembly STEP from the saved template");
+        text.Append("Generated the centrifugal fan assembly STEP and the separate part STEP files from the saved template");
         text.AppendLine(usedDefault ? " (default dimensions):" : " (your dimensions):");
         text.AppendLine();
+        text.AppendLine("Files:");
 
+        foreach (var savedPart in saved.Parts)
+        {
+            text.Append("- ").AppendLine(savedPart.FileName);
+        }
+
+        foreach (var failedPart in partFailures)
+        {
+            text.Append("- Not generated: ").AppendLine(failedPart);
+        }
+
+        text.AppendLine();
         foreach (var pair in composed.AppliedValues)
         {
             var key = pair.Key;

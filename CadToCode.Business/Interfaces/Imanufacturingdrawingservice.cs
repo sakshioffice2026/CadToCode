@@ -42,4 +42,9 @@ public interface IManufacturingDrawingService
     string stepContent,
     string title,
     CancellationToken cancellationToken = default);
+
+        Task<CadAssistStepResult> SaveTemplateStepsAsync(
+        int jobId,
+        IReadOnlyList<(string FileName, string StepContent, string Title)> files,
+        CancellationToken cancellationToken = default);
 }
