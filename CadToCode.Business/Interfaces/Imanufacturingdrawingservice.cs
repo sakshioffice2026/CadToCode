@@ -14,6 +14,17 @@ public interface IManufacturingDrawingService
         CadAssistManufacturingRequest request,
         CancellationToken cancellationToken = default);
 
+
+    Task<(int JobId, string? Error)> SaveGaDxfAsJobAsync(
+        byte[] gaDxfContent,
+        string gaFileName,
+        CancellationToken cancellationToken = default);
+
+
+    Task<(Stream Content, string FileName)?> OpenGaSourceAsync(
+        int jobId,
+        CancellationToken cancellationToken = default);
+
     Task<(Stream Content, string FileName)?> OpenDrawingAsync(
         int jobId,
         string fileName,

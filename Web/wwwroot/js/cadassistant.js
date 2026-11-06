@@ -19,8 +19,12 @@
         projectPage: root.getAttribute("data-ca-project-url"),
         status: root.getAttribute("data-ca-status-url"),
         upload: root.getAttribute("data-ca-upload-url"),
-        step: root.getAttribute("data-ca-step-url")
+        step: root.getAttribute("data-ca-step-url"),
+        ga: root.getAttribute("data-ca-ga-url")
+            || (root.getAttribute("data-ca-step-url") || "").replace(/Step$/i, "GaGenerate")
     };
+
+
     var maxText = parseInt(root.getAttribute("data-ca-max-text"), 10) || 4000;
     var maxFiles = parseInt(root.getAttribute("data-ca-max-files"), 10) || 5;
     var maxBytes = parseInt(root.getAttribute("data-ca-max-bytes"), 10) || 10485760;
@@ -455,6 +459,46 @@
         wrap.appendChild(row);
         thread.appendChild(wrap);
         scrollToEnd();
+    }
+
+
+    function addGaDownloads(result) {
+        var wrap = el("div", "ca-msg ca-msg-assistant");
+        var row = el("div", "ca-actions");
+
+        var link = el("a", "ca-action ca-action-primary", "Download GA drawing (DXF)");
+        link.href = result.downloadUrl;
+        link.download = result.fileName || "ga-drawing.dxf";
+        link.style.textDecoration = "none";
+        link.style.display = "inline-block";
+        row.appendChild(link);
+
+        wrap.appendChild(row);
+        thread.appendChild(wrap);
+        scrollToEnd();
+    }
+
+    function requestGaDrawing() {
+        postJson(urls.ga, { projectId: projectId, sessionId: sessionId || null, prompt: "" })
+            .then(function (response) {
+                return response.json().then(
+                    function (data) { return data; },
+                    function () { return null; });
+            })
+            .then(function (result) {
+                if (result && result.success && result.downloadUrl) {
+                    addGaDownloads(result);
+
+                    if (result.warnings && result.warnings.length > 0) {
+                        addNote(result.warnings.join(" "));
+                    }
+                } else {
+                    addError((result && result.error) || "The GA drawing could not be generated.");
+                }
+            })
+            .catch(function () {
+                addError("Could not reach the server.");
+            });
     }
 
     function renderCode(block) {
@@ -1004,6 +1048,10 @@
 
                     if (data.warnings && data.warnings.length > 0) {
                         addNote(data.warnings.join(" "));
+                    }
+
+                    if (data.model === "ga-drawing" && urls.ga) {
+                        requestGaDrawing();
                     }
                 } else {
                     addError((data && data.error) || "The server could not answer this request.");

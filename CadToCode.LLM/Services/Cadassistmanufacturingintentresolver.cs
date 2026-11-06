@@ -26,6 +26,13 @@ public static class CadAssistManufacturingIntentResolver
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
         TimeSpan.FromMilliseconds(250));
 
+
+    private static readonly Regex GaRequestRegex = new(
+        @"\b(generate|create|make|build|produce|prepare|give|get|draw|need|want)\b.{0,60}\b(ga|general\s+arrangement)\b.{0,20}\b(drawings?|drgs?|dxf)\b"
+        + @"|\b(ga|general\s+arrangement)\s+(drawings?|drgs?)\b",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Compiled,
+        TimeSpan.FromMilliseconds(250));
+
     private static readonly HashSet<string> Noise = new(StringComparer.OrdinalIgnoreCase)
     {
         "ga", "the", "this", "that", "my", "our", "drawing", "drawings", "dxf", "file", "files",
@@ -42,6 +49,20 @@ public static class CadAssistManufacturingIntentResolver
         return IsMatch(RequestRegex, text);
     }
 
+    public static bool IsGaDrawingRequest(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        if (IsMatch(RequestRegex, text))
+        {
+            return false;
+        }
+
+        return IsMatch(GaRequestRegex, text);
+    }
     public static bool WantsAllParts(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))

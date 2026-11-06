@@ -462,6 +462,29 @@ public class CadAssistController : Controller
             });
         }
 
+        if (CadAssistManufacturingIntentResolver.IsGaDrawingRequest(request.Prompt))
+        {
+            var gaState = HttpContext.RequestServices
+                .GetService<IEquipmentConversationStore>()?
+                .Get(request.ProjectId, sessionId).Active;
+
+            var gaReady = gaState is not null
+                && gaState.Values.ContainsKey("impeller_outer_diameter_m");
+
+            return Json(new CadAssistChatResponse
+            {
+                Success = true,
+                SessionId = sessionId,
+                Model = gaReady ? "ga-drawing" : "ga-drawing-blocked",
+                Message = new CadAssistMessageDto
+                {
+                    Content = gaReady
+                        ? "Generating the GA drawing from the current fan design."
+                        : "To generate a GA drawing I need a calculated fan design. Design the centrifugal fan first (airflow, pressure and speed), then send the request again."
+                }
+            });
+        }
+
         if (ShouldUseConversation(request.ProjectId, sessionId, request.Prompt))
         {
             var started = System.Diagnostics.Stopwatch.StartNew();
@@ -1405,6 +1428,92 @@ public class CadAssistController : Controller
         }
 
         return File(opened.Value.Content, "application/zip", opened.Value.FileName);
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [RequestSizeLimit(MaxRequestBytes)]
+    public async Task<IActionResult> GaGenerate(
+        [FromBody] CadAssistGaRequest? request,
+        [FromServices] IEnumerable<IGaDrawingBuilder> builders,
+        [FromServices] IManufacturingDrawingService service,
+        [FromServices] IEquipmentConversationStore equipmentStore,
+        CancellationToken cancellationToken)
+    {
+        var started = System.Diagnostics.Stopwatch.StartNew();
+
+        if (request is null || request.ProjectId < 0)
+        {
+            return BadRequest(new CadAssistGaResult { Error = "The request was not valid." });
+        }
+
+        var sessionId = _ai.EnsureSession(request.ProjectId, request.SessionId);
+        var state = equipmentStore.Get(request.ProjectId, sessionId).Active;
+
+        if (state is not null)
+        {
+            request.EquipmentKey = state.ManifestId;
+
+            foreach (var pair in state.Values)
+            {
+                if (!request.Values.ContainsKey(pair.Key))
+                {
+                    request.Values[pair.Key] = pair.Value;
+                }
+            }
+        }
+
+        var builder = builders.FirstOrDefault(b => b.CanHandle(request.EquipmentKey));
+
+        if (builder is null)
+        {
+            return Json(new CadAssistGaResult { Error = "GA drawings are not available for this equipment yet." });
+        }
+
+        var built = builder.Build(request);
+
+        if (!built.Success)
+        {
+            return Json(new CadAssistGaResult
+            {
+                Error = built.Error ?? "The GA drawing could not be generated.",
+                Warnings = built.Warnings.ToList()
+            });
+        }
+
+        var saved = await service.SaveGaDxfAsJobAsync(built.DxfContent, built.FileName, cancellationToken);
+
+        if (saved.Error is not null)
+        {
+            return Json(new CadAssistGaResult { Error = saved.Error });
+        }
+
+        return Json(new CadAssistGaResult
+        {
+            Success = true,
+            JobId = saved.JobId,
+            FileName = built.FileName,
+            DownloadUrl = Url.Action(nameof(GaDownload), new { jobId = saved.JobId }),
+            Parts = built.Parts.ToList(),
+            Warnings = built.Warnings.ToList(),
+            ElapsedMs = started.ElapsedMilliseconds
+        });
+    }
+
+    [HttpGet]
+    public async Task<IActionResult> GaDownload(
+        int jobId,
+        [FromServices] IManufacturingDrawingService service,
+        CancellationToken cancellationToken)
+    {
+        var opened = await service.OpenGaSourceAsync(jobId, cancellationToken);
+
+        if (opened is null)
+        {
+            return NotFound();
+        }
+
+        return File(opened.Value.Content, "application/dxf", opened.Value.FileName);
     }
 
     [HttpGet]

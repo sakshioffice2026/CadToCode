@@ -103,6 +103,70 @@ public sealed class ManufacturingDrawingService : IManufacturingDrawingService
 
         return await GenerateCoreAsync(job, sourcePath, request, cancellationToken).ConfigureAwait(false);
     }
+    public async Task<(int JobId, string? Error)> SaveGaDxfAsJobAsync(
+    byte[] gaDxfContent,
+    string gaFileName,
+    CancellationToken cancellationToken = default)
+    {
+        var safeName = Path.GetFileName(gaFileName ?? string.Empty);
+
+        if (gaDxfContent == null || gaDxfContent.Length == 0)
+        {
+            return (0, "The GA drawing is empty.");
+        }
+
+        if (!Path.GetExtension(safeName).Equals(".dxf", StringComparison.OrdinalIgnoreCase))
+        {
+            return (0, "Only .dxf GA drawings are supported.");
+        }
+
+        var sourceDir = Path.Combine(_storageRoot, OutputFolder, "Sources");
+        Directory.CreateDirectory(sourceDir);
+        var sourcePath = Path.Combine(sourceDir, Guid.NewGuid().ToString("N") + ".dxf");
+
+        await File.WriteAllBytesAsync(sourcePath, gaDxfContent, cancellationToken).ConfigureAwait(false);
+
+        var job = new DxfJob
+        {
+            OriginalFileName = safeName,
+            StoredFilePath = sourcePath,
+            Status = "Parsed"
+        };
+
+        _db.DxfJobs.Add(job);
+        await _db.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+        return (job.Id, null);
+    }
+
+    public async Task<(Stream Content, string FileName)?> OpenGaSourceAsync(
+        int jobId,
+        CancellationToken cancellationToken = default)
+    {
+        var job = await _db.DxfJobs.FirstOrDefaultAsync(j => j.Id == jobId, cancellationToken).ConfigureAwait(false);
+
+        if (job == null)
+        {
+            return null;
+        }
+
+        var path = ResolveSourcePath(job.StoredFilePath);
+
+        if (path == null)
+        {
+            return null;
+        }
+
+        var name = Path.GetFileName(job.OriginalFileName ?? string.Empty);
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = "ga-drawing.dxf";
+        }
+
+        Stream stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
+        return (stream, name);
+    }
 
     public Task<(Stream Content, string FileName)?> OpenDrawingAsync(
         int jobId,
