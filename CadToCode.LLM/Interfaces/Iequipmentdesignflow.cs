@@ -46,6 +46,9 @@ public sealed class EquipmentDesignTurn
 
     public IReadOnlyList<string> Errors { get; init; } = Array.Empty<string>();
 
+    /// <summary>Validated, mapped CAD values (SI, composer keys). Set once the design is calculated and mapped.</summary>
+    public IReadOnlyDictionary<string, double>? MappedValues { get; init; }
+
     /// <summary>One script per manufacturable part. Set only when generation succeeded.</summary>
     public ComposedPartsResult? Parts { get; init; }
 

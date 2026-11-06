@@ -64,9 +64,7 @@ builder.Services.AddScoped<IEquipmentDesignFlow, AxialFanDesignFlow>();
 builder.Services.AddScoped<IEquipmentDesignFlow, CycloneDesignFlow>();
 builder.Services.AddScoped<IEquipmentDesignFlow, WetScrubberDesignFlow>();
 builder.Services.AddScoped<IEquipmentDesignDispatcher, EquipmentDesignDispatcher>();
-builder.Services.AddSingleton<IEquipmentConversationStore, EquipmentConversationStore>();
-// GA drawing builders, one per equipment type.
-builder.Services.AddSingleton<IGaDrawingBuilder, CentrifugalFanGaDrawingBuilder>();
+
 // Web search is advisory only. Tavily is used when configured, otherwise DuckDuckGo.
 builder.Services.AddHttpClient<TavilyWebSearchService>();
 builder.Services.AddHttpClient<DuckDuckGoWebSearchService>();
@@ -109,6 +107,8 @@ builder.Services.AddScoped<IManufacturingDrawingService>(sp => new Manufacturing
     builder.Environment.WebRootPath));
 builder.Services.AddScoped<IDesignStateService, DesignStateService>();
 builder.Services.AddSingleton<IStepScriptRunner, StepScriptRunner>();
+builder.Services.AddSingleton<ICadAssistGaDrawingStore, CadAssistGaDrawingStore>();
+builder.Services.AddScoped<CadAssistGaDrawingHandler>();
 builder.Services.AddHttpClient<IEmbeddingService, GeminiEmbeddingService>();
 builder.Services.AddSingleton<IVectorStoreService, QdrantVectorStoreService>();
 builder.Services.AddSingleton<IProjectHistoryIndex, QdrantProjectHistoryIndex>();

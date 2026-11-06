@@ -1,677 +1,430 @@
 using System.Globalization;
-using CadToCode.Business.Interfaces;
-using CadToCode.Models.Dtos;
 using netDxf;
 using netDxf.Entities;
 using netDxf.Tables;
 
 namespace CadToCode.Business.Services;
 
-/// <summary>
-/// Builds a general arrangement (GA) DXF for a centrifugal fan directly from the design values
-/// (metres / degrees, same keys as CentrifugalFanCalculator). Views: front, section A-A, with
-/// dimensions, balloons, bill of materials and title block. Output units are millimetres.
-/// </summary>
-public sealed class CentrifugalFanGaDrawingBuilder : IGaDrawingBuilder
+public sealed class GaDrawingResult
 {
-    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+    public bool Success { get; init; }
+    public string FileName { get; init; } = string.Empty;
+    public byte[] Content { get; init; } = Array.Empty<byte>();
+    public IReadOnlyList<string> Errors { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> Layers { get; init; } = Array.Empty<string>();
 
-    public bool CanHandle(string? equipmentKey)
+    public static GaDrawingResult Fail(params string[] errors) =>
+        new() { Success = false, Errors = errors };
+}
+
+/// <summary>
+/// Builds a General Arrangement (GA) DXF for a single-inlet centrifugal fan from the same SI values that
+/// CentrifugalFanScriptComposer uses for the 3D model, so drawing and STEP always agree.
+/// Sheet units are millimetres. One layer per part (ScrollCasing, BackPlate, InletPlate, Hub,
+/// ImpellerBackPlate, Shroud, Blade), so the DXF can be fed straight into the manufacturing drawing flow.
+/// Views: front view (looking along the shaft) and Section A-A (plane through the shaft axis).
+/// </summary>
+public static class CentrifugalFanGaDrawingBuilder
+{
+    private const int ScrollSteps = 120;
+    private const int BladeSteps = 24;
+
+    private static readonly string[] PartLayers =
     {
-        return !string.IsNullOrWhiteSpace(equipmentKey)
-               && equipmentKey.Contains("centrifugal", StringComparison.OrdinalIgnoreCase);
-    }
+        "ScrollCasing", "BackPlate", "InletPlate", "Hub", "ImpellerBackPlate", "Shroud", "Blade"
+    };
 
-    public GaDrawingBuild Build(CadAssistGaRequest request)
+    private static readonly string[] RequiredKeys =
     {
-        ArgumentNullException.ThrowIfNull(request);
+        CentrifugalFanScriptComposer.ImpellerOuterDiameterM,
+        CentrifugalFanScriptComposer.ImpellerInletDiameterM,
+        CentrifugalFanScriptComposer.BladeWidthM,
+        CentrifugalFanScriptComposer.BladeInletWidthM,
+        CentrifugalFanScriptComposer.HubDiameterM,
+        CentrifugalFanScriptComposer.BladeCount,
+        CentrifugalFanScriptComposer.BladeInletAngleDeg,
+        CentrifugalFanScriptComposer.BladeOutletAngleDeg,
+        CentrifugalFanScriptComposer.BladeThicknessM,
+        CentrifugalFanScriptComposer.BladeProfileCode,
+        CentrifugalFanScriptComposer.PlateThicknessM,
+        CentrifugalFanScriptComposer.CasingBaseDiameterM,
+        CentrifugalFanScriptComposer.CasingWidthM,
+        CentrifugalFanScriptComposer.CasingWallM,
+        CentrifugalFanScriptComposer.OutletHeightM,
+        CentrifugalFanScriptComposer.CasingInletDiameterM
+    };
 
-        var warnings = new List<string>();
-        var values = new Dictionary<string, double>(request.Values ?? new Dictionary<string, double>(), StringComparer.OrdinalIgnoreCase);
+    public static GaDrawingResult Build(IReadOnlyDictionary<string, double> valuesSi, string? projectTitle = null)
+    {
+        ArgumentNullException.ThrowIfNull(valuesSi);
 
-        if (!values.TryGetValue("impeller_outer_diameter_m", out var outer) || !double.IsFinite(outer) || outer <= 0)
+        var values = new Dictionary<string, double>(valuesSi, StringComparer.OrdinalIgnoreCase);
+        var errors = new List<string>();
+
+        foreach (var key in RequiredKeys)
         {
-            return new GaDrawingBuild { Success = false, Error = "The impeller outer diameter is required to draw the GA." };
+            if (!values.TryGetValue(key, out var v))
+                errors.Add($"Missing required value '{key}'.");
+            else if (!double.IsFinite(v))
+                errors.Add($"Value '{key}' must be a finite number.");
         }
 
-        var g = new Geo();
-        g.D2 = outer * 1000.0;
-        g.D1 = Mm(values, 0.6 * g.D2, warnings, "Impeller inlet diameter", "impeller_inlet_diameter_m");
-        var dh = Mm(values, 0.2 * g.D2, warnings, "Hub diameter", "hub_diameter_m");
-        g.Bw = Mm(values, 0.22 * g.D2, warnings, "Blade width", "blade_width_m", "impeller_width_m");
-        g.Bwi = Mm(values, g.Bw, warnings, "Blade inlet width", "blade_inlet_width_m");
-        g.Tb = Mm(values, 3.0, warnings, "Blade thickness", "blade_thickness_m");
-        g.Tp = Mm(values, 6.0, warnings, "Back plate thickness", "plate_thickness_m");
-        var dc = Mm(values, 1.2 * g.D2, warnings, "Casing base diameter", "casing_base_diameter_m");
-        g.W = Mm(values, 0.5 * g.D2, warnings, "Casing width", "casing_width_m");
-        g.Tw = Mm(values, 5.0, warnings, "Casing wall thickness", "casing_wall_thickness_m", "casing_wall_m");
-        g.H = Mm(values, 0.5 * g.D2, warnings, "Outlet height", "outlet_height_m");
-        var dci = Mm(values, 0.55 * g.D2, warnings, "Casing inlet diameter", "casing_inlet_diameter_m", "inlet_eye_diameter_m");
+        if (errors.Count > 0)
+            return GaDrawingResult.Fail(errors.ToArray());
 
-        g.N = 12;
-        if (values.TryGetValue("blade_count", out var n) && double.IsFinite(n) && n >= 3)
+        double Mm(string key) => values[key] * 1000.0;
+
+        var d2 = Mm(CentrifugalFanScriptComposer.ImpellerOuterDiameterM);
+        var d1 = Mm(CentrifugalFanScriptComposer.ImpellerInletDiameterM);
+        var b2 = Mm(CentrifugalFanScriptComposer.BladeWidthM);
+        var b1 = Mm(CentrifugalFanScriptComposer.BladeInletWidthM);
+        var hubD = Mm(CentrifugalFanScriptComposer.HubDiameterM);
+        var thk = Mm(CentrifugalFanScriptComposer.BladeThicknessM);
+        var plate = Mm(CentrifugalFanScriptComposer.PlateThicknessM);
+        var d3 = Mm(CentrifugalFanScriptComposer.CasingBaseDiameterM);
+        var width = Mm(CentrifugalFanScriptComposer.CasingWidthM);
+        var wall = Mm(CentrifugalFanScriptComposer.CasingWallM);
+        var hOut = Mm(CentrifugalFanScriptComposer.OutletHeightM);
+        var dIn = Mm(CentrifugalFanScriptComposer.CasingInletDiameterM);
+        var beta1 = values[CentrifugalFanScriptComposer.BladeInletAngleDeg];
+        var beta2 = values[CentrifugalFanScriptComposer.BladeOutletAngleDeg];
+        var profile = (int)Math.Round(values[CentrifugalFanScriptComposer.BladeProfileCode]);
+        var bladeCount = (int)Math.Round(values[CentrifugalFanScriptComposer.BladeCount]);
+
+        foreach (var (name, v) in new[]
+                 {
+                     ("impeller outer diameter", d2), ("impeller inlet diameter", d1), ("blade width", b2),
+                     ("blade inlet width", b1), ("hub diameter", hubD), ("blade thickness", thk),
+                     ("plate thickness", plate), ("casing base diameter", d3), ("casing width", width),
+                     ("casing wall", wall), ("outlet height", hOut), ("casing inlet diameter", dIn)
+                 })
         {
-            g.N = (int)Math.Round(Math.Min(n, 60));
-        }
-        else
-        {
-            warnings.Add("Blade count not provided; assumed 12.");
-        }
-
-        g.B1 = Angle(values, 30, warnings, "Blade inlet angle", "blade_inlet_angle_deg");
-        g.B2 = Angle(values, 60, warnings, "Blade outlet angle", "blade_outlet_angle_deg");
-
-        g.R2 = g.D2 / 2.0;
-        g.R1 = g.D1 / 2.0;
-        g.Rh = dh / 2.0;
-        g.Rci = dci / 2.0;
-
-        if (g.R1 >= g.R2)
-        {
-            g.R1 = 0.6 * g.R2;
-            warnings.Add("Impeller inlet diameter was not smaller than the outer diameter; adjusted.");
+            if (v <= 0) errors.Add($"The {name} must be greater than zero.");
         }
 
-        if (g.Rh >= g.R1)
+        if (bladeCount < 3 || bladeCount > 64)
+            errors.Add("Blade count must be between 3 and 64.");
+
+        if (beta1 <= 0 || beta1 >= 180 || beta2 <= 0 || beta2 >= 180)
+            errors.Add("Blade angles must be between 0 and 180 degrees (exclusive).");
+
+        if (errors.Count > 0)
+            return GaDrawingResult.Fail(errors.ToArray());
+
+        var r1 = d1 / 2.0;
+        var r2 = d2 / 2.0;
+        var r3 = d3 / 2.0;
+        var hubR = hubD / 2.0;
+        var bladeHeight = Math.Max(b1, b2);
+        var impellerHeight = 2.0 * plate + bladeHeight;
+        var impellerZ = wall + (width - impellerHeight) / 2.0;
+        var bladeZ = impellerZ + plate;
+        var shroudZ = bladeZ + bladeHeight;
+        var casingTopZ = wall + width;
+        var overallZ = casingTopZ + wall;
+        var rMaxOuter = r3 + hOut + wall;
+
+        var doc = new DxfDocument(netDxf.Header.DxfVersion.AutoCad2010);
+
+        var layers = new Dictionary<string, Layer>(StringComparer.Ordinal);
+        var palette = new[]
         {
-            g.Rh = 0.3 * g.R1;
-            warnings.Add("Hub diameter was not smaller than the impeller inlet; adjusted.");
-        }
-
-        if (dc < g.D2 * 1.05)
-        {
-            dc = g.D2 * 1.1;
-            warnings.Add("Casing base diameter was too close to the impeller; adjusted.");
-        }
-
-        g.Rb = dc / 2.0;
-        g.Rs = Math.Max(g.Rh, 20.0) * 0.5;
-        g.Rtop = g.Rb + g.H / 4.0;
-        g.Rbot = g.Rb + 3.0 * g.H / 4.0;
-        g.Ld = g.Rb + 0.85 * g.H;
-
-        warnings.Add("Volute is drawn as a schematic spiral and blades as a variable-angle curve; verify against the final design.");
-
-        var ts = Math.Max(g.D2 / 120.0, 3.0);
-        var c = new Canvas(ts);
-
-        DrawFront(c, g);
-        DrawSection(c, g);
-        DrawSheet(c, g, request);
-
-        byte[] bytes;
-
-        using (var ms = new MemoryStream())
-        {
-            c.Doc.Save(ms);
-            bytes = ms.ToArray();
-        }
-
-        var parts = new List<CadAssistGaPartDto>
-        {
-            new() { Balloon = 1, Key = "casing", Name = "CASING (VOLUTE)", Quantity = 1, Material = request.Material },
-            new() { Balloon = 2, Key = "blade", Name = "IMPELLER BLADE", Quantity = g.N, Material = request.Material },
-            new() { Balloon = 3, Key = "back-plate", Name = "BACK PLATE", Quantity = 1, Material = request.Material },
-            new() { Balloon = 4, Key = "hub", Name = "HUB", Quantity = 1, Material = request.Material },
-            new() { Balloon = 5, Key = "shaft", Name = "SHAFT", Quantity = 1, Material = request.Material }
+            AciColor.Cyan, AciColor.Yellow, AciColor.Green, AciColor.Red, AciColor.Magenta, AciColor.Blue, AciColor.Default
         };
 
-        return new GaDrawingBuild
+        for (var i = 0; i < PartLayers.Length; i++)
+            layers[PartLayers[i]] = new Layer(PartLayers[i]) { Color = palette[i] };
+
+        layers["Centre"] = new Layer("Centre") { Color = AciColor.Red };
+        layers["Dims"] = new Layer("Dims") { Color = AciColor.Green };
+        layers["Text"] = new Layer("Text") { Color = AciColor.Default };
+        layers["Frame"] = new Layer("Frame") { Color = AciColor.Default };
+
+        var textH = Math.Max(8.0, rMaxOuter / 60.0);
+        var fan = new FanGeometry(r1, r2, r3, hubR, hOut, wall);
+
+        // ---------------------------------------------------------------- front view (centre at origin)
+        var outerSpiral = new List<Vector2>();
+        var innerSpiral = new List<Vector2>();
+
+        for (var i = 0; i <= ScrollSteps; i++)
+        {
+            var t = (double)i / ScrollSteps;
+            var a = 2.0 * Math.PI * t;
+            var r = r3 + hOut * t;
+            innerSpiral.Add(new Vector2(r * Math.Cos(a), r * Math.Sin(a)));
+            outerSpiral.Add(new Vector2((r + wall) * Math.Cos(a), (r + wall) * Math.Sin(a)));
+        }
+
+        AddPolyline(doc, layers["ScrollCasing"], outerSpiral, false);
+        AddPolyline(doc, layers["ScrollCasing"], innerSpiral, false);
+        AddLine(doc, layers["ScrollCasing"], innerSpiral[0], outerSpiral[0]);
+        AddLine(doc, layers["ScrollCasing"], innerSpiral[ScrollSteps], outerSpiral[ScrollSteps]);
+
+        // Discharge flange side lines (tangent run at the end of the spiral).
+        var endR = r3 + hOut;
+        var dischargeLen = Math.Max(hOut * 0.5, 2.0 * wall);
+        AddLine(doc, layers["ScrollCasing"], new Vector2(endR, 0), new Vector2(endR, -dischargeLen));
+        AddLine(doc, layers["ScrollCasing"], new Vector2(endR + wall, 0), new Vector2(endR + wall, -dischargeLen));
+        AddLine(doc, layers["ScrollCasing"],
+            new Vector2(endR, -dischargeLen), new Vector2(endR + wall, -dischargeLen));
+
+        doc.Entities.Add(new Circle(new Vector2(0, 0), dIn / 2.0) { Layer = layers["InletPlate"] });
+        doc.Entities.Add(new Circle(new Vector2(0, 0), r2) { Layer = layers["ImpellerBackPlate"] });
+        doc.Entities.Add(new Circle(new Vector2(0, 0), r1) { Layer = layers["Shroud"] });
+        doc.Entities.Add(new Circle(new Vector2(0, 0), hubR) { Layer = layers["Hub"] });
+
+        AddBlades(doc, layers["Blade"], r1, r2, beta1, beta2, thk, profile, bladeCount);
+
+        AddCentreCross(doc, layers["Centre"], new Vector2(0, 0), r2 * 1.15);
+
+        // Front view dimensions.
+        AddHorizontalDim(doc, layers["Dims"], -r2, r2, -rMaxOuter - 3.0 * textH, "D2 (impeller OD) " + F(d2), textH);
+        AddHorizontalDim(doc, layers["Dims"], -r1, r1, -rMaxOuter - 7.0 * textH, "D1 (impeller inlet) " + F(d1), textH);
+        AddHorizontalDim(doc, layers["Dims"], -hubR, hubR, -rMaxOuter - 11.0 * textH, "Hub dia " + F(hubD), textH);
+        AddText(doc, layers["Dims"], $"Casing base dia {F(d3)}  Outlet height {F(hOut)}  Inlet dia {F(dIn)}",
+            new Vector2(-rMaxOuter, -rMaxOuter - 15.0 * textH), textH);
+        AddText(doc, layers["Text"], "FRONT VIEW (ALONG SHAFT)", new Vector2(-rMaxOuter, rMaxOuter + 4.0 * textH), textH * 1.4);
+
+        // ---------------------------------------------------------------- Section A-A (right of front view)
+        var sx = rMaxOuter + 6.0 * textH + 80.0;
+        double X(double z) => sx + z;
+
+        // +Y side shows the plane at 0 deg (radius r3); -Y side shows 180 deg (radius r3 + hOut/2).
+        var rTop = r3;
+        var rBot = r3 + hOut * 0.5;
+
+        // Back plate
+        AddRectMirror(doc, layers["BackPlate"], X(0), X(wall), 0, rTop + wall, 0, rBot + wall);
+        // Scroll casing wall (radial thickness = wall, axial length = width)
+        AddRect(doc, layers["ScrollCasing"], X(wall), X(casingTopZ), rTop, rTop + wall);
+        AddRect(doc, layers["ScrollCasing"], X(wall), X(casingTopZ), -(rBot + wall), -rBot);
+        // Inlet plate with inlet bore
+        AddRect(doc, layers["InletPlate"], X(casingTopZ), X(overallZ), dIn / 2.0, rTop + wall);
+        AddRect(doc, layers["InletPlate"], X(casingTopZ), X(overallZ), -(rBot + wall), -dIn / 2.0);
+        // Hub
+        AddRectMirror(doc, layers["Hub"], X(impellerZ), X(impellerZ + plate + bladeHeight), 0, hubR, 0, hubR);
+        // Impeller back plate
+        AddRectMirror(doc, layers["ImpellerBackPlate"], X(impellerZ), X(impellerZ + plate), hubR, r2, hubR, r2);
+        // Shroud
+        AddRectMirror(doc, layers["Shroud"], X(shroudZ), X(shroudZ + plate), r1, r2, r1, r2);
+        // Blade (cut at section, drawn as outline with diagonal hatch lines)
+        AddRectMirror(doc, layers["Blade"], X(bladeZ), X(bladeZ + bladeHeight), r1, r2, r1, r2);
+        AddHatch(doc, layers["Blade"], X(bladeZ), X(bladeZ + bladeHeight), r1, r2, 1);
+        AddHatch(doc, layers["Blade"], X(bladeZ), X(bladeZ + bladeHeight), -r2, -r1, -1);
+
+        // Shaft centreline (horizontal, along Z)
+        AddLine(doc, layers["Centre"], new Vector2(X(-0.1 * overallZ), 0), new Vector2(X(overallZ * 1.1), 0), true);
+
+        AddText(doc, layers["Text"], "SECTION A-A (THROUGH SHAFT AXIS)", new Vector2(sx, rMaxOuter + 4.0 * textH), textH * 1.4);
+
+        // Section dimensions
+        AddVerticalDim(doc, layers["Dims"], -rMaxOuter - 11.0 * textH, 0, overallZ, "Overall width " + F(overallZ), textH, sx);
+        AddText(doc, layers["Dims"],
+            $"Casing width {F(width)}  Wall {F(wall)}  Plate {F(plate)}  Blade width {F(b2)}/{F(b1)}",
+            new Vector2(sx, -rMaxOuter - 3.0 * textH), textH);
+        AddText(doc, layers["Dims"],
+            $"Blades {bladeCount} nos  Inlet angle {beta1.ToString("0.##", CultureInfo.InvariantCulture)} deg  " +
+            $"Outlet angle {beta2.ToString("0.##", CultureInfo.InvariantCulture)} deg  Blade thk {F(thk)}",
+            new Vector2(sx, -rMaxOuter - 7.0 * textH), textH);
+
+        // ---------------------------------------------------------------- title block and frame
+        var left = -rMaxOuter - 6.0 * textH;
+        var right = sx + overallZ + 14.0 * textH;
+        var bottom = -rMaxOuter - 22.0 * textH;
+        var top = rMaxOuter + 10.0 * textH;
+
+        AddPolyline(doc, layers["Frame"],
+            new List<Vector2>
+            {
+                new(left, bottom), new(right, bottom), new(right, top), new(left, top)
+            }, true);
+
+        var tbTop = bottom + 8.0 * textH;
+        var tbLeft = right - 48.0 * textH;
+        AddPolyline(doc, layers["Frame"],
+            new List<Vector2> { new(tbLeft, bottom), new(right, bottom), new(right, tbTop), new(tbLeft, tbTop) }, true);
+
+        var title = string.IsNullOrWhiteSpace(projectTitle) ? "CENTRIFUGAL FAN" : projectTitle!.Trim().ToUpperInvariant();
+        AddText(doc, layers["Text"], title + " - GENERAL ARRANGEMENT", new Vector2(tbLeft + textH, tbTop - 2.5 * textH), textH * 1.3);
+        AddText(doc, layers["Text"], "ALL DIMENSIONS IN MM", new Vector2(tbLeft + textH, tbTop - 4.5 * textH), textH);
+        AddText(doc, layers["Text"], "SCALE 1:1 (AS DRAWN)  FIRST ANGLE", new Vector2(tbLeft + textH, tbTop - 6.5 * textH), textH);
+
+        // Part list
+        var listX = left + 2.0 * textH;
+        var listY = bottom + 6.0 * textH;
+        AddText(doc, layers["Text"], "PART LIST", new Vector2(listX, listY + 2.0 * textH), textH * 1.1);
+        AddText(doc, layers["Text"],
+            "1 Scroll casing   2 Back plate   3 Inlet plate   4 Hub   5 Impeller back plate   6 Shroud   7 Blade x" + bladeCount,
+            new Vector2(listX, listY), textH);
+
+        AddItemBalloons(doc, layers["Text"], fan, sx, overallZ, bladeZ, shroudZ, impellerZ, textH);
+
+        using var ms = new MemoryStream();
+        doc.Save(ms);
+
+        return new GaDrawingResult
         {
             Success = true,
-            DxfContent = bytes,
-            FileName = SafeFileName(request.DrawingNumber),
-            Parts = parts,
-            Warnings = warnings
+            FileName = "CentrifugalFan_GA.dxf",
+            Content = ms.ToArray(),
+            Layers = PartLayers
         };
     }
 
-    // ------------------------------------------------------------------ views
+    // ================================================================ helpers
 
-    private static void DrawFront(Canvas c, Geo g)
+    private readonly record struct FanGeometry(double R1, double R2, double R3, double HubR, double HOut, double Wall);
+
+    private static string F(double mm) => mm.ToString("0.#", CultureInfo.InvariantCulture);
+
+    private static void AddLine(DxfDocument doc, Layer layer, Vector2 a, Vector2 b, bool centre = false)
     {
-        var ext = g.R2 + 80.0;
-        c.Ln("CENTERLINE", -ext, 0, ext, 0);
-        c.Ln("CENTERLINE", 0, -ext, 0, ext);
-
-        c.Circ("BACKPLATE", 0, 0, g.R2);
-        c.Circ("BLADES", 0, 0, g.R1);
-        c.Circ("HUB", 0, 0, g.Rh);
-        c.Circ("SHAFT", 0, 0, g.Rs);
-        c.Circ("CASING", 0, 0, g.Rci);
-
-        var center = BladeCenterline(g.R1, g.R2, g.B1, g.B2);
-        var outline = BladeOutline(center, g.Tb);
-
-        for (var k = 0; k < g.N; k++)
-        {
-            c.Poly("BLADES", Rotate(outline, 360.0 * k / g.N), true);
-        }
-
-        var spiral = new List<Vector2>();
-        const int steps = 90;
-
-        for (var i = 0; i <= steps; i++)
-        {
-            var th = 2.0 * Math.PI * i / steps;
-            var r = g.Rb + g.H * th / (2.0 * Math.PI);
-            spiral.Add(new Vector2(r * Math.Cos(th), r * Math.Sin(th)));
-        }
-
-        c.Poly("CASING", spiral, false);
-
-        c.Ln("CASING", g.Rb, 0, g.Rb, g.Ld);
-        c.Ln("CASING", g.Rb + g.H, 0, g.Rb + g.H, g.Ld);
-        c.Ln("CASING", g.Rb, g.Ld, g.Rb + g.H, g.Ld);
-
-        // diameter call-outs in a column on the left
-        var xt = -(g.Rb + g.H / 2.0) - 60.0;
-        var yStart = g.Rb * 0.8;
-        var gap = c.Ts * 4.0;
-
-        var callouts = new (double R, double Ang, string Text)[]
-        {
-            (g.Rb, 120, "%%c" + Fmt(2 * g.Rb) + " CASING BASE"),
-            (g.R2, 150, "%%c" + Fmt(2 * g.R2) + " IMPELLER OD"),
-            (g.R1, 180, "%%c" + Fmt(2 * g.R1) + " IMPELLER INLET"),
-            (g.Rci, 210, "%%c" + Fmt(2 * g.Rci) + " CASING INLET"),
-            (g.Rh, 240, "%%c" + Fmt(2 * g.Rh) + " HUB")
-        };
-
-        for (var i = 0; i < callouts.Length; i++)
-        {
-            var a = callouts[i].Ang * Math.PI / 180.0;
-            var px = callouts[i].R * Math.Cos(a);
-            var py = callouts[i].R * Math.Sin(a);
-            var yt = yStart - i * gap;
-
-            c.Ln("DIMENSIONS", px, py, xt, yt);
-            c.Txt("TEXT", callouts[i].Text, xt - c.Ts * 0.5, yt, c.Ts, TextAlignment.MiddleRight);
-        }
-
-        c.DimH(g.Rb, g.Rb + g.H, g.Ld, 60.0, Fmt(g.H));
-
-        // balloons
-        var casingAng = 100.0 * Math.PI / 180.0;
-        var casingR = g.Rb + g.H * 100.0 / 360.0;
-        c.Balloon(1,
-            (casingR + 150.0) * Math.Cos(casingAng), (casingR + 150.0) * Math.Sin(casingAng),
-            casingR * Math.Cos(casingAng), casingR * Math.Sin(casingAng));
-
-        var mid = center[center.Count / 2];
-        var midAng = Math.Atan2(mid.Y, mid.X);
-        var bR = g.R2 + 60.0;
-        c.Balloon(2, bR * Math.Cos(midAng), bR * Math.Sin(midAng), mid.X, mid.Y);
-
-        var labelY = -g.Rbot - 120.0;
-        c.Txt("TEXT", "FRONT VIEW", 0, labelY, c.Ts * 1.4);
-        c.Txt("TEXT", g.N.ToString(Inv) + " BACKWARD CURVED BLADES, THK " + Fmt(g.Tb), 0, labelY - c.Ts * 2.6, c.Ts);
-        c.Txt("TEXT", "INLET ANGLE " + Fmt(g.B1) + " DEG / OUTLET ANGLE " + Fmt(g.B2) + " DEG", 0, labelY - c.Ts * 4.4, c.Ts);
+        var line = new Line(a, b) { Layer = layer };
+        if (centre) line.Linetype = Linetype.Center;
+        doc.Entities.Add(line);
     }
 
-    private static void DrawSection(Canvas c, Geo g)
+    private static void AddPolyline(DxfDocument doc, Layer layer, IReadOnlyList<Vector2> points, bool closed)
     {
-        var x0 = g.SideX0();
-        var xw = x0 + g.W;
-        var xp = g.Xp(x0);
-        var hubL = g.HubLen();
-        var shaftExt = g.ShaftExt();
-        var xs0 = xp - hubL - 80.0;
-        var xs1 = xw + shaftExt;
-
-        c.Ln("CENTERLINE", x0 - 80, 0, xs1 + 80, 0);
-
-        // casing walls
-        c.Rect("CASING", x0, g.Rtop - g.Tw, xw, g.Rtop);
-        c.Rect("CASING", x0, -g.Rbot, xw, -g.Rbot + g.Tw);
-        c.Rect("CASING", x0, g.Rci, x0 + g.Tw, g.Rtop);
-        c.Rect("CASING", x0, -g.Rbot, x0 + g.Tw, -g.Rci);
-
-        var hole = g.Rs + 10.0;
-        c.Rect("CASING", xw - g.Tw, hole, xw, g.Rtop);
-        c.Rect("CASING", xw - g.Tw, -g.Rbot, xw, -hole);
-
-        // back plate
-        c.Rect("BACKPLATE", xp, g.Rh, xp + g.Tp, g.R2);
-        c.Rect("BACKPLATE", xp, -g.R2, xp + g.Tp, -g.Rh);
-
-        // blades
-        c.Poly("BLADES", new[]
-        {
-            new Vector2(xp, g.R1), new Vector2(xp - g.Bwi, g.R1),
-            new Vector2(xp - g.Bw, g.R2), new Vector2(xp, g.R2)
-        }, true);
-
-        c.Poly("BLADES", new[]
-        {
-            new Vector2(xp, -g.R1), new Vector2(xp - g.Bwi, -g.R1),
-            new Vector2(xp - g.Bw, -g.R2), new Vector2(xp, -g.R2)
-        }, true);
-
-        // hub and shaft
-        c.Rect("HUB", xp - hubL, -g.Rh, xp + g.Tp, g.Rh);
-        c.Rect("SHAFT", xs0, -g.Rs, xs1, g.Rs);
-
-        // dimensions
-        c.DimH(x0, xw, -g.Rbot, -70.0, Fmt(g.W));
-        c.DimH(xp - g.Bw, xp, g.R2, 60.0, Fmt(g.Bw));
-        c.DimV(-g.R2, g.R2, x0, -150.0, "%%c" + Fmt(2 * g.R2));
-        c.DimV(-g.Rbot, g.Rtop, x0, -300.0, Fmt(g.Rbot + g.Rtop));
-
-        // balloons
-        var by = g.Rtop + 160.0;
-        c.Balloon(1, x0 + g.W / 2.0, by, x0 + g.W / 2.0, g.Rtop - g.Tw / 2.0);
-        c.Balloon(3, xp + 90.0, by, xp + g.Tp / 2.0, (g.Rh + g.R2) / 2.0);
-        c.Balloon(4, xp - g.Bw - 80.0, by, xp - hubL / 2.0, g.Rh);
-        c.Balloon(5, xw + shaftExt / 2.0 + 60.0, g.Rs + 250.0, xw + shaftExt / 2.0, g.Rs);
-
-        var labelY = -g.Rbot - 120.0;
-        c.Txt("TEXT", "SECTION A-A", x0 + g.W / 2.0, labelY, c.Ts * 1.4);
-        c.Txt("TEXT", "PLATE THK " + Fmt(g.Tp) + "   CASING WALL " + Fmt(g.Tw), x0 + g.W / 2.0, labelY - c.Ts * 2.6, c.Ts);
+        var vertices = points.Select(p => new Polyline2DVertex(p.X, p.Y)).ToList();
+        doc.Entities.Add(new Polyline2D(vertices, closed) { Layer = layer });
     }
 
-    private static void DrawSheet(Canvas c, Geo g, CadAssistGaRequest request)
+    private static void AddRect(DxfDocument doc, Layer layer, double x0, double x1, double y0, double y1)
     {
-        var ts = c.Ts;
-        var x0 = g.SideX0();
-        var right = x0 + g.W + g.ShaftExt() + 300.0;
-        var left = -(g.Rb + g.H / 2.0) - 60.0 - 22.0 * ts;
-        var top = Math.Max(g.Ld, g.Rtop) + 360.0;
+        AddPolyline(doc, layer,
+            new List<Vector2> { new(x0, y0), new(x1, y0), new(x1, y1), new(x0, y1) }, true);
+    }
 
-        var rowH = 2.2 * ts;
-        var bomH = 6 * rowH;
-        var titleH = 9.0 * ts;
-        var bottom = -g.Rbot - 220.0 - bomH - titleH - 40.0;
+    private static void AddRectMirror(DxfDocument doc, Layer layer, double x0, double x1,
+        double topInner, double topOuter, double botInner, double botOuter)
+    {
+        AddRect(doc, layer, x0, x1, topInner, topOuter);
+        AddRect(doc, layer, x0, x1, -botOuter, -botInner);
+    }
 
-        c.Rect("TITLEBLOCK", left, bottom, right, top);
-        c.Rect("TITLEBLOCK", left + 12, bottom + 12, right - 12, top - 12);
+    private static void AddHatch(DxfDocument doc, Layer layer, double x0, double x1, double y0, double y1, int sign)
+    {
+        const int lines = 6;
+        var w = x1 - x0;
+        var h = y1 - y0;
 
-        var cols = new[] { 4.0 * ts, 22.0 * ts, 4.0 * ts, 12.0 * ts };
-        var totalW = cols.Sum();
-        var xr = right - 20.0;
-        var xl = xr - totalW;
-        var yTitle0 = bottom + 20.0;
-        var yBom0 = yTitle0 + titleH;
-
-        // BOM grid
-        c.Rect("TITLEBLOCK", xl, yBom0, xr, yBom0 + bomH);
-
-        for (var r = 1; r < 6; r++)
+        for (var i = 1; i < lines; i++)
         {
-            c.Ln("TITLEBLOCK", xl, yBom0 + r * rowH, xr, yBom0 + r * rowH);
-        }
-
-        var cx = xl;
-
-        for (var i = 0; i < cols.Length - 1; i++)
-        {
-            cx += cols[i];
-            c.Ln("TITLEBLOCK", cx, yBom0, cx, yBom0 + bomH);
-        }
-
-        var headers = new[] { "ITEM", "DESCRIPTION", "QTY", "MATERIAL" };
-        var rows = new[]
-        {
-            new[] { "1", "CASING (VOLUTE)", "1", request.Material },
-            new[] { "2", "IMPELLER BLADE", g.N.ToString(Inv), request.Material },
-            new[] { "3", "BACK PLATE", "1", request.Material },
-            new[] { "4", "HUB", "1", request.Material },
-            new[] { "5", "SHAFT", "1", request.Material }
-        };
-
-        var yHead = yBom0 + 5 * rowH + rowH / 2.0;
-        var colX = xl;
-
-        for (var i = 0; i < cols.Length; i++)
-        {
-            c.Txt("TEXT", headers[i], colX + ts * 0.5, yHead, ts * 0.9, TextAlignment.MiddleLeft);
-            colX += cols[i];
-        }
-
-        for (var r = 0; r < rows.Length; r++)
-        {
-            var y = yBom0 + (4 - r) * rowH + rowH / 2.0;
-            colX = xl;
-
-            for (var i = 0; i < cols.Length; i++)
-            {
-                c.Txt("TEXT", rows[r][i], colX + ts * 0.5, y, ts * 0.9, TextAlignment.MiddleLeft);
-                colX += cols[i];
-            }
-        }
-
-        // title block
-        c.Rect("TITLEBLOCK", xl, yTitle0, xr, yTitle0 + titleH);
-
-        var lines = new[]
-        {
-            request.Title,
-            "DRG NO: " + request.DrawingNumber,
-            "MATERIAL: " + request.Material,
-            "SCALE: NTS   UNITS: MM",
-            "DATE: " + DateTime.UtcNow.ToString("yyyy-MM-dd", Inv)
-        };
-
-        for (var i = 0; i < lines.Length; i++)
-        {
-            var y = yTitle0 + titleH - (i + 0.5) * (titleH / lines.Length);
-            c.Txt("TEXT", lines[i], xl + ts * 0.5, y, i == 0 ? ts * 1.0 : ts * 0.9, TextAlignment.MiddleLeft);
-
-            if (i > 0)
-            {
-                c.Ln("TITLEBLOCK", xl, yTitle0 + titleH - i * (titleH / lines.Length), xr, yTitle0 + titleH - i * (titleH / lines.Length));
-            }
+            var f = (double)i / lines;
+            var ax = x0;
+            var ay = y0 + h * f;
+            var bx = x0 + w * f;
+            var by = y0;
+            AddLine(doc, layer, new Vector2(ax, ay), new Vector2(bx, by));
         }
     }
 
-    // --------------------------------------------------------------- geometry
-
-    private static List<Vector2> BladeCenterline(double r1, double r2, double b1Deg, double b2Deg)
+    private static void AddCentreCross(DxfDocument doc, Layer layer, Vector2 c, double half)
     {
-        const int steps = 32;
-        var pts = new List<Vector2>();
-        var phi = 0.0;
-        var prevR = r1;
-
-        for (var i = 0; i <= steps; i++)
-        {
-            var r = r1 + (r2 - r1) * i / steps;
-
-            if (i > 0)
-            {
-                var rm = (r + prevR) / 2.0;
-                var t = (rm - r1) / (r2 - r1);
-                var beta = (b1Deg + (b2Deg - b1Deg) * t) * Math.PI / 180.0;
-                phi -= (r - prevR) / (rm * Math.Tan(beta));
-            }
-
-            pts.Add(new Vector2(r * Math.Cos(phi), r * Math.Sin(phi)));
-            prevR = r;
-        }
-
-        return pts;
+        AddLine(doc, layer, new Vector2(c.X - half, c.Y), new Vector2(c.X + half, c.Y), true);
+        AddLine(doc, layer, new Vector2(c.X, c.Y - half), new Vector2(c.X, c.Y + half), true);
     }
 
-    private static List<Vector2> BladeOutline(List<Vector2> center, double thickness)
+    private static void AddText(DxfDocument doc, Layer layer, string text, Vector2 at, double height)
     {
-        var left = new List<Vector2>();
-        var right = new List<Vector2>();
-
-        for (var i = 0; i < center.Count; i++)
-        {
-            var a = center[Math.Max(i - 1, 0)];
-            var b = center[Math.Min(i + 1, center.Count - 1)];
-            var tx = b.X - a.X;
-            var ty = b.Y - a.Y;
-            var len = Math.Sqrt(tx * tx + ty * ty);
-
-            if (len < 1e-9)
-            {
-                len = 1.0;
-            }
-
-            var nx = -ty / len * thickness / 2.0;
-            var ny = tx / len * thickness / 2.0;
-
-            left.Add(new Vector2(center[i].X + nx, center[i].Y + ny));
-            right.Add(new Vector2(center[i].X - nx, center[i].Y - ny));
-        }
-
-        right.Reverse();
-        left.AddRange(right);
-        return left;
+        doc.Entities.Add(new Text(text, at, height) { Layer = layer });
     }
 
-    private static List<Vector2> Rotate(List<Vector2> pts, double degrees)
+    private static void AddHorizontalDim(DxfDocument doc, Layer layer, double xa, double xb, double y, string label, double h)
     {
-        var a = degrees * Math.PI / 180.0;
-        var cos = Math.Cos(a);
-        var sin = Math.Sin(a);
-        return pts.Select(p => new Vector2(p.X * cos - p.Y * sin, p.X * sin + p.Y * cos)).ToList();
+        AddLine(doc, layer, new Vector2(xa, y), new Vector2(xb, y));
+        AddLine(doc, layer, new Vector2(xa, y - h), new Vector2(xa, y + h));
+        AddLine(doc, layer, new Vector2(xb, y - h), new Vector2(xb, y + h));
+        AddText(doc, layer, label, new Vector2(xa, y + 0.8 * h), h);
     }
 
-    // ----------------------------------------------------------------- values
-
-    private static double Mm(
-        IReadOnlyDictionary<string, double> values,
-        double fallbackMm,
-        List<string> warnings,
-        string label,
-        params string[] keys)
+    private static void AddVerticalDim(DxfDocument doc, Layer layer, double y, double za, double zb, string label, double h, double sx)
     {
-        foreach (var key in keys)
-        {
-            if (values.TryGetValue(key, out var m) && double.IsFinite(m) && m > 0)
-            {
-                return m * 1000.0;
-            }
-        }
-
-        warnings.Add(label + " not provided; assumed " + Fmt(fallbackMm) + " mm.");
-        return fallbackMm;
+        // Dimension drawn along the horizontal (Z) axis of the section view, at the given Y below the part.
+        AddLine(doc, layer, new Vector2(sx + za, y), new Vector2(sx + zb, y));
+        AddLine(doc, layer, new Vector2(sx + za, y - h), new Vector2(sx + za, y + h));
+        AddLine(doc, layer, new Vector2(sx + zb, y - h), new Vector2(sx + zb, y + h));
+        AddText(doc, layer, label, new Vector2(sx + za, y - 2.0 * h), h);
     }
 
-    private static double Angle(
-        IReadOnlyDictionary<string, double> values,
-        double fallback,
-        List<string> warnings,
-        string label,
-        string key)
+    private static void AddItemBalloons(DxfDocument doc, Layer layer, FanGeometry fan, double sx, double overallZ,
+        double bladeZ, double shroudZ, double impellerZ, double textH)
     {
-        if (values.TryGetValue(key, out var a) && double.IsFinite(a) && a > 0)
+        var rr = textH * 1.2;
+
+        void Balloon(int n, double x, double y)
         {
-            return Math.Min(Math.Max(a, 5.0), 85.0);
+            doc.Entities.Add(new Circle(new Vector2(x, y), rr) { Layer = layer });
+            AddText(doc, layer, n.ToString(CultureInfo.InvariantCulture), new Vector2(x - rr * 0.35, y - rr * 0.4), textH);
         }
 
-        warnings.Add(label + " not provided; assumed " + Fmt(fallback) + " deg.");
-        return fallback;
+        var top = fan.R3 + fan.Wall + 6.0 * textH;
+        Balloon(1, sx + overallZ * 0.5, top + 3.0 * textH);
+        Balloon(2, sx + 0.5 * fan.Wall, top + 6.0 * textH);
+        Balloon(3, sx + overallZ - 0.5 * fan.Wall, top + 6.0 * textH);
+        Balloon(4, sx + impellerZ, -fan.HubR - 3.0 * textH);
+        Balloon(5, sx + impellerZ + 1.0, fan.R2 + 3.0 * textH);
+        Balloon(6, sx + shroudZ, fan.R2 + 3.0 * textH);
+        Balloon(7, sx + bladeZ, fan.R1 - 3.0 * textH);
     }
 
-    private static string Fmt(double v) => v.ToString("0.##", Inv);
-
-    private static string SafeFileName(string? drawingNumber)
+    private static void AddBlades(DxfDocument doc, Layer layer, double r1, double r2,
+        double beta1, double beta2, double thickness, int profile, int count)
     {
-        var name = string.IsNullOrWhiteSpace(drawingNumber) ? "centrifugal-fan-ga" : drawingNumber.Trim();
+        var radii = new double[BladeSteps + 1];
+        var angles = new double[BladeSteps + 1];
 
-        foreach (var invalid in Path.GetInvalidFileNameChars())
+        for (var k = 0; k <= BladeSteps; k++)
+            radii[k] = r1 + (r2 - r1) * k / BladeSteps;
+
+        angles[0] = 0.0;
+
+        for (var k = 1; k <= BladeSteps; k++)
         {
-            name = name.Replace(invalid, '_');
+            var sMid = ((double)k - 0.5) / BladeSteps;
+            var betaMid = (beta1 + (beta2 - beta1) * sMid) * Math.PI / 180.0;
+            var rMid = 0.5 * (radii[k] + radii[k - 1]);
+            var dTheta = -(radii[k] - radii[k - 1]) / (rMid * Math.Tan(betaMid));
+            angles[k] = angles[k - 1] + dTheta;
         }
 
-        return name + ".dxf";
-    }
+        var left = new Vector2[BladeSteps + 1];
+        var right = new Vector2[BladeSteps + 1];
 
-    // ----------------------------------------------------------------- helpers
-
-    private sealed class Geo
-    {
-        public double D2, D1, R2, R1, Rh, Rs, Rci, Rb, H, W, Tw, Tp, Tb, Bw, Bwi, B1, B2, Rtop, Rbot, Ld;
-        public int N;
-
-        public double SideX0() => Rb + H + 500.0;
-
-        public double Xp(double x0) => x0 + W - Tw - Tp - 5.0;
-
-        public double HubLen() => 0.6 * Bw;
-
-        public double ShaftExt() => Math.Max(0.6 * Rh * 2.0, 100.0);
-    }
-
-    private sealed class Canvas
-    {
-        private readonly Dictionary<string, Layer> _layers = new(StringComparer.OrdinalIgnoreCase);
-
-        public Canvas(double ts)
+        for (var k = 0; k <= BladeSteps; k++)
         {
-            Ts = ts;
+            var s = (double)k / BladeSteps;
+            var kPrev = Math.Max(k - 1, 0);
+            var kNext = Math.Min(k + 1, BladeSteps);
+            var dx = radii[kNext] * Math.Cos(angles[kNext]) - radii[kPrev] * Math.Cos(angles[kPrev]);
+            var dy = radii[kNext] * Math.Sin(angles[kNext]) - radii[kPrev] * Math.Sin(angles[kPrev]);
+            var length = Math.Sqrt(dx * dx + dy * dy);
+            var nx = -dy / length;
+            var ny = dx / length;
+            var shape = profile == 1 ? Math.Max(0.15, Math.Sin(Math.PI * Math.Pow(s, 0.6))) : 1.0;
+            var half = 0.5 * thickness * shape;
+            var cx = radii[k] * Math.Cos(angles[k]);
+            var cy = radii[k] * Math.Sin(angles[k]);
+            left[k] = new Vector2(cx + nx * half, cy + ny * half);
+            right[k] = new Vector2(cx - nx * half, cy - ny * half);
         }
 
-        public DxfDocument Doc { get; } = new(netDxf.Header.DxfVersion.AutoCad2010);
-
-        public double Ts { get; }
-
-        private Layer L(string name)
+        for (var i = 0; i < count; i++)
         {
-            if (_layers.TryGetValue(name, out var layer))
-            {
-                return layer;
-            }
+            var rot = 2.0 * Math.PI * i / count;
+            var cosR = Math.Cos(rot);
+            var sinR = Math.Sin(rot);
+            var outline = new List<Vector2>();
 
-            layer = new Layer(name);
+            for (var k = 0; k <= BladeSteps; k++)
+                outline.Add(new Vector2(left[k].X * cosR - left[k].Y * sinR, left[k].X * sinR + left[k].Y * cosR));
 
-            switch (name)
-            {
-                case "CASING": layer.Color = AciColor.FromCadIndex(5); break;
-                case "BLADES": layer.Color = AciColor.FromCadIndex(3); break;
-                case "BACKPLATE": layer.Color = AciColor.FromCadIndex(1); break;
-                case "HUB": layer.Color = AciColor.FromCadIndex(6); break;
-                case "SHAFT": layer.Color = AciColor.FromCadIndex(4); break;
-                case "DIMENSIONS": layer.Color = AciColor.FromCadIndex(2); break;
-                case "BALLOONS": layer.Color = AciColor.FromCadIndex(2); break;
-                case "CENTERLINE":
-                    layer.Color = AciColor.FromCadIndex(1);
-                    layer.Linetype = Linetype.Center;
-                    break;
-            }
+            for (var k = BladeSteps; k >= 0; k--)
+                outline.Add(new Vector2(right[k].X * cosR - right[k].Y * sinR, right[k].X * sinR + right[k].Y * cosR));
 
-            _layers[name] = layer;
-            return layer;
-        }
-
-        private static bool Fin(params double[] v) => v.All(double.IsFinite);
-
-        public void Ln(string layer, double x1, double y1, double x2, double y2)
-        {
-            if (!Fin(x1, y1, x2, y2))
-            {
-                return;
-            }
-
-            Doc.Entities.Add(new Line(new Vector2(x1, y1), new Vector2(x2, y2)) { Layer = L(layer) });
-        }
-
-        public void Circ(string layer, double cx, double cy, double r)
-        {
-            if (!Fin(cx, cy, r) || r <= 0)
-            {
-                return;
-            }
-
-            Doc.Entities.Add(new Circle(new Vector2(cx, cy), r) { Layer = L(layer) });
-        }
-
-        public void Poly(string layer, IEnumerable<Vector2> pts, bool closed)
-        {
-            var list = pts.Where(p => double.IsFinite(p.X) && double.IsFinite(p.Y)).ToList();
-
-            if (list.Count < 2)
-            {
-                return;
-            }
-
-            Doc.Entities.Add(new Polyline2D(list, closed) { Layer = L(layer) });
-        }
-
-        public void Rect(string layer, double x0, double y0, double x1, double y1)
-        {
-            Poly(layer, new[]
-            {
-                new Vector2(x0, y0), new Vector2(x1, y0), new Vector2(x1, y1), new Vector2(x0, y1)
-            }, true);
-        }
-
-        public void Txt(string layer, string text, double x, double y, double height,
-            TextAlignment alignment = TextAlignment.MiddleCenter, double rotation = 0.0)
-        {
-            if (string.IsNullOrEmpty(text) || !Fin(x, y, height))
-            {
-                return;
-            }
-
-            Doc.Entities.Add(new Text(text, new Vector2(x, y), height)
-            {
-                Layer = L(layer),
-                Alignment = alignment,
-                Rotation = rotation
-            });
-        }
-
-        private void Arrow(double x, double y, double dx, double dy)
-        {
-            var len = Math.Sqrt(dx * dx + dy * dy);
-
-            if (len < 1e-9)
-            {
-                return;
-            }
-
-            dx /= len;
-            dy /= len;
-
-            var a = Ts * 0.9;
-            var px = -dy;
-            var py = dx;
-
-            Ln("DIMENSIONS", x, y, x + dx * a + px * a * 0.3, y + dy * a + py * a * 0.3);
-            Ln("DIMENSIONS", x, y, x + dx * a - px * a * 0.3, y + dy * a - py * a * 0.3);
-        }
-
-        public void DimH(double x1, double x2, double yBase, double offset, string text)
-        {
-            if (x1 > x2)
-            {
-                (x1, x2) = (x2, x1);
-            }
-
-            var s = offset >= 0 ? 1.0 : -1.0;
-            var yd = yBase + offset;
-            var gap = Ts * 0.4;
-            var ext = Ts * 0.6;
-
-            Ln("DIMENSIONS", x1, yBase + s * gap, x1, yd + s * ext);
-            Ln("DIMENSIONS", x2, yBase + s * gap, x2, yd + s * ext);
-            Ln("DIMENSIONS", x1, yd, x2, yd);
-            Arrow(x1, yd, 1, 0);
-            Arrow(x2, yd, -1, 0);
-            Txt("TEXT", text, (x1 + x2) / 2.0, yd + Ts * 0.3, Ts, TextAlignment.BottomCenter);
-        }
-
-        public void DimV(double y1, double y2, double xBase, double offset, string text)
-        {
-            if (y1 > y2)
-            {
-                (y1, y2) = (y2, y1);
-            }
-
-            var s = offset >= 0 ? 1.0 : -1.0;
-            var xd = xBase + offset;
-            var gap = Ts * 0.4;
-            var ext = Ts * 0.6;
-
-            Ln("DIMENSIONS", xBase + s * gap, y1, xd + s * ext, y1);
-            Ln("DIMENSIONS", xBase + s * gap, y2, xd + s * ext, y2);
-            Ln("DIMENSIONS", xd, y1, xd, y2);
-            Arrow(xd, y1, 0, 1);
-            Arrow(xd, y2, 0, -1);
-            Txt("TEXT", text, xd - Ts * 0.3, (y1 + y2) / 2.0, Ts, TextAlignment.BottomCenter, 90.0);
-        }
-
-        public void Balloon(int number, double cx, double cy, double tipX, double tipY)
-        {
-            var r = Ts * 1.3;
-
-            Circ("BALLOONS", cx, cy, r);
-            Txt("BALLOONS", number.ToString(Inv), cx, cy, Ts);
-
-            var dx = tipX - cx;
-            var dy = tipY - cy;
-            var d = Math.Sqrt(dx * dx + dy * dy);
-
-            if (d > r)
-            {
-                Ln("BALLOONS", cx + dx / d * r, cy + dy / d * r, tipX, tipY);
-                Circ("BALLOONS", tipX, tipY, Ts * 0.25);
-            }
+            AddPolyline(doc, layer, outline, true);
         }
     }
 }

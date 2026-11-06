@@ -50,6 +50,12 @@ public interface ICadAssistConversationService
     /// </summary>
     bool CanRouteToDesign(int projectId, string sessionId, string? prompt);
 
+    /// <summary>
+    /// Validated, mapped SI CAD values of the session's calculated centrifugal fan, or null when no fan
+    /// design has been calculated yet.
+    /// </summary>
+    IReadOnlyDictionary<string, double>? GetCalculatedValues(int projectId, string sessionId);
+
     Task<CadAssistMessageDto> HandleUploadAsync(CadAssistUploadInput input, CancellationToken cancellationToken = default);
 
     Task<CadAssistMessageDto> HandleMessageAsync(
@@ -185,6 +191,40 @@ public sealed class CadAssistConversationService : ICadAssistConversationService
         return !string.IsNullOrWhiteSpace(sessionId)
                && (_equipment.IsActive(projectId, sessionId)
                    || _equipment.IsAwaitingEquipmentType(projectId, sessionId));
+    }
+
+    public IReadOnlyDictionary<string, double>? GetCalculatedValues(int projectId, string sessionId)
+    {
+        const string fanManifestId = "centrifugal-fan";
+
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return null;
+        }
+
+        var session = _equipment.Get(projectId, sessionId);
+
+        if (!session.States.TryGetValue(fanManifestId, out var state) || !state.CalculationValidated)
+        {
+            return null;
+        }
+
+        var flow = FindFlow(fanManifestId);
+
+        if (flow is null)
+        {
+            return null;
+        }
+
+        var turn = flow.Handle(new EquipmentDesignRequest
+        {
+            ManifestId = fanManifestId,
+            Text = string.Empty,
+            Values = new Dictionary<string, double>(state.Values, StringComparer.OrdinalIgnoreCase),
+            GenerateRequested = false
+        });
+
+        return turn?.MappedValues;
     }
 
     public bool CanRouteToDesign(int projectId, string sessionId, string? prompt)

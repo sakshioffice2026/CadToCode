@@ -262,7 +262,7 @@ public sealed class CentrifugalFanDesignFlow : IEquipmentDesignFlow
             text.AppendLine();
             text.Append("Everything needed is set. Say `generate` and I will build one script per part (scroll casing, inlet plate, back plate, hub, impeller back plate, shroud and blades), or say `generate assembly` for one combined STEP file.");
 
-            return Turn(values, text, EquipmentDesignTurn.StatusCalculated, warnings: warnings);
+            return Turn(values, text, EquipmentDesignTurn.StatusCalculated, warnings: warnings, mappedValues: mapping.AsDictionary());
         }
 
         var builder = _builders.FirstOrDefault(b => b.CanBuild(manifest));
@@ -677,10 +677,12 @@ public sealed class CentrifugalFanDesignFlow : IEquipmentDesignFlow
         string status,
         IEnumerable<string>? missing = null,
         IReadOnlyList<string>? warnings = null,
-        IReadOnlyList<string>? errors = null)
+        IReadOnlyList<string>? errors = null,
+        IReadOnlyDictionary<string, double>? mappedValues = null)
     {
         return new EquipmentDesignTurn
         {
+            MappedValues = mappedValues,
             Values = values,
             Reply = text.ToString().TrimEnd(),
             Status = status,
